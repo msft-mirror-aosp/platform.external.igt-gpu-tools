@@ -38,6 +38,7 @@
 #include "igt_chamelium.h"
 #include "igt_core.h"
 #include "igt_aux.h"
+#include "igt_edid.h"
 #include "igt_frame.h"
 #include "igt_list.h"
 #include "igt_kms.h"
@@ -117,7 +118,7 @@ struct chamelium {
 
 	int drm_fd;
 
-	struct chamelium_edid *edids;
+	struct igt_list edids;
 	struct chamelium_port *ports;
 	int port_count;
 };
@@ -265,14 +266,13 @@ static void *chamelium_fsm_mon(void *data)
 	return NULL;
 }
 
-static xmlrpc_value *chamelium_rpc(struct chamelium *chamelium,
-				   struct chamelium_port *fsm_port,
-				   const char *method_name,
-				   const char *format_str,
-				   ...)
+static xmlrpc_value *__chamelium_rpc_va(struct chamelium *chamelium,
+					struct chamelium_port *fsm_port,
+					const char *method_name,
+					const char *format_str,
+					va_list va_args)
 {
-	xmlrpc_value *res;
-	va_list va_args;
+	xmlrpc_value *res = NULL;
 	struct fsm_monitor_args monitor_args;
 	pthread_t fsm_thread_id;
 
@@ -296,16 +296,49 @@ static xmlrpc_value *chamelium_rpc(struct chamelium *chamelium,
 			       &monitor_args);
 	}
 
-	va_start(va_args, format_str);
 	xmlrpc_client_call2f_va(&chamelium->env, chamelium->client,
 				chamelium->url, method_name, format_str, &res,
 				va_args);
-	va_end(va_args);
 
 	if (fsm_port) {
 		pthread_cancel(fsm_thread_id);
+		pthread_join(fsm_thread_id, NULL);
 		igt_cleanup_hotplug(monitor_args.mon);
 	}
+
+	return res;
+}
+
+static xmlrpc_value *__chamelium_rpc(struct chamelium *chamelium,
+				     struct chamelium_port *fsm_port,
+				     const char *method_name,
+				     const char *format_str,
+				     ...)
+{
+	xmlrpc_value *res;
+	va_list va_args;
+
+	va_start(va_args, format_str);
+	res = __chamelium_rpc_va(chamelium, fsm_port, method_name,
+				 format_str, va_args);
+	va_end(va_args);
+
+	return res;
+}
+
+static xmlrpc_value *chamelium_rpc(struct chamelium *chamelium,
+				   struct chamelium_port *fsm_port,
+				   const char *method_name,
+				   const char *format_str,
+				   ...)
+{
+	xmlrpc_value *res;
+	va_list va_args;
+
+	va_start(va_args, format_str);
+	res = __chamelium_rpc_va(chamelium, fsm_port, method_name,
+				 format_str, va_args);
+	va_end(va_args);
 
 	igt_assert_f(!chamelium->env.fault_occurred,
 		     "Chamelium RPC call failed: %s\n",
@@ -497,32 +530,30 @@ void chamelium_schedule_hpd_toggle(struct chamelium *chamelium,
  * Uploads and registers a new EDID with the chamelium. The EDID will be
  * destroyed automatically when #chamelium_deinit is called.
  *
- * Returns: The ID of the EDID uploaded to the chamelium.
+ * Returns: An opaque pointer to the Chamelium EDID
  */
-int chamelium_new_edid(struct chamelium *chamelium, const unsigned char *edid)
+struct chamelium_edid *chamelium_new_edid(struct chamelium *chamelium,
+					  const unsigned char *raw_edid)
 {
 	xmlrpc_value *res;
-	struct chamelium_edid *allocated_edid;
+	struct chamelium_edid *chamelium_edid;
 	int edid_id;
+	struct edid *edid = (struct edid *) raw_edid;
+	size_t edid_size = sizeof(struct edid) +
+			   edid->extensions_len * sizeof(struct edid_ext);
 
 	res = chamelium_rpc(chamelium, NULL, "CreateEdid", "(6)",
-			    edid, EDID_LENGTH);
+			    raw_edid, edid_size);
 
 	xmlrpc_read_int(&chamelium->env, res, &edid_id);
 	xmlrpc_DECREF(res);
 
-	allocated_edid = malloc(sizeof(struct chamelium_edid));
-	memset(allocated_edid, 0, sizeof(*allocated_edid));
+	chamelium_edid = calloc(1, sizeof(struct chamelium_edid));
+	chamelium_edid->id = edid_id;
 
-	allocated_edid->id = edid_id;
-	igt_list_init(&allocated_edid->link);
+	igt_list_add(&chamelium_edid->link, &chamelium->edids);
 
-	if (chamelium->edids)
-		igt_list_add(&chamelium->edids->link, &allocated_edid->link);
-	else
-		chamelium->edids = allocated_edid;
-
-	return edid_id;
+	return chamelium_edid;
 }
 
 static void chamelium_destroy_edid(struct chamelium *chamelium, int edid_id)
@@ -535,7 +566,7 @@ static void chamelium_destroy_edid(struct chamelium *chamelium, int edid_id)
  * chamelium_port_set_edid:
  * @chamelium: The Chamelium instance to use
  * @port: The port on the Chamelium to set the EDID on
- * @edid_id: The ID of an EDID on the chamelium created with
+ * @edid: The Chamelium EDID to set
  * #chamelium_new_edid, or 0 to disable the EDID on the port
  *
  * Sets a port on the chamelium to use the specified EDID. This does not fire a
@@ -545,10 +576,11 @@ static void chamelium_destroy_edid(struct chamelium *chamelium, int edid_id)
  * change.
  */
 void chamelium_port_set_edid(struct chamelium *chamelium,
-			     struct chamelium_port *port, int edid_id)
+			     struct chamelium_port *port,
+			     struct chamelium_edid *edid)
 {
 	xmlrpc_DECREF(chamelium_rpc(chamelium, NULL, "ApplyEdid", "(ii)",
-				    port->id, edid_id));
+				    port->id, edid->id));
 }
 
 /**
@@ -931,6 +963,43 @@ int chamelium_get_captured_frame_count(struct chamelium *chamelium)
 }
 
 /**
+ * chamelium_supports_get_audio_format: check the Chamelium device supports
+ * retrieving the capture audio format.
+ */
+static bool chamelium_supports_get_audio_format(struct chamelium *chamelium)
+{
+	xmlrpc_value *res;
+
+	res = __chamelium_rpc(chamelium, NULL, "GetAudioFormat", "(i)", 3);
+	if (res)
+		xmlrpc_DECREF(res);
+
+	/* XML-RPC has a special code for unsupported methods
+	 * (XMLRPC_NO_SUCH_METHOD_ERROR) however the Chamelium implementation
+	 * doesn't return it. */
+	return (!chamelium->env.fault_occurred ||
+		strstr(chamelium->env.fault_string, "not supported") == NULL);
+}
+
+bool chamelium_has_audio_support(struct chamelium *chamelium,
+				 struct chamelium_port *port)
+{
+	xmlrpc_value *res;
+	xmlrpc_bool has_support;
+
+	if (!chamelium_supports_get_audio_format(chamelium)) {
+		igt_debug("The Chamelium device doesn't support GetAudioFormat\n");
+		return false;
+	}
+
+	res = chamelium_rpc(chamelium, port, "HasAudioSupport", "(i)", port->id);
+	xmlrpc_read_bool(&chamelium->env, res, &has_support);
+	xmlrpc_DECREF(res);
+
+	return has_support;
+}
+
+/**
  * chamelium_get_audio_channel_mapping:
  * @chamelium: the Chamelium instance
  * @port: the audio port
@@ -947,7 +1016,7 @@ int chamelium_get_captured_frame_count(struct chamelium *chamelium)
  */
 void chamelium_get_audio_channel_mapping(struct chamelium *chamelium,
 					 struct chamelium_port *port,
-					 int mapping[static 8])
+					 int mapping[static CHAMELIUM_MAX_AUDIO_CHANNELS])
 {
 	xmlrpc_value *res, *res_channel;
 	int res_len, i;
@@ -955,7 +1024,7 @@ void chamelium_get_audio_channel_mapping(struct chamelium *chamelium,
 	res = chamelium_rpc(chamelium, port, "GetAudioChannelMapping", "(i)",
 			    port->id);
 	res_len = xmlrpc_array_size(&chamelium->env, res);
-	igt_assert(res_len == 8);
+	igt_assert(res_len == CHAMELIUM_MAX_AUDIO_CHANNELS);
 	for (i = 0; i < res_len; i++) {
 		xmlrpc_array_read_item(&chamelium->env, res, i, &res_channel);
 		xmlrpc_read_int(&chamelium->env, res_channel, &mapping[i]);
@@ -985,8 +1054,10 @@ static void audio_format_from_xml(struct chamelium *chamelium,
 
 	if (rate)
 		xmlrpc_read_int(&chamelium->env, res_rate, rate);
-	if (channels)
+	if (channels) {
 		xmlrpc_read_int(&chamelium->env, res_channel, channels);
+		igt_assert(*channels <= CHAMELIUM_MAX_AUDIO_CHANNELS);
+	}
 
 	xmlrpc_DECREF(res_channel);
 	xmlrpc_DECREF(res_sample_format);
@@ -1774,6 +1845,7 @@ struct chamelium *chamelium_init(int drm_fd)
 
 	memset(chamelium, 0, sizeof(*chamelium));
 	chamelium->drm_fd = drm_fd;
+	igt_list_init(&chamelium->edids);
 
 	/* Setup the libxmlrpc context */
 	xmlrpc_env_init(&chamelium->env);
@@ -1825,7 +1897,7 @@ void chamelium_deinit(struct chamelium *chamelium)
 		chamelium_plug(chamelium, &chamelium->ports[i]);
 
 	/* Destroy any EDIDs we created to make sure we don't leak them */
-	igt_list_for_each_safe(pos, tmp, &chamelium->edids->link, link) {
+	igt_list_for_each_safe(pos, tmp, &chamelium->edids, link) {
 		chamelium_destroy_edid(chamelium, pos->id);
 		free(pos);
 	}

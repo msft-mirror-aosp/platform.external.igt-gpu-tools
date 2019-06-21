@@ -1,30 +1,28 @@
-FROM fedora:28
+FROM fedora:30
 
-RUN dnf install -y gcc \
-		flex \
-		meson \
-		bison  \
-		gtk-doc \
-		xdotool \
-		gsl-devel \
-		kmod-devel \
-		glib2-devel \
-		cairo-devel \
-		ninja-build \
-		procps-devel \
-		pixman-devel \
-		json-c-devel \
-		libdrm-devel \
-		libudev-devel \
-		xmlrpc-c-devel \
-		elfutils-devel \
-		libunwind-devel \
-		python-docutils \
-		libpciaccess-devel \
-		alsa-lib-devel \
-		valgrind-devel \
-		libXrandr-devel \
-		libXv-devel
+RUN dnf install -y \
+	gcc flex bison meson ninja-build xdotool \
+	'pkgconfig(libdrm)' \
+	'pkgconfig(pciaccess)' \
+	'pkgconfig(libkmod)' \
+	'pkgconfig(libprocps)' \
+	'pkgconfig(libunwind)' \
+	'pkgconfig(libdw)' \
+	'pkgconfig(pixman-1)' \
+	'pkgconfig(valgrind)' \
+	'pkgconfig(cairo)' \
+	'pkgconfig(libudev)' \
+	'pkgconfig(glib-2.0)' \
+	'pkgconfig(gsl)' \
+	'pkgconfig(alsa)' \
+	'pkgconfig(xmlrpc)' \
+	'pkgconfig(xmlrpc_util)' \
+	'pkgconfig(xmlrpc_client)' \
+	'pkgconfig(json-c)' \
+	'pkgconfig(gtk-doc)' \
+	'pkgconfig(xv)' \
+	'pkgconfig(xrandr)' \
+	python3-docutils
 
 # We need peg to build overlay
 RUN dnf install -y make
@@ -40,7 +38,7 @@ RUN dnf install -y clang
 
 # Meson version switching shenanigans
 WORKDIR /usr/src
-RUN curl -O https://files.pythonhosted.org/packages/17/d0/0fe98a9557a2f07dbe6f99ef57f2bc37450b641e1f6ceae9ce04c3c845dd/meson-0.46.0.tar.gz
+RUN curl -O https://files.pythonhosted.org/packages/c0/9b/44cdb8adcbb186be6cba5c93718d0c68f177b0e8082ae00cafa63a1d3535/meson-0.47.0.tar.gz
 
 # Cleanup workdir
 WORKDIR /

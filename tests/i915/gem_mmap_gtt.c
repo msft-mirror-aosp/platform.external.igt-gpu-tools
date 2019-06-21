@@ -656,6 +656,9 @@ test_huge_copy(int fd, int huge, int tiling_a, int tiling_b, int ncpus)
 	uint64_t huge_object_size, i;
 	unsigned mode = CHECK_RAM;
 
+	igt_fail_on_f(intel_gen(devid) >= 11 && ncpus > 1,
+		      "Please adjust your expectations, https://bugs.freedesktop.org/show_bug.cgi?id=110882\n");
+
 	switch (huge) {
 	case -2:
 		huge_object_size = gem_mappable_aperture_size() / 4;
@@ -886,14 +889,15 @@ igt_main
 	igt_subtest("bad-object") {
 		uint32_t real_handle = gem_create(fd, 4096);
 		uint32_t handles[20];
-		int i = 0;
+		size_t i = 0, len;
 
 		handles[i++] = 0xdeadbeef;
 		for(int bit = 0; bit < 16; bit++)
 			handles[i++] = real_handle | (1 << (bit + 16));
-		handles[i] = real_handle + 1;
+		handles[i++] = real_handle + 1;
+		len = i;
 
-		for (; i < 0; i--) {
+		for (i = 0; i < len; ++i) {
 			struct drm_i915_gem_mmap_gtt arg = {
 				.handle = handles[i],
 			};

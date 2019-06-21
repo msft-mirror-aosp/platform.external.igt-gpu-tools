@@ -39,6 +39,7 @@
 #include "ioctl_wrappers.h"
 #include "sw_sync.h"
 #include "igt_vgem.h"
+#include "i915/gem_engine_topology.h"
 #include "i915/gem_mman.h"
 
 /**
@@ -72,12 +73,12 @@ emit_recursive_batch(igt_spin_t *spin,
 		     int fd, const struct igt_spin_factory *opts)
 {
 #define SCRATCH 0
-#define BATCH 1
+#define BATCH IGT_SPIN_BATCH
 	const int gen = intel_gen(intel_get_drm_devid(fd));
 	struct drm_i915_gem_relocation_entry relocs[2], *r;
 	struct drm_i915_gem_execbuffer2 *execbuf;
 	struct drm_i915_gem_exec_object2 *obj;
-	unsigned int engines[16];
+	unsigned int flags[GEM_MAX_ENGINES];
 	unsigned int nengine;
 	int fence_fd = -1;
 	uint32_t *cs, *batch;
@@ -85,17 +86,17 @@ emit_recursive_batch(igt_spin_t *spin,
 
 	nengine = 0;
 	if (opts->engine == ALL_ENGINES) {
-		unsigned int engine;
+		struct intel_execution_engine2 *engine;
 
-		for_each_physical_engine(fd, engine) {
+		for_each_context_engine(fd, opts->ctx, engine) {
 			if (opts->flags & IGT_SPIN_POLL_RUN &&
-			    !gem_can_store_dword(fd, engine))
+			    !gem_class_can_store_dword(fd, engine->class))
 				continue;
 
-			engines[nengine++] = engine;
+			flags[nengine++] = engine->flags;
 		}
 	} else {
-		engines[nengine++] = opts->engine;
+		flags[nengine++] = opts->engine;
 	}
 	igt_require(nengine);
 
@@ -237,7 +238,7 @@ emit_recursive_batch(igt_spin_t *spin,
 
 	for (i = 0; i < nengine; i++) {
 		execbuf->flags &= ~ENGINE_MASK;
-		execbuf->flags |= engines[i];
+		execbuf->flags |= flags[i];
 
 		gem_execbuf_wr(fd, execbuf);
 
@@ -261,12 +262,11 @@ emit_recursive_batch(igt_spin_t *spin,
 	igt_assert_lt(cs - batch, BATCH_SIZE / sizeof(*cs));
 
 	/* Make it easier for callers to resubmit. */
-
-	obj[BATCH].relocation_count = 0;
-	obj[BATCH].relocs_ptr = 0;
-
-	obj[SCRATCH].flags = EXEC_OBJECT_PINNED;
-	obj[BATCH].flags = EXEC_OBJECT_PINNED;
+	for (i = 0; i < ARRAY_SIZE(spin->obj); i++) {
+		spin->obj[i].relocation_count = 0;
+		spin->obj[i].relocs_ptr = 0;
+		spin->obj[i].flags = EXEC_OBJECT_PINNED;
+	}
 
 	spin->cmd_precondition = *spin->condition;
 
@@ -316,9 +316,19 @@ igt_spin_factory(int fd, const struct igt_spin_factory *opts)
 	igt_require_gem(fd);
 
 	if (opts->engine != ALL_ENGINES) {
-		gem_require_ring(fd, opts->engine);
+		struct intel_execution_engine2 e;
+		int class;
+
+		if (!gem_context_lookup_engine(fd, opts->engine,
+					       opts->ctx, &e)) {
+			class = e.class;
+		} else {
+			gem_require_ring(fd, opts->engine);
+			class = gem_execbuf_flags_to_engine_class(opts->engine);
+		}
+
 		if (opts->flags & IGT_SPIN_POLL_RUN)
-			igt_require(gem_can_store_dword(fd, opts->engine));
+			igt_require(gem_class_can_store_dword(fd, class));
 	}
 
 	spin = spin_create(fd, opts);
@@ -451,6 +461,16 @@ void igt_terminate_spins(void)
 	igt_list_for_each(iter, &spin_list, link)
 		igt_spin_end(iter);
 	pthread_mutex_unlock(&list_lock);
+}
+
+void igt_unshare_spins(void)
+{
+	struct igt_spin *it, *n;
+
+	/* Disable the automatic termination on inherited spinners */
+	igt_list_for_each_safe(it, n, &spin_list, link)
+		igt_list_init(&it->link);
+	igt_list_init(&spin_list);
 }
 
 static uint32_t plug_vgem_handle(struct igt_cork *cork, int fd)
