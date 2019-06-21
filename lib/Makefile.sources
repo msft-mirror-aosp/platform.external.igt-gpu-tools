@@ -5,6 +5,8 @@ lib_source_list =	 	\
 	i830_reg.h		\
 	i915/gem_context.c	\
 	i915/gem_context.h	\
+	i915/gem_engine_topology.c	\
+	i915/gem_engine_topology.h	\
 	i915/gem_scheduler.c	\
 	i915/gem_scheduler.h	\
 	i915/gem_submission.c	\
@@ -13,6 +15,8 @@ lib_source_list =	 	\
 	i915/gem_ring.c	\
 	i915/gem_mman.c	\
 	i915/gem_mman.h	\
+	i915/gem_vm.c	\
+	i915/gem_vm.h	\
 	i915_3d.h		\
 	i915_reg.h		\
 	i915_pciids.h		\
@@ -27,6 +31,8 @@ lib_source_list =	 	\
 	igt_color_encoding.h	\
 	igt_edid.c		\
 	igt_edid.h		\
+	igt_eld.c		\
+	igt_eld.h		\
 	igt_gpu_power.c		\
 	igt_gpu_power.h		\
 	igt_gt.c		\

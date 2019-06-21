@@ -82,14 +82,15 @@ static bool write_only(const uint32_t addr)
 
 #define MI_STORE_REGISTER_MEM (0x24 << 23)
 
-static int workaround_fail_count(int fd, uint32_t ctx)
+static int workaround_fail_count(int i915, uint32_t ctx)
 {
 	struct drm_i915_gem_exec_object2 obj[2];
 	struct drm_i915_gem_relocation_entry *reloc;
 	struct drm_i915_gem_execbuffer2 execbuf;
 	uint32_t result_sz, batch_sz;
 	uint32_t *base, *out;
-	int fail_count = 0;
+	igt_spin_t *spin;
+	int fw, fail = 0;
 
 	reloc = calloc(num_wa_regs, sizeof(*reloc));
 	igt_assert(reloc);
@@ -101,13 +102,14 @@ static int workaround_fail_count(int fd, uint32_t ctx)
 	batch_sz = PAGE_ALIGN(batch_sz);
 
 	memset(obj, 0, sizeof(obj));
-	obj[0].handle = gem_create(fd, result_sz);
-	gem_set_caching(fd, obj[0].handle, I915_CACHING_CACHED);
-	obj[1].handle = gem_create(fd, batch_sz);
+	obj[0].handle = gem_create(i915, result_sz);
+	gem_set_caching(i915, obj[0].handle, I915_CACHING_CACHED);
+	obj[1].handle = gem_create(i915, batch_sz);
 	obj[1].relocs_ptr = to_user_pointer(reloc);
 	obj[1].relocation_count = num_wa_regs;
 
-	out = base = gem_mmap__cpu(fd, obj[1].handle, 0, batch_sz, PROT_WRITE);
+	out = base =
+		gem_mmap__cpu(i915, obj[1].handle, 0, batch_sz, PROT_WRITE);
 	for (int i = 0; i < num_wa_regs; i++) {
 		*out++ = MI_STORE_REGISTER_MEM | ((gen >= 8 ? 4 : 2) - 2);
 		*out++ = wa_regs[i].addr;
@@ -127,17 +129,21 @@ static int workaround_fail_count(int fd, uint32_t ctx)
 	execbuf.buffers_ptr = to_user_pointer(obj);
 	execbuf.buffer_count = 2;
 	execbuf.rsvd1 = ctx;
-	gem_execbuf(fd, &execbuf);
+	gem_execbuf(i915, &execbuf);
 
-	gem_set_domain(fd, obj[0].handle, I915_GEM_DOMAIN_CPU, 0);
+	gem_set_domain(i915, obj[0].handle, I915_GEM_DOMAIN_CPU, 0);
+
+	spin = igt_spin_new(i915, .ctx = ctx, .flags = IGT_SPIN_POLL_RUN);
+	igt_spin_busywait_until_started(spin);
+
+	fw = igt_open_forcewake_handle(i915);
+	if (fw < 0)
+		igt_debug("Unable to obtain i915_user_forcewake!\n");
 
 	igt_debug("Address\tval\t\tmask\t\tread\t\tresult\n");
 
-	out = gem_mmap__cpu(fd, obj[0].handle, 0, result_sz, PROT_READ);
+	out = gem_mmap__cpu(i915, obj[0].handle, 0, result_sz, PROT_READ);
 	for (int i = 0; i < num_wa_regs; i++) {
-		const bool ok =
-			(wa_regs[i].value & wa_regs[i].mask) ==
-			(out[i] & wa_regs[i].mask);
 		char buf[80];
 
 		snprintf(buf, sizeof(buf),
@@ -145,33 +151,30 @@ static int workaround_fail_count(int fd, uint32_t ctx)
 			 wa_regs[i].addr, wa_regs[i].value, wa_regs[i].mask,
 			 out[i]);
 
-		if (ok) {
+		/* If the SRM failed, fill in the result using mmio */
+		if (out[i] == 0)
+			out[i] = *(volatile uint32_t *)(igt_global_mmio + wa_regs[i].addr);
+
+		if ((wa_regs[i].value & wa_regs[i].mask) ==
+		    (out[i] & wa_regs[i].mask)) {
 			igt_debug("%s\tOK\n", buf);
 		} else if (write_only(wa_regs[i].addr)) {
 			igt_debug("%s\tIGNORED (w/o)\n", buf);
 		} else {
 			igt_warn("%s\tFAIL\n", buf);
-			fail_count++;
+			fail++;
 		}
 	}
 	munmap(out, result_sz);
 
-	gem_close(fd, obj[1].handle);
-	gem_close(fd, obj[0].handle);
+	close(fw);
+	igt_spin_free(i915, spin);
+
+	gem_close(i915, obj[1].handle);
+	gem_close(i915, obj[0].handle);
 	free(reloc);
 
-	return fail_count;
-}
-
-static int reopen(int fd)
-{
-	char path[256];
-
-	snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
-	fd = open(path, O_RDWR);
-	igt_assert_lte(0, fd);
-
-	return fd;
+	return fail;
 }
 
 #define CONTEXT 0x1
@@ -181,7 +184,7 @@ static void check_workarounds(int fd, enum operation op, unsigned int flags)
 	uint32_t ctx = 0;
 
 	if (flags & FD)
-		fd = reopen(fd);
+		fd = gem_reopen_driver(fd);
 
 	if (flags & CONTEXT) {
 		gem_require_contexts(fd);
@@ -251,6 +254,8 @@ igt_main
 
 		device = drm_open_driver(DRIVER_INTEL);
 		igt_require_gem(device);
+
+		intel_mmio_use_pci_bar(intel_get_pci_device());
 
 		gen = intel_gen(intel_get_drm_devid(device));
 

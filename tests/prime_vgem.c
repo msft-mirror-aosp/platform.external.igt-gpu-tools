@@ -741,16 +741,30 @@ static void flip_to_vgem(int i915, int vgem,
 
 static void test_flip(int i915, int vgem, unsigned hang)
 {
-	struct vgem_bo bo[2];
+	drmModeModeInfo *mode = NULL;
 	uint32_t fb_id[2], handle[2], crtc_id;
+	igt_display_t display;
+	igt_output_t *output;
+	struct vgem_bo bo[2];
+	enum pipe pipe;
+
+	igt_display_require(&display, i915);
+	igt_display_require_output(&display);
+
+	for_each_pipe_with_valid_output(&display, pipe, output) {
+		mode = igt_output_get_mode(output);
+		break;
+	}
+
+	igt_assert(mode);
 
 	for (int i = 0; i < 2; i++) {
 		uint32_t strides[4] = {};
 		uint32_t offsets[4] = {};
 		int fd;
 
-		bo[i].width = 1024;
-		bo[i].height = 768;
+		bo[i].width = mode->hdisplay;
+		bo[i].height = mode->vdisplay;
 		bo[i].bpp = 32;
 		vgem_create(vgem, &bo[i]);
 
@@ -831,7 +845,7 @@ igt_main
 			      e->exec_id == 0 ? "basic-" : "",
 			      e->name) {
 			gem_require_ring(i915, e->exec_id | e->flags);
-			igt_require(gem_can_store_dword(i915, e->exec_id) | e->flags);
+			igt_require(gem_can_store_dword(i915, e->exec_id | e->flags));
 
 			gem_quiescent_gpu(i915);
 			test_sync(i915, vgem, e->exec_id, e->flags);
@@ -843,7 +857,7 @@ igt_main
 			      e->exec_id == 0 ? "basic-" : "",
 			      e->name) {
 			gem_require_ring(i915, e->exec_id | e->flags);
-			igt_require(gem_can_store_dword(i915, e->exec_id) | e->flags);
+			igt_require(gem_can_store_dword(i915, e->exec_id | e->flags));
 
 			gem_quiescent_gpu(i915);
 			test_busy(i915, vgem, e->exec_id, e->flags);
@@ -855,7 +869,7 @@ igt_main
 			      e->exec_id == 0 ? "basic-" : "",
 			      e->name) {
 			gem_require_ring(i915, e->exec_id | e->flags);
-			igt_require(gem_can_store_dword(i915, e->exec_id) | e->flags);
+			igt_require(gem_can_store_dword(i915, e->exec_id | e->flags));
 
 			gem_quiescent_gpu(i915);
 			test_wait(i915, vgem, e->exec_id, e->flags);
@@ -878,7 +892,7 @@ igt_main
 					e->exec_id == 0 ? "basic-" : "",
 					e->name) {
 				gem_require_ring(i915, e->exec_id | e->flags);
-				igt_require(gem_can_store_dword(i915, e->exec_id) | e->flags);
+				igt_require(gem_can_store_dword(i915, e->exec_id | e->flags));
 
 				gem_quiescent_gpu(i915);
 				test_fence_wait(i915, vgem, e->exec_id, e->flags);

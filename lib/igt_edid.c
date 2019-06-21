@@ -110,7 +110,7 @@ void detailed_timing_set_mode(struct detailed_timing *dt, drmModeModeInfo *mode,
 	pt->width_height_mm_hi = (width_mm & 0xF00) >> 4
 				 | (height_mm & 0xF00) >> 8;
 
-	pt->misc = 0;
+	pt->misc = EDID_PT_SYNC_DIGITAL_SEPARATE;
 	if (mode->flags & DRM_MODE_FLAG_PHSYNC)
 		pt->misc |= EDID_PT_HSYNC_POSITIVE;
 	if (mode->flags & DRM_MODE_FLAG_PVSYNC)
@@ -252,19 +252,128 @@ void edid_init_with_mode(struct edid *edid, drmModeModeInfo *mode)
 				   EDID_DETAIL_MONITOR_NAME, "IGT");
 }
 
+static uint8_t compute_checksum(const uint8_t *buf, size_t size)
+{
+	size_t i;
+	uint8_t sum = 0;
+
+	assert(size > 0);
+	for (i = 0; i < size - 1; i++) {
+		sum += buf[i];
+	}
+
+	return 256 - sum;
+}
+
 /**
  * edid_update_checksum: compute and update the EDID checksum
  */
 void edid_update_checksum(struct edid *edid)
 {
-	size_t i;
-	const uint8_t *buf = (const uint8_t *) edid;
-	uint8_t sum = 0;
+	edid->checksum = compute_checksum((uint8_t *) edid,
+					  sizeof(struct edid));
+}
 
-	/* calculate checksum */
-	for (i = 0; i < sizeof(struct edid) - 1; i++) {
-		sum = sum + buf[i];
-	}
+/**
+ * cea_sad_init_pcm:
+ * @channels: the number of supported channels (max. 8)
+ * @sampling_rates: bitfield of enum cea_sad_sampling_rate
+ * @sample_sizes: bitfield of enum cea_sad_pcm_sample_size
+ *
+ * Initialize a Short Audio Descriptor to advertise PCM support.
+ */
+void cea_sad_init_pcm(struct cea_sad *sad, int channels,
+		      uint8_t sampling_rates, uint8_t sample_sizes)
+{
+	assert(channels <= 8);
+	sad->format_channels = CEA_SAD_FORMAT_PCM << 3 | (channels - 1);
+	sad->sampling_rates = sampling_rates;
+	sad->bitrate = sample_sizes;
+}
 
-	edid->checksum = 256 - sum;
+/**
+ * cea_vsd_get_hdmi_default:
+ *
+ * Returns the default Vendor Specific Data block for HDMI.
+ */
+const struct cea_vsd *cea_vsd_get_hdmi_default(size_t *size)
+{
+	static char raw[sizeof(struct cea_vsd) + 4] = {0};
+	struct cea_vsd *vsd;
+
+	*size = sizeof(raw);
+
+	/* Magic incantation. Works better if you orient your screen in the
+	 * direction of the VESA headquarters. */
+	vsd = (struct cea_vsd *) raw;
+	vsd->ieee_oui[0] = 0x03;
+	vsd->ieee_oui[1] = 0x0C;
+	vsd->ieee_oui[2] = 0x00;
+	vsd->data[0] = 0x10;
+	vsd->data[1] = 0x00;
+	vsd->data[2] = 0x38;
+	vsd->data[3] = 0x2D;
+
+	return vsd;
+}
+
+static void edid_cea_data_block_init(struct edid_cea_data_block *block,
+				     enum edid_cea_data_type type, size_t size)
+{
+	assert(size <= 0xFF);
+	block->type_len = type << 5 | size;
+}
+
+size_t edid_cea_data_block_set_sad(struct edid_cea_data_block *block,
+				   const struct cea_sad *sads, size_t sads_len)
+{
+	size_t sads_size;
+
+	sads_size = sizeof(struct cea_sad) * sads_len;
+	edid_cea_data_block_init(block, EDID_CEA_DATA_AUDIO, sads_size);
+
+	memcpy(block->data.sads, sads, sads_size);
+
+	return sizeof(struct edid_cea_data_block) + sads_size;
+}
+
+size_t edid_cea_data_block_set_vsd(struct edid_cea_data_block *block,
+				   const struct cea_vsd *vsd, size_t vsd_size)
+{
+	edid_cea_data_block_init(block, EDID_CEA_DATA_VENDOR_SPECIFIC,
+				 vsd_size);
+
+	memcpy(block->data.vsds, vsd, vsd_size);
+
+	return sizeof(struct edid_cea_data_block) + vsd_size;
+}
+
+size_t edid_cea_data_block_set_speaker_alloc(struct edid_cea_data_block *block,
+					     const struct cea_speaker_alloc *speakers)
+{
+	size_t size;
+
+	size = sizeof(struct cea_speaker_alloc);
+	edid_cea_data_block_init(block, EDID_CEA_DATA_SPEAKER_ALLOC, size);
+	memcpy(block->data.speakers, speakers, size);
+
+	return sizeof(struct edid_cea_data_block) + size;
+}
+
+void edid_ext_set_cea(struct edid_ext *ext, size_t data_blocks_size,
+		      uint8_t flags)
+{
+	struct edid_cea *cea = &ext->data.cea;
+
+	ext->tag = EDID_EXT_CEA;
+
+	cea->revision = 3;
+	cea->dtd_start = 4 + data_blocks_size;
+	cea->misc = flags; /* just flags, no DTD */
+}
+
+void edid_ext_update_cea_checksum(struct edid_ext *ext)
+{
+	ext->data.cea.checksum = compute_checksum((uint8_t *) ext,
+						  sizeof(struct edid_ext));
 }
