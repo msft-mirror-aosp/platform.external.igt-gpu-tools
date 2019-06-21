@@ -59,6 +59,20 @@ struct chamelium_audio_file {
 	int channels;
 };
 
+struct chamelium_edid;
+
+/**
+ * CHAMELIUM_DEFAULT_EDID: provide this ID to #chamelium_port_set_edid to use
+ * the default EDID.
+ */
+#define CHAMELIUM_DEFAULT_EDID 0
+
+/**
+ * CHAMELIUM_MAX_AUDIO_CHANNELS: the maximum number of audio capture channels
+ * supported by Chamelium.
+ */
+#define CHAMELIUM_MAX_AUDIO_CHANNELS 8
+
 struct chamelium *chamelium_init(int drm_fd);
 void chamelium_deinit(struct chamelium *chamelium);
 void chamelium_reset(struct chamelium *chamelium);
@@ -86,9 +100,11 @@ void chamelium_fire_hpd_pulses(struct chamelium *chamelium,
 void chamelium_schedule_hpd_toggle(struct chamelium *chamelium,
 				   struct chamelium_port *port, int delay_ms,
 				   bool rising_edge);
-int chamelium_new_edid(struct chamelium *chamelium, const unsigned char *edid);
+struct chamelium_edid *chamelium_new_edid(struct chamelium *chamelium,
+					  const unsigned char *edid);
 void chamelium_port_set_edid(struct chamelium *chamelium,
-			     struct chamelium_port *port, int edid_id);
+			     struct chamelium_port *port,
+			     struct chamelium_edid *edid);
 bool chamelium_port_get_ddc_state(struct chamelium *chamelium,
 				  struct chamelium_port *port);
 void chamelium_port_set_ddc_state(struct chamelium *chamelium,
@@ -106,9 +122,11 @@ void chamelium_start_capture(struct chamelium *chamelium,
 void chamelium_stop_capture(struct chamelium *chamelium, int frame_count);
 void chamelium_capture(struct chamelium *chamelium, struct chamelium_port *port,
 		       int x, int y, int w, int h, int frame_count);
+bool chamelium_has_audio_support(struct chamelium *chamelium,
+				 struct chamelium_port *port);
 void chamelium_get_audio_channel_mapping(struct chamelium *chamelium,
 					 struct chamelium_port *port,
-					 int mapping[static 8]);
+					 int mapping[static CHAMELIUM_MAX_AUDIO_CHANNELS]);
 void chamelium_get_audio_format(struct chamelium *chamelium,
 				struct chamelium_port *port,
 				int *rate, int *channels);

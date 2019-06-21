@@ -89,20 +89,22 @@ static void draw_cursor(cairo_t *cr, int x, int y, int cw, int ch, double a)
 static void cursor_enable(data_t *data)
 {
 	igt_output_t *output = data->output;
-	igt_plane_t *cursor;
+	igt_plane_t *cursor =
+		igt_output_get_plane_type(output, DRM_PLANE_TYPE_CURSOR);
 
-	cursor = igt_output_get_plane_type(output, DRM_PLANE_TYPE_CURSOR);
 	igt_plane_set_fb(cursor, &data->fb);
 	igt_plane_set_size(cursor, data->curw, data->curh);
+	igt_fb_set_size(&data->fb, cursor, data->curw, data->curh);
 }
 
 static void cursor_disable(data_t *data)
 {
 	igt_output_t *output = data->output;
-	igt_plane_t *cursor;
+	igt_plane_t *cursor =
+		igt_output_get_plane_type(output, DRM_PLANE_TYPE_CURSOR);
 
-	cursor = igt_output_get_plane_type(output, DRM_PLANE_TYPE_CURSOR);
 	igt_plane_set_fb(cursor, NULL);
+	igt_plane_set_position(cursor, 0, 0);
 }
 
 static bool chv_cursor_broken(data_t *data, int x)
@@ -146,7 +148,8 @@ static void do_single_test(data_t *data, int x, int y)
 	igt_display_t *display = &data->display;
 	igt_pipe_crc_t *pipe_crc = data->pipe_crc;
 	igt_crc_t crc, ref_crc;
-	igt_plane_t *cursor;
+	igt_plane_t *cursor =
+		igt_output_get_plane_type(data->output, DRM_PLANE_TYPE_CURSOR);
 	cairo_t *cr;
 	int ret = 0;
 
@@ -158,7 +161,6 @@ static void do_single_test(data_t *data, int x, int y)
 	igt_put_cairo_ctx(data->drm_fd, &data->primary_fb, cr);
 
 	cursor_enable(data);
-	cursor = igt_output_get_plane_type(data->output, DRM_PLANE_TYPE_CURSOR);
 	igt_plane_set_position(cursor, x, y);
 
 	if (chv_cursor_broken(data, x) && cursor_visible(data, x, y)) {
@@ -217,7 +219,8 @@ static void do_single_test(data_t *data, int x, int y)
 static void do_fail_test(data_t *data, int x, int y, int expect)
 {
 	igt_display_t *display = &data->display;
-	igt_plane_t *cursor;
+	igt_plane_t *cursor =
+		igt_output_get_plane_type(data->output, DRM_PLANE_TYPE_CURSOR);
 	cairo_t *cr;
 	int ret;
 
@@ -229,7 +232,6 @@ static void do_fail_test(data_t *data, int x, int y, int expect)
 	igt_put_cairo_ctx(data->drm_fd, &data->primary_fb, cr);
 
 	cursor_enable(data);
-	cursor = igt_output_get_plane_type(data->output, DRM_PLANE_TYPE_CURSOR);
 	igt_plane_set_position(cursor, x, y);
 	ret = igt_display_try_commit2(display, COMMIT_LEGACY);
 
@@ -337,6 +339,18 @@ static void test_crc_random(data_t *data)
 	}
 }
 
+static void cleanup_crtc(data_t *data)
+{
+	igt_display_t *display = &data->display;
+
+	igt_pipe_crc_free(data->pipe_crc);
+	data->pipe_crc = NULL;
+
+	igt_remove_fb(data->drm_fd, &data->primary_fb);
+
+	igt_display_reset(display);
+}
+
 static void prepare_crtc(data_t *data, igt_output_t *output,
 			 int cursor_w, int cursor_h)
 {
@@ -344,9 +358,10 @@ static void prepare_crtc(data_t *data, igt_output_t *output,
 	igt_display_t *display = &data->display;
 	igt_plane_t *primary;
 
+	cleanup_crtc(data);
+
 	/* select the pipe we want to use */
 	igt_output_set_pipe(output, data->pipe);
-	cursor_disable(data);
 
 	/* create and set the primary plane fb */
 	mode = igt_output_get_mode(output);
@@ -362,9 +377,6 @@ static void prepare_crtc(data_t *data, igt_output_t *output,
 	igt_display_commit(display);
 
 	/* create the pipe_crc object for this pipe */
-	if (data->pipe_crc)
-		igt_pipe_crc_free(data->pipe_crc);
-
 	data->pipe_crc = igt_pipe_crc_new(data->drm_fd, data->pipe,
 					  INTEL_PIPE_CRC_SOURCE_AUTO);
 
@@ -379,29 +391,8 @@ static void prepare_crtc(data_t *data, igt_output_t *output,
 	data->curh = cursor_h;
 	data->refresh = mode->vrefresh;
 
-	/* make sure cursor is disabled */
-	cursor_disable(data);
-	igt_wait_for_vblank(data->drm_fd, data->pipe);
-
 	/* get reference crc w/o cursor */
 	igt_pipe_crc_collect_crc(data->pipe_crc, &data->ref_crc);
-}
-
-static void cleanup_crtc(data_t *data, igt_output_t *output)
-{
-	igt_display_t *display = &data->display;
-	igt_plane_t *primary;
-
-	igt_pipe_crc_free(data->pipe_crc);
-	data->pipe_crc = NULL;
-
-	igt_remove_fb(data->drm_fd, &data->primary_fb);
-
-	primary = igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY);
-	igt_plane_set_fb(primary, NULL);
-
-	igt_output_set_pipe(output, PIPE_ANY);
-	igt_display_commit(display);
 }
 
 static void test_cursor_alpha(data_t *data, double a)
@@ -413,7 +404,6 @@ static void test_cursor_alpha(data_t *data, double a)
 	uint32_t fb_id;
 	int curw = data->curw;
 	int curh = data->curh;
-	int ret;
 
 	/*alpha cursor fb*/
 	fb_id = igt_create_fb(data->drm_fd, curw, curh,
@@ -427,8 +417,7 @@ static void test_cursor_alpha(data_t *data, double a)
 
 	/*Hardware Test*/
 	cursor_enable(data);
-	ret = drmModeSetCursor(data->drm_fd, data->output->config.crtc->crtc_id, data->fb.gem_handle, curw, curh);
-	igt_assert_eq(ret, 0);
+	igt_display_commit(display);
 	igt_wait_for_vblank(data->drm_fd, data->pipe);
 	igt_pipe_crc_collect_crc(pipe_crc, &crc);
 	cursor_disable(data);
@@ -462,42 +451,10 @@ static void test_cursor_opaque(data_t *data)
 	test_cursor_alpha(data, 1.0);
 }
 
-
 static void run_test(data_t *data, void (*testfunc)(data_t *), int cursor_w, int cursor_h)
 {
-	igt_display_t *display = &data->display;
-	igt_output_t *output;
-	enum pipe p;
-	int valid_tests = 0;
-
-	igt_require(cursor_w <= data->cursor_max_w &&
-		    cursor_h <= data->cursor_max_h);
-
-	for_each_pipe_with_valid_output(display, p, output) {
-		data->output = output;
-		data->pipe = p;
-
-		prepare_crtc(data, output, cursor_w, cursor_h);
-
-		valid_tests++;
-
-		igt_info("Beginning %s on pipe %s, connector %s\n",
-			  igt_subtest_name(),
-			  kmstest_pipe_name(data->pipe),
-			  igt_output_name(output));
-
-		testfunc(data);
-
-		igt_info("\n%s on pipe %s, connector %s: PASSED\n\n",
-			  igt_subtest_name(),
-			  kmstest_pipe_name(data->pipe),
-			  igt_output_name(output));
-
-		/* cleanup what prepare_crtc() has done */
-		cleanup_crtc(data, output);
-	}
-
-	igt_require_f(valid_tests, "no valid crtc/connector combinations found\n");
+	prepare_crtc(data, data->output, cursor_w, cursor_h);
+	testfunc(data);
 }
 
 static void create_cursor_fb(data_t *data, int cur_w, int cur_h)
@@ -555,7 +512,8 @@ static void test_cursor_size(data_t *data)
 	uint32_t fb_id;
 	int i, size;
 	int cursor_max_size = data->cursor_max_w;
-	int ret;
+	igt_plane_t *cursor =
+		igt_output_get_plane_type(data->output, DRM_PLANE_TYPE_CURSOR);
 
 	/* Create a maximum size cursor, then change the size in flight to
 	 * smaller ones to see that the size is applied correctly
@@ -572,17 +530,16 @@ static void test_cursor_size(data_t *data)
 
 	/* Hardware test loop */
 	cursor_enable(data);
-	ret = drmModeMoveCursor(data->drm_fd, data->output->config.crtc->crtc_id, 0, 0);
-	igt_assert_eq(ret, 0);
 	for (i = 0, size = cursor_max_size; size >= 64; size /= 2, i++) {
 		/* Change size in flight: */
-		ret = drmModeSetCursor(data->drm_fd, data->output->config.crtc->crtc_id,
-				       data->fb.gem_handle, size, size);
-		igt_assert_eq(ret, 0);
+		igt_plane_set_size(cursor, size, size);
+		igt_fb_set_size(&data->fb, cursor, size, size);
+		igt_display_commit(display);
 		igt_wait_for_vblank(data->drm_fd, data->pipe);
 		igt_pipe_crc_collect_crc(pipe_crc, &crc[i]);
 	}
 	cursor_disable(data);
+	igt_display_commit(display);
 	igt_remove_fb(data->drm_fd, &data->fb);
 	/* Software test loop */
 	for (i = 0, size = cursor_max_size; size >= 64; size /= 2, i++) {
@@ -608,20 +565,29 @@ static void test_rapid_movement(data_t *data)
 	struct timeval start, end, delta;
 	int x = 0, y = 0;
 	long usec;
-	int crtc_id = data->output->config.crtc->crtc_id;
+	igt_display_t *display = &data->display;
+	igt_plane_t *cursor =
+		igt_output_get_plane_type(data->output, DRM_PLANE_TYPE_CURSOR);
 
-	igt_assert_eq(drmModeSetCursor(data->drm_fd, crtc_id,
-			       data->fb.gem_handle, data->curw, data->curh), 0);
+	cursor_enable(data);
 
 	gettimeofday(&start, NULL);
-	for ( ; x < 100; x++)
-		igt_assert_eq(drmModeMoveCursor(data->drm_fd, crtc_id, x, y), 0);
-	for ( ; y < 100; y++)
-		igt_assert_eq(drmModeMoveCursor(data->drm_fd, crtc_id, x, y), 0);
-	for ( ; x > 0; x--)
-		igt_assert_eq(drmModeMoveCursor(data->drm_fd, crtc_id, x, y), 0);
-	for ( ; y > 0; y--)
-		igt_assert_eq(drmModeMoveCursor(data->drm_fd, crtc_id, x, y), 0);
+	for ( ; x < 100; x++) {
+		igt_plane_set_position(cursor, x, y);
+		igt_display_commit(display);
+	}
+	for ( ; y < 100; y++) {
+		igt_plane_set_position(cursor, x, y);
+		igt_display_commit(display);
+	}
+	for ( ; x > 0; x--) {
+		igt_plane_set_position(cursor, x, y);
+		igt_display_commit(display);
+	}
+	for ( ; y > 0; y--) {
+		igt_plane_set_position(cursor, x, y);
+		igt_display_commit(display);
+	}
 	gettimeofday(&end, NULL);
 
 	/*
@@ -633,44 +599,68 @@ static void test_rapid_movement(data_t *data)
 	timersub(&end, &start, &delta);
 	usec = delta.tv_usec + 1000000 * delta.tv_sec;
 	igt_assert_lt(usec, 0.9 * 400 * 1000000 / data->refresh);
-
-	igt_assert_eq(drmModeSetCursor(data->drm_fd, crtc_id,
-			       0, data->curw, data->curh), 0);
-
 }
 
-static void run_test_generic(data_t *data)
+static void run_tests_on_pipe(data_t *data, enum pipe pipe)
 {
 	int cursor_size;
+
+	igt_fixture {
+		data->pipe = pipe;
+		data->output = igt_get_single_output_for_pipe(&data->display, pipe);
+		igt_require(data->output);
+	}
+
+	igt_subtest_f("pipe-%s-cursor-size-change", kmstest_pipe_name(pipe))
+		run_test(data, test_cursor_size,
+			 data->cursor_max_w, data->cursor_max_h);
+
+	igt_subtest_f("pipe-%s-cursor-alpha-opaque", kmstest_pipe_name(pipe))
+		run_test(data, test_cursor_opaque, data->cursor_max_w, data->cursor_max_h);
+
+	igt_subtest_f("pipe-%s-cursor-alpha-transparent", kmstest_pipe_name(pipe))
+		run_test(data, test_cursor_transparent, data->cursor_max_w, data->cursor_max_h);
+
+	igt_fixture
+		create_cursor_fb(data, data->cursor_max_w, data->cursor_max_h);
+
+	igt_subtest_f("pipe-%s-cursor-dpms", kmstest_pipe_name(pipe)) {
+		data->flags = TEST_DPMS;
+		run_test(data, test_crc_random, data->cursor_max_w, data->cursor_max_h);
+	}
+	data->flags = 0;
+
+	igt_subtest_f("pipe-%s-cursor-suspend", kmstest_pipe_name(pipe)) {
+		data->flags = TEST_SUSPEND;
+		run_test(data, test_crc_random, data->cursor_max_w, data->cursor_max_h);
+	}
+	data->flags = 0;
+
+	igt_fixture
+		igt_remove_fb(data->drm_fd, &data->fb);
+
 	for (cursor_size = 64; cursor_size <= 512; cursor_size *= 2) {
 		int w = cursor_size;
 		int h = cursor_size;
 
-		igt_fixture
+		igt_fixture {
+			igt_require(w <= data->cursor_max_w &&
+				    h <= data->cursor_max_h);
+
 			create_cursor_fb(data, w, h);
+		}
 
 		/* Using created cursor FBs to test cursor support */
-		igt_subtest_f("cursor-%dx%d-onscreen", w, h)
+		igt_subtest_f("pipe-%s-cursor-%dx%d-onscreen", kmstest_pipe_name(pipe), w, h)
 			run_test(data, test_crc_onscreen, w, h);
-		igt_subtest_f("cursor-%dx%d-offscreen", w, h)
+		igt_subtest_f("pipe-%s-cursor-%dx%d-offscreen", kmstest_pipe_name(pipe), w, h)
 			run_test(data, test_crc_offscreen, w, h);
-		igt_subtest_f("cursor-%dx%d-sliding", w, h)
+		igt_subtest_f("pipe-%s-cursor-%dx%d-sliding", kmstest_pipe_name(pipe), w, h)
 			run_test(data, test_crc_sliding, w, h);
-		igt_subtest_f("cursor-%dx%d-random", w, h)
+		igt_subtest_f("pipe-%s-cursor-%dx%d-random", kmstest_pipe_name(pipe), w, h)
 			run_test(data, test_crc_random, w, h);
-		igt_subtest_f("cursor-%dx%d-dpms", w, h) {
-			data->flags = TEST_DPMS;
-			run_test(data, test_crc_random, w, h);
-			data->flags = 0;
-		}
 
-		igt_subtest_f("cursor-%dx%d-suspend", w, h) {
-			data->flags = TEST_SUSPEND;
-			run_test(data, test_crc_random, w, h);
-			data->flags = 0;
-		}
-
-		igt_subtest_f("cursor-%dx%d-rapid-movement", w, h) {
+		igt_subtest_f("pipe-%s-cursor-%dx%d-rapid-movement", kmstest_pipe_name(pipe), w, h) {
 			run_test(data, test_rapid_movement, w, h);
 		}
 
@@ -684,23 +674,25 @@ static void run_test_generic(data_t *data)
 		 */
 		h /= 3;
 
-		igt_fixture
-			create_cursor_fb(data, w, h);
+		igt_fixture {
+			if (has_nonsquare_cursors(data))
+				create_cursor_fb(data, w, h);
+		}
 
 		/* Using created cursor FBs to test cursor support */
-		igt_subtest_f("cursor-%dx%d-onscreen", w, h) {
+		igt_subtest_f("pipe-%s-cursor-%dx%d-onscreen", kmstest_pipe_name(pipe), w, h) {
 			igt_require(has_nonsquare_cursors(data));
 			run_test(data, test_crc_onscreen, w, h);
 		}
-		igt_subtest_f("cursor-%dx%d-offscreen", w, h) {
+		igt_subtest_f("pipe-%s-cursor-%dx%d-offscreen", kmstest_pipe_name(pipe), w, h) {
 			igt_require(has_nonsquare_cursors(data));
 			run_test(data, test_crc_offscreen, w, h);
 		}
-		igt_subtest_f("cursor-%dx%d-sliding", w, h) {
+		igt_subtest_f("pipe-%s-cursor-%dx%d-sliding", kmstest_pipe_name(pipe), w, h) {
 			igt_require(has_nonsquare_cursors(data));
 			run_test(data, test_crc_sliding, w, h);
 		}
-		igt_subtest_f("cursor-%dx%d-random", w, h) {
+		igt_subtest_f("pipe-%s-cursor-%dx%d-random", kmstest_pipe_name(pipe), w, h) {
 			igt_require(has_nonsquare_cursors(data));
 			run_test(data, test_crc_random, w, h);
 		}
@@ -716,6 +708,7 @@ igt_main
 {
 	uint64_t cursor_width = 64, cursor_height = 64;
 	int ret;
+	enum pipe pipe;
 
 	igt_skip_on_simulation();
 
@@ -741,18 +734,9 @@ igt_main
 	data.cursor_max_w = cursor_width;
 	data.cursor_max_h = cursor_height;
 
-	igt_subtest_f("cursor-size-change")
-		run_test(&data, test_cursor_size, cursor_width, cursor_height);
-
-	igt_subtest_f("cursor-alpha-opaque") {
-		run_test(&data, test_cursor_opaque, cursor_width, cursor_height);
-	 }
-
-	igt_subtest_f("cursor-alpha-transparent") {
-		run_test(&data, test_cursor_transparent, cursor_width, cursor_height);
-	 }
-
-	run_test_generic(&data);
+	for_each_pipe_static(pipe)
+		igt_subtest_group
+			run_tests_on_pipe(&data, pipe);
 
 	igt_fixture {
 		igt_display_fini(&data.display);

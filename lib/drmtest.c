@@ -187,6 +187,12 @@ static int modprobe(const char *driver)
 	return igt_kmod_load(driver, "");
 }
 
+/* virtio's driver name is virtio_gpu but the module is virtio-gpu.ko */
+static void modprobe_virtio(const char *name)
+{
+	igt_kmod_load("virtio-gpu", "");
+}
+
 static void modprobe_i915(const char *name)
 {
 	/* When loading i915, we also want to load snd-hda et al */
@@ -200,11 +206,11 @@ static const struct module {
 } modules[] = {
 	{ DRIVER_AMDGPU, "amdgpu" },
 	{ DRIVER_INTEL, "i915", modprobe_i915 },
+	{ DRIVER_PANFROST, "panfrost" },
 	{ DRIVER_V3D, "v3d" },
 	{ DRIVER_VC4, "vc4" },
 	{ DRIVER_VGEM, "vgem" },
-	{ DRIVER_VIRTIO, "virtio-gpu" },
-	{ DRIVER_VIRTIO, "virtio_gpu" },
+	{ DRIVER_VIRTIO, "virtio_gpu", modprobe_virtio },
 	{}
 };
 
@@ -361,6 +367,8 @@ static const char *chipset_to_str(int chipset)
 		return "virtio";
 	case DRIVER_AMDGPU:
 		return "amdgpu";
+	case DRIVER_PANFROST:
+		return "panfrost";
 	case DRIVER_ANY:
 		return "any";
 	default:

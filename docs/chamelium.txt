@@ -42,7 +42,17 @@ section. At this point, IGT has to be configured to connect to the Chamelium.
 
 It may be necessary to give the Chamelium a static IP address, depending on
 the network setup. This can be configured (via the serial console) by editing
-the Debian-styled /etc/network/interfaces configuration file.
+the Debian-styled /etc/network/interfaces configuration file. Example setup:
+
+    sudo screen /dev/ttyUSB0 115200
+    sudo vi /etc/network/interfaces
+
+and then configure eth0 like so:
+
+    iface eth0 inet static
+        address 192.168.1.2
+        netmask 255.255.255.0
+        gateway 192.168.1.1
 
 This document supposes that target PC's network IP has "192.168.1.1/24" and
 the Chamelium's network IP has "192.168.1.2/24".
@@ -116,6 +126,16 @@ $ ./scripts/run-tests.sh -t chamelium
 
 Debugging the Chamelium
 -----------------------
+
+It is possible to manually send Chamelium RPC calls with the xmlrpc utility
+(from xmlrpc-c). For instance, to plug the DisplayPort port:
+$ xmlrpc http://192.168.1.2:9992 Plug i/1
+
+The xmlrpc utility documentation is available at:
+http://xmlrpc-c.sourceforge.net/doc/xmlrpc.html
+
+The XML-RPC Chamelium interface is described here:
+https://chromium.googlesource.com/chromiumos/platform/chameleon/+/refs/heads/master/chameleond/interface.py
 
 Logs that may be useful for debugging can be obtained either by connecting to
 the board via SSH or serial console and looking at the daemon logs from

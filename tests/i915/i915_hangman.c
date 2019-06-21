@@ -209,7 +209,7 @@ static void test_error_state_capture(unsigned ring_id,
 	clear_error_state();
 
 	hang = igt_hang_ctx(device, 0, ring_id, HANG_ALLOW_CAPTURE);
-	offset = hang.spin->obj[1].offset;
+	offset = hang.spin->obj[IGT_SPIN_BATCH].offset;
 
 	batch = gem_mmap__cpu(device, hang.spin->handle, 0, 4096, PROT_READ);
 	gem_set_domain(device, hang.spin->handle, I915_GEM_DOMAIN_CPU, 0);
@@ -256,7 +256,7 @@ static void hangcheck_unterminated(void)
 
 igt_main
 {
-	const struct intel_execution_engine *e;
+	const struct intel_execution_engine2 *e;
 	igt_hang_t hang = {};
 
 	igt_skip_on_simulation();
@@ -276,16 +276,9 @@ igt_main
 	igt_subtest("error-state-basic")
 		test_error_state_basic();
 
-	for (e = intel_execution_engines; e->name; e++) {
-		if (e->exec_id == 0)
-			continue;
-
-		igt_subtest_f("error-state-capture-%s", e->name) {
-			igt_require(gem_ring_has_physical_engine(device, e->exec_id | e->flags));
-			test_error_state_capture(e->exec_id | e->flags,
-						 e->full_name);
-		}
-	}
+	__for_each_physical_engine(device, e)
+		igt_subtest_f("error-state-capture-%s", e->name)
+			test_error_state_capture(e->flags, e->name);
 
 	igt_subtest("hangcheck-unterminated")
 		hangcheck_unterminated();

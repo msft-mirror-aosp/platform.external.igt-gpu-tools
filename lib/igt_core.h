@@ -119,7 +119,7 @@ extern char *igt_frame_dump_path;
  *
  * Exit status indicating a test failure
  */
-#define IGT_EXIT_FAILURE 99
+#define IGT_EXIT_FAILURE 98
 
 bool __igt_fixture(void);
 void __igt_fixture_complete(void);
@@ -145,6 +145,8 @@ void __igt_fixture_end(void) __attribute__((noreturn));
 /* subtest infrastructure */
 jmp_buf igt_subtest_jmpbuf;
 typedef int (*igt_opt_handler_t)(int opt, int opt_index, void *data);
+#define IGT_OPT_HANDLER_SUCCESS 0
+#define IGT_OPT_HANDLER_ERROR -2
 #ifndef __GTK_DOC_IGNORE__ /* gtkdoc wants to document this forward decl */
 struct option;
 #endif
@@ -250,22 +252,37 @@ void __igt_subtest_group_restore(int);
 			       __igt_subtest_group_restore(igt_tokencat(__save,__LINE__) ))
 
 /**
- * igt_main:
+ * igt_main_args:
+ * @extra_short_opts: getopt_long() compliant list with additional short options
+ * @extra_long_opts: getopt_long() compliant list with additional long options
+ * @help_str: help string for the additional options
+ * @extra_opt_handler: handler for the additional options
+ * @handler_data: user data given to @extra_opt_handler when invoked
  *
- * This is a magic control flow block used instead of a main() function for
- * tests with subtests. Open-coding the main() function is only recommended if
- * the test needs to parse additional command line arguments of its own.
+ * This is a magic control flow block used instead of a main()
+ * function for tests with subtests, along with custom command line
+ * arguments. The macro parameters are passed directly to
+ * #igt_subtest_init_parse_opts.
  */
-#define igt_main \
+#define igt_main_args(short_opts, long_opts, help_str, opt_handler, handler_data) \
 	static void igt_tokencat(__real_main, __LINE__)(void); \
 	int main(int argc, char **argv) { \
-		igt_subtest_init_parse_opts(&argc, argv, NULL, NULL, NULL, \
-					    NULL, NULL); \
+		igt_subtest_init_parse_opts(&argc, argv, \
+					    short_opts, long_opts, help_str, \
+					    opt_handler, handler_data); \
 		igt_tokencat(__real_main, __LINE__)(); \
 		igt_exit(); \
 	} \
 	static void igt_tokencat(__real_main, __LINE__)(void) \
 
+
+/**
+ * igt_main:
+ *
+ * This is a magic control flow block used instead of a main() function for
+ * tests with subtests. Open-coding the main() function is not recommended.
+ */
+#define igt_main igt_main_args(NULL, NULL, NULL, NULL, NULL)
 
 const char *igt_test_name(void);
 void igt_simple_init_parse_opts(int *argc, char **argv,
@@ -289,22 +306,39 @@ void igt_simple_init_parse_opts(int *argc, char **argv,
 #define igt_simple_init(argc, argv) \
 	igt_simple_init_parse_opts(&argc, argv, NULL, NULL, NULL, NULL, NULL);
 
+
 /**
- * igt_simple_main:
+ * igt_simple_main_args:
+ * @extra_short_opts: getopt_long() compliant list with additional short options
+ * @extra_long_opts: getopt_long() compliant list with additional long options
+ * @help_str: help string for the additional options
+ * @extra_opt_handler: handler for the additional options
+ * @handler_data: user data given to @extra_opt_handler when invoked
  *
- * This is a magic control flow block used instead of a main() function for
- * simple tests. Open-coding the main() function is only recommended if
- * the test needs to parse additional command line arguments of its own.
+ * This is a magic control flow block used instead of a main()
+ * function for simple tests with custom command line arguments. The
+ * macro parameters are passed directly to
+ * #igt_simple_init_parse_opts.
  */
-#define igt_simple_main \
+#define igt_simple_main_args(short_opts, long_opts, help_str, opt_handler, handler_data) \
 	static void igt_tokencat(__real_main, __LINE__)(void); \
 	int main(int argc, char **argv) { \
-		igt_simple_init_parse_opts(&argc, argv, NULL, NULL, NULL, \
-					   NULL, NULL); \
+		igt_simple_init_parse_opts(&argc, argv, \
+					   short_opts, long_opts, help_str, \
+					   opt_handler, handler_data);	\
 		igt_tokencat(__real_main, __LINE__)(); \
 		igt_exit(); \
 	} \
 	static void igt_tokencat(__real_main, __LINE__)(void) \
+
+
+/**
+ * igt_simple_main:
+ *
+ * This is a magic control flow block used instead of a main() function for
+ * simple tests. Open-coding the main() function is not recommended.
+ */
+#define igt_simple_main igt_simple_main_args(NULL, NULL, NULL, NULL, NULL)
 
 /**
  * igt_constructor:

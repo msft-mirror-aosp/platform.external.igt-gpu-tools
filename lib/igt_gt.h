@@ -90,35 +90,16 @@ bool gem_ring_is_physical_engine(int fd, unsigned int ring);
 bool gem_ring_has_physical_engine(int fd, unsigned int ring);
 
 bool gem_can_store_dword(int fd, unsigned int engine);
+bool gem_class_can_store_dword(int fd, int class);
 
 extern const struct intel_execution_engine2 {
 	const char *name;
 	int class;
 	int instance;
+	uint64_t flags;
+	bool is_virtual;
 } intel_execution_engines2[];
 
-unsigned int
-gem_class_instance_to_eb_flags(int gem_fd,
-			       enum drm_i915_gem_engine_class class,
-			       unsigned int instance);
-
-bool gem_has_engine(int gem_fd,
-		    enum drm_i915_gem_engine_class class,
-		    unsigned int instance);
-
-static inline
-void gem_require_engine(int gem_fd,
-			enum drm_i915_gem_engine_class class,
-			unsigned int instance)
-{
-	igt_require(gem_has_engine(gem_fd, class, instance));
-}
-
-#define __for_each_engine_class_instance(e__) \
-	for ((e__) = intel_execution_engines2; (e__)->name; (e__)++)
-
-#define for_each_engine_class_instance(fd__, e__) \
-	for ((e__) = intel_execution_engines2; (e__)->name; (e__)++) \
-		for_if (gem_has_engine((fd__), (e__)->class, (e__)->instance))
+int gem_execbuf_flags_to_engine_class(unsigned int flags);
 
 #endif /* IGT_GT_H */

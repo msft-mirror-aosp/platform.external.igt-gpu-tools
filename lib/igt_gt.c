@@ -41,6 +41,7 @@
 #include "intel_reg.h"
 #include "intel_chipset.h"
 #include "igt_dummyload.h"
+#include "i915/gem_engine_topology.h"
 
 /**
  * SECTION:igt_gt
@@ -556,7 +557,7 @@ const struct intel_execution_engine intel_execution_engines[] = {
 	{ NULL, 0, 0 }
 };
 
-bool gem_can_store_dword(int fd, unsigned int engine)
+bool gem_class_can_store_dword(int fd, int class)
 {
 	uint16_t devid = intel_get_drm_devid(fd);
 	const struct intel_device_info *info = intel_get_device_info(devid);
@@ -568,8 +569,8 @@ bool gem_can_store_dword(int fd, unsigned int engine)
 	if (gen == 3 && (info->is_grantsdale || info->is_alviso))
 		return false; /* only supports physical addresses */
 
-	if (gen == 6 && ((engine & 0x3f) == I915_EXEC_BSD))
-		return false; /* kills the machine! */
+	if (gen == 6 && class == I915_ENGINE_CLASS_VIDEO)
+		return false;
 
 	if (info->is_broadwater)
 		return false; /* Not sure yet... */
@@ -577,55 +578,37 @@ bool gem_can_store_dword(int fd, unsigned int engine)
 	return true;
 }
 
+bool gem_can_store_dword(int fd, unsigned int engine)
+{
+	return gem_class_can_store_dword(fd,
+				gem_execbuf_flags_to_engine_class(engine));
+}
+
 const struct intel_execution_engine2 intel_execution_engines2[] = {
-	{ "rcs0", I915_ENGINE_CLASS_RENDER, 0 },
-	{ "bcs0", I915_ENGINE_CLASS_COPY, 0 },
-	{ "vcs0", I915_ENGINE_CLASS_VIDEO, 0 },
-	{ "vcs1", I915_ENGINE_CLASS_VIDEO, 1 },
-	{ "vecs0", I915_ENGINE_CLASS_VIDEO_ENHANCE, 0 },
+	{ "rcs0", I915_ENGINE_CLASS_RENDER, 0, I915_EXEC_RENDER },
+	{ "bcs0", I915_ENGINE_CLASS_COPY, 0, I915_EXEC_BLT },
+	{ "vcs0", I915_ENGINE_CLASS_VIDEO, 0, I915_EXEC_BSD | I915_EXEC_BSD_RING1 },
+	{ "vcs1", I915_ENGINE_CLASS_VIDEO, 1, I915_EXEC_BSD | I915_EXEC_BSD_RING2 },
+	{ "vcs2", I915_ENGINE_CLASS_VIDEO, 2, -1 },
+	{ "vecs0", I915_ENGINE_CLASS_VIDEO_ENHANCE, 0, I915_EXEC_VEBOX },
 	{ }
 };
 
-unsigned int
-gem_class_instance_to_eb_flags(int gem_fd,
-			       enum drm_i915_gem_engine_class class,
-			       unsigned int instance)
+int gem_execbuf_flags_to_engine_class(unsigned int flags)
 {
-	if (class != I915_ENGINE_CLASS_VIDEO)
-		igt_assert(instance == 0);
-	else
-		igt_assert(instance >= 0 && instance <= 1);
-
-	switch (class) {
-	case I915_ENGINE_CLASS_RENDER:
-		return I915_EXEC_RENDER;
-	case I915_ENGINE_CLASS_COPY:
-		return I915_EXEC_BLT;
-	case I915_ENGINE_CLASS_VIDEO:
-		if (instance == 0) {
-			if (gem_has_bsd2(gem_fd))
-				return I915_EXEC_BSD | I915_EXEC_BSD_RING1;
-			else
-				return I915_EXEC_BSD;
-
-		} else {
-			return I915_EXEC_BSD | I915_EXEC_BSD_RING2;
-		}
-	case I915_ENGINE_CLASS_VIDEO_ENHANCE:
-		return I915_EXEC_VEBOX;
-	case I915_ENGINE_CLASS_INVALID:
+	switch (flags & 0x3f) {
+	case I915_EXEC_DEFAULT:
+	case I915_EXEC_RENDER:
+		return I915_ENGINE_CLASS_RENDER;
+	case I915_EXEC_BLT:
+		return I915_ENGINE_CLASS_COPY;
+	case I915_EXEC_BSD:
+		return I915_ENGINE_CLASS_VIDEO;
+	case I915_EXEC_VEBOX:
+		return I915_ENGINE_CLASS_VIDEO_ENHANCE;
 	default:
 		igt_assert(0);
-	};
-}
-
-bool gem_has_engine(int gem_fd,
-		    enum drm_i915_gem_engine_class class,
-		    unsigned int instance)
-{
-	return gem_has_ring(gem_fd,
-			    gem_class_instance_to_eb_flags(gem_fd, class,
-							   instance));
+	}
 }
 
 bool gem_ring_is_physical_engine(int fd, unsigned ring)
