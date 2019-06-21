@@ -32,6 +32,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include <alsa/asoundlib.h>
+
 struct audio_signal;
 
 struct audio_signal *audio_signal_init(int channels, int sampling_rate);
@@ -40,13 +42,15 @@ int audio_signal_add_frequency(struct audio_signal *signal, int frequency,
 			       int channel);
 void audio_signal_synthesize(struct audio_signal *signal);
 void audio_signal_reset(struct audio_signal *signal);
-void audio_signal_fill(struct audio_signal *signal, int16_t *buffer,
-		       size_t buffer_len);
+void audio_signal_fill(struct audio_signal *signal, double *buffer,
+		       size_t samples);
 bool audio_signal_detect(struct audio_signal *signal, int sampling_rate,
-			 int channel, double *data, size_t data_len);
+			 int channel, const double *samples, size_t samples_len);
 size_t audio_extract_channel_s32_le(double *dst, size_t dst_cap,
 				    int32_t *src, size_t src_len,
 				    int n_channels, int channel);
+void audio_convert_to(void *dst, double *src, size_t len,
+		      snd_pcm_format_t format);
 int audio_create_wav_file_s32_le(const char *qualifier, uint32_t sample_rate,
 				 uint16_t channels, char **path);
 

@@ -42,6 +42,7 @@ typedef struct igt_spin {
 
 	int out_fence;
 	struct drm_i915_gem_exec_object2 obj[2];
+#define IGT_SPIN_BATCH   1
 	struct drm_i915_gem_execbuffer2 execbuf;
 	uint32_t poll_handle;
 	uint32_t *poll;
@@ -92,6 +93,7 @@ static inline void igt_spin_busywait_until_started(igt_spin_t *spin)
 }
 
 void igt_terminate_spins(void);
+void igt_unshare_spins(void);
 
 enum igt_cork_type {
 	CORK_SYNC_FD = 1,

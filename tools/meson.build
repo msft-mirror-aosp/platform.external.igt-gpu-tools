@@ -12,8 +12,7 @@ foreach prog : tools_progs_noisnt
 endforeach
 
 tools_progs = [
-	# FIXME we already have a libtestcase with this name as target
-	#'igt_stats',
+	'igt_stats',
 	'intel_audio_dump',
 	'intel_backlight',
 	'intel_bios_dumper',
@@ -93,7 +92,8 @@ install_subdir('registers', install_dir : datadir,
 shared_library('intel_aubdump', 'aubdump.c',
 	       dependencies : [ lib_igt_chipset, dlsym ],
 	       name_prefix : '',
-	       install : true)
+	       install : true,
+	       soversion : '0')
 
 executable('intel_gpu_top', 'intel_gpu_top.c',
 	   install : true,
