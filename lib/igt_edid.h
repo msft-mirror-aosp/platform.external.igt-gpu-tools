@@ -30,6 +30,8 @@
 
 #include <stdint.h>
 
+#include <xf86drmMode.h>
+
 struct est_timings {
 	uint8_t t1;
 	uint8_t t2;
@@ -52,11 +54,17 @@ struct std_timing {
 
 #define DETAILED_TIMINGS_LEN 4
 
-#define EDID_PT_HSYNC_POSITIVE (1 << 1)
+#define EDID_PT_INTERLACED (1 << 7)
+#define EDID_PT_STEREO (1 << 5)
+
+/* Sync type */
+#define EDID_PT_SYNC_ANALOG (0b00 << 3)
+#define EDID_PT_SYNC_DIGITAL_COMPOSITE (0b10 << 3)
+#define EDID_PT_SYNC_DIGITAL_SEPARATE (0b11 << 3)
+
+/* Applies to EDID_PT_SYNC_DIGITAL_SEPARATE only */
 #define EDID_PT_VSYNC_POSITIVE (1 << 2)
-#define EDID_PT_SEPARATE_SYNC  (3 << 3)
-#define EDID_PT_STEREO         (1 << 5)
-#define EDID_PT_INTERLACED     (1 << 7)
+#define EDID_PT_HSYNC_POSITIVE (1 << 1)
 
 struct detailed_pixel_timing {
 	uint8_t hactive_lo;
@@ -74,7 +82,7 @@ struct detailed_pixel_timing {
 	uint8_t width_height_mm_hi;
 	uint8_t hborder;
 	uint8_t vborder;
-	uint8_t misc;
+	uint8_t misc; /* EDID_PT_* */
 } __attribute__((packed));
 
 struct detailed_data_string {
@@ -142,6 +150,110 @@ struct detailed_timing {
 	} data;
 } __attribute__((packed));
 
+enum cea_sad_format {
+	CEA_SAD_FORMAT_PCM = 1,
+	CEA_SAD_FORMAT_AC3 = 2,
+	CEA_SAD_FORMAT_MPEG1 = 3, /* Layers 1 & 2 */
+	CEA_SAD_FORMAT_MP3 = 4,
+	CEA_SAD_FORMAT_MPEG2 = 5,
+	CEA_SAD_FORMAT_AAC = 6,
+	CEA_SAD_FORMAT_DTS = 7,
+	CEA_SAD_FORMAT_ATRAC = 8,
+	CEA_SAD_FORMAT_SACD = 9, /* One-bit audio */
+	CEA_SAD_FORMAT_DD_PLUS = 10,
+	CEA_SAD_FORMAT_DTS_HD = 11,
+	CEA_SAD_FORMAT_DOLBY = 12, /* MLP/Dolby TrueHD */
+	CEA_SAD_FORMAT_DST = 13,
+	CEA_SAD_FORMAT_WMA = 14, /* Microsoft WMA Pro */
+};
+
+enum cea_sad_sampling_rate {
+	CEA_SAD_SAMPLING_RATE_32KHZ = 1 << 0,
+	CEA_SAD_SAMPLING_RATE_44KHZ = 1 << 1,
+	CEA_SAD_SAMPLING_RATE_48KHZ = 1 << 2,
+	CEA_SAD_SAMPLING_RATE_88KHZ = 1 << 3,
+	CEA_SAD_SAMPLING_RATE_96KHZ = 1 << 4,
+	CEA_SAD_SAMPLING_RATE_176KHZ = 1 << 5,
+	CEA_SAD_SAMPLING_RATE_192KHZ = 1 << 6,
+};
+
+/* for PCM only */
+enum cea_sad_pcm_sample_size {
+	CEA_SAD_SAMPLE_SIZE_16 = 1 << 0,
+	CEA_SAD_SAMPLE_SIZE_20 = 1 << 1,
+	CEA_SAD_SAMPLE_SIZE_24 = 1 << 2,
+};
+
+/* Short Audio Descriptor */
+struct cea_sad {
+	uint8_t format_channels;
+	uint8_t sampling_rates;
+	uint8_t bitrate;
+} __attribute__((packed));
+
+/* Vendor Specific Data */
+struct cea_vsd {
+	uint8_t ieee_oui[3];
+	char data[];
+};
+
+enum cea_speaker_alloc_item {
+	CEA_SPEAKER_FRONT_LEFT_RIGHT = 1 << 0,
+	CEA_SPEAKER_LFE = 1 << 1,
+	CEA_SPEAKER_FRONT_CENTER = 1 << 2,
+	CEA_SPEAKER_REAR_LEFT_RIGHT = 1 << 3,
+	CEA_SPEAKER_REAR_CENTER = 1 << 4,
+	CEA_SPEAKER_FRONT_LEFT_RIGHT_CENTER = 1 << 5,
+	CEA_SPEAKER_REAR_LEFT_RIGHT_CENTER = 1 << 6,
+};
+
+struct cea_speaker_alloc {
+	uint8_t speakers; /* enum cea_speaker_alloc_item */
+	uint8_t reserved[2];
+} __attribute__((packed));
+
+enum edid_cea_data_type {
+	EDID_CEA_DATA_AUDIO = 1,
+	EDID_CEA_DATA_VIDEO = 2,
+	EDID_CEA_DATA_VENDOR_SPECIFIC = 3,
+	EDID_CEA_DATA_SPEAKER_ALLOC = 4,
+};
+
+struct edid_cea_data_block {
+	uint8_t type_len; /* type is from enum edid_cea_data_type */
+	union {
+		struct cea_sad sads[0];
+		struct cea_vsd vsds[0];
+		struct cea_speaker_alloc speakers[0];
+	} data;
+} __attribute__((packed));
+
+enum edid_cea_flag {
+	EDID_CEA_YCBCR422 = 1 << 4,
+	EDID_CEA_YCBCR444 = 1 << 5,
+	EDID_CEA_BASIC_AUDIO = 1 << 6,
+	EDID_CEA_UNDERSCAN = 1 << 7,
+};
+
+struct edid_cea {
+	uint8_t revision;
+	uint8_t dtd_start;
+	uint8_t misc;
+	char data[123]; /* DBC & DTD collection, padded with zeros */
+	uint8_t checksum;
+} __attribute__((packed));
+
+enum edid_ext_tag {
+	EDID_EXT_CEA = 0x02,
+};
+
+struct edid_ext {
+	uint8_t tag; /* enum edid_ext_tag */
+	union {
+		struct edid_cea cea;
+	} data;
+} __attribute__((packed));
+
 struct edid {
 	char header[8];
 	/* Vendor & product info */
@@ -177,9 +289,9 @@ struct edid {
 	/* Detailing timings 1-4 */
 	struct detailed_timing detailed_timings[DETAILED_TIMINGS_LEN];
 	/* Number of 128 byte ext. blocks */
-	uint8_t extensions;
-	/* Checksum */
+	uint8_t extensions_len;
 	uint8_t checksum;
+	struct edid_ext extensions[];
 } __attribute__((packed));
 
 void edid_init(struct edid *edid);
@@ -192,5 +304,18 @@ void detailed_timing_set_monitor_range_mode(struct detailed_timing *dt,
 void detailed_timing_set_string(struct detailed_timing *dt,
 				enum detailed_non_pixel_type type,
 				const char *str);
+
+void cea_sad_init_pcm(struct cea_sad *sad, int channels,
+		      uint8_t sampling_rates, uint8_t sample_sizes);
+void edid_ext_update_cea_checksum(struct edid_ext *ext);
+const struct cea_vsd *cea_vsd_get_hdmi_default(size_t *size);
+size_t edid_cea_data_block_set_sad(struct edid_cea_data_block *block,
+				   const struct cea_sad *sads, size_t sads_len);
+size_t edid_cea_data_block_set_vsd(struct edid_cea_data_block *block,
+				   const struct cea_vsd *vsd, size_t vsd_size);
+size_t edid_cea_data_block_set_speaker_alloc(struct edid_cea_data_block *block,
+					     const struct cea_speaker_alloc *speakers);
+void edid_ext_set_cea(struct edid_ext *ext, size_t data_blocks_size,
+		      uint8_t flags);
 
 #endif

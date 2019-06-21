@@ -44,15 +44,6 @@
 
 #define VERIFY 0
 
-static void write_seqno(int dir, unsigned offset)
-{
-	uint32_t seqno = UINT32_MAX - offset;
-
-	igt_sysfs_printf(dir, "i915_next_seqno", "0x%x", seqno);
-
-	igt_debug("next seqno set to: 0x%x\n", seqno);
-}
-
 static void check_bo(int fd, uint32_t handle, int pass)
 {
 	uint32_t *map;
@@ -87,6 +78,8 @@ static void verify_reloc(int fd, uint32_t handle,
 #define HANG 0x20
 #define SYNC 0x40
 #define PRIORITY 0x80
+#define ALL 0x100
+#define QUEUES 0x200
 
 struct hang {
 	struct drm_i915_gem_exec_object2 obj;
@@ -171,7 +164,7 @@ static void ctx_set_random_priority(int fd, uint32_t ctx)
 {
 	int prio = hars_petruska_f54_1_random_unsafe_max(1024) - 512;
 	gem_context_set_priority(fd, ctx, prio);
-};
+}
 
 static void whisper(int fd, unsigned engine, unsigned flags)
 {
@@ -198,6 +191,7 @@ static void whisper(int fd, unsigned engine, unsigned flags)
 	uint64_t old_offset;
 	int i, n, loc;
 	int debugfs;
+	int nchild;
 
 	if (flags & PRIORITY) {
 		igt_require(gem_scheduler_enabled(fd));
@@ -214,6 +208,7 @@ static void whisper(int fd, unsigned engine, unsigned flags)
 				engines[nengine++] = engine;
 		}
 	} else {
+		igt_assert(!(flags & ALL));
 		igt_require(gem_has_ring(fd, engine));
 		igt_require(gem_can_store_dword(fd, engine));
 		engines[nengine++] = engine;
@@ -226,13 +221,27 @@ static void whisper(int fd, unsigned engine, unsigned flags)
 	if (flags & CONTEXTS)
 		gem_require_contexts(fd);
 
+	if (flags & QUEUES)
+		igt_require(gem_has_queues(fd));
+
 	if (flags & HANG)
 		init_hang(&hang);
 
+	nchild = 1;
+	if (flags & FORKED)
+		nchild *= sysconf(_SC_NPROCESSORS_ONLN);
+	if (flags & ALL)
+		nchild *= nengine;
+
 	intel_detect_and_clear_missed_interrupts(fd);
 	gpu_power_read(&power, &sample[0]);
-	igt_fork(child, flags & FORKED ? sysconf(_SC_NPROCESSORS_ONLN) : 1)  {
+	igt_fork(child, nchild) {
 		unsigned int pass;
+
+		if (flags & ALL) {
+			engines[0] = engines[child % nengine];
+			nengine = 1;
+		}
 
 		memset(&scratch, 0, sizeof(scratch));
 		scratch.handle = gem_create(fd, 4096);
@@ -290,6 +299,10 @@ static void whisper(int fd, unsigned engine, unsigned flags)
 			for (n = 0; n < 64; n++)
 				contexts[n] = gem_context_create(fd);
 		}
+		if (flags & QUEUES) {
+			for (n = 0; n < 64; n++)
+				contexts[n] = gem_queue_create(fd);
+		}
 		if (flags & FDS) {
 			for (n = 0; n < 64; n++)
 				fds[n] = drm_open_driver(DRIVER_INTEL);
@@ -333,9 +346,6 @@ static void whisper(int fd, unsigned engine, unsigned flags)
 			igt_until_timeout(150) {
 				uint64_t offset;
 
-				if (!(flags & FORKED))
-					write_seqno(debugfs, pass);
-
 				if (flags & HANG)
 					submit_hang(&hang, engines, nengine, flags);
 
@@ -374,8 +384,8 @@ static void whisper(int fd, unsigned engine, unsigned flags)
 
 				gem_write(fd, batches[1023].handle, loc, &pass, sizeof(pass));
 				for (n = 1024; --n >= 1; ) {
+					uint32_t handle[2] = {};
 					int this_fd = fd;
-					uint32_t handle[2];
 
 					execbuf.buffers_ptr = to_user_pointer(&batches[n-1]);
 					reloc_migrations += batches[n-1].offset != inter[n].presumed_offset;
@@ -403,7 +413,7 @@ static void whisper(int fd, unsigned engine, unsigned flags)
 						execbuf.flags &= ~ENGINE_MASK;
 						execbuf.flags |= engines[rand() % nengine];
 					}
-					if (flags & CONTEXTS) {
+					if (flags & (CONTEXTS | QUEUES)) {
 						execbuf.rsvd1 = contexts[rand() % 64];
 						if (flags & PRIORITY)
 							ctx_set_random_priority(this_fd, execbuf.rsvd1);
@@ -486,7 +496,7 @@ static void whisper(int fd, unsigned engine, unsigned flags)
 			for (n = 0; n < 64; n++)
 				close(fds[n]);
 		}
-		if (flags & CONTEXTS) {
+		if (flags & (CONTEXTS | QUEUES)) {
 			for (n = 0; n < 64; n++)
 				gem_context_destroy(fd, contexts[n]);
 		}
@@ -522,21 +532,27 @@ igt_main
 		{ "chain-forked", CHAIN | FORKED },
 		{ "chain-interruptible", CHAIN | INTERRUPTIBLE },
 		{ "chain-sync", CHAIN | SYNC },
-		{ "contexts", CONTEXTS },
-		{ "contexts-interruptible", CONTEXTS | INTERRUPTIBLE},
-		{ "contexts-forked", CONTEXTS | FORKED},
-		{ "contexts-priority", CONTEXTS | FORKED | PRIORITY },
-		{ "contexts-chain", CONTEXTS | CHAIN },
-		{ "contexts-sync", CONTEXTS | SYNC },
 		{ "fds", FDS },
 		{ "fds-interruptible", FDS | INTERRUPTIBLE},
 		{ "fds-forked", FDS | FORKED},
 		{ "fds-priority", FDS | FORKED | PRIORITY },
 		{ "fds-chain", FDS | CHAIN},
 		{ "fds-sync", FDS | SYNC},
+		{ "contexts", CONTEXTS },
+		{ "contexts-interruptible", CONTEXTS | INTERRUPTIBLE},
+		{ "contexts-forked", CONTEXTS | FORKED},
+		{ "contexts-priority", CONTEXTS | FORKED | PRIORITY },
+		{ "contexts-chain", CONTEXTS | CHAIN },
+		{ "contexts-sync", CONTEXTS | SYNC },
+		{ "queues", QUEUES },
+		{ "queues-interruptible", QUEUES | INTERRUPTIBLE},
+		{ "queues-forked", QUEUES | FORKED},
+		{ "queues-priority", QUEUES | FORKED | PRIORITY },
+		{ "queues-chain", QUEUES | CHAIN },
+		{ "queues-sync", QUEUES | SYNC },
 		{ NULL }
 	};
-	int fd;
+	int fd = -1;
 
 	igt_fixture {
 		fd = drm_open_driver_master(DRIVER_INTEL);
@@ -547,9 +563,12 @@ igt_main
 		igt_fork_hang_detector(fd);
 	}
 
-	for (const struct mode *m = modes; m->name; m++)
+	for (const struct mode *m = modes; m->name; m++) {
 		igt_subtest_f("%s", m->name)
 			whisper(fd, ALL_ENGINES, m->flags);
+		igt_subtest_f("%s-all", m->name)
+			whisper(fd, ALL_ENGINES, m->flags | ALL);
+	}
 
 	for (const struct intel_execution_engine *e = intel_execution_engines;
 	     e->name; e++) {
