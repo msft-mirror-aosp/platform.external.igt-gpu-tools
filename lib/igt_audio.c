@@ -36,6 +36,20 @@
 #include "igt_core.h"
 
 #define FREQS_MAX 64
+#define CHANNELS_MAX 8
+#define SYNTHESIZE_AMPLITUDE 0.9
+#define SYNTHESIZE_ACCURACY 0.2
+/** MIN_FREQ: minimum frequency that audio_signal can generate.
+ *
+ * To make sure the audio signal doesn't contain noise, #audio_signal_detect
+ * checks that low frequencies have a power lower than #NOISE_THRESHOLD.
+ * However if too-low frequencies are generated, noise detection can fail.
+ *
+ * This value should be at least 100Hz plus one bin. Best is not to change this
+ * value.
+ */
+#define MIN_FREQ 200 /* Hz */
+#define NOISE_THRESHOLD 0.0005
 
 /**
  * SECTION:igt_audio
@@ -51,7 +65,7 @@ struct audio_signal_freq {
 	int freq;
 	int channel;
 
-	int16_t *period;
+	double *period;
 	size_t period_len;
 	int offset;
 };
@@ -77,12 +91,12 @@ struct audio_signal *audio_signal_init(int channels, int sampling_rate)
 {
 	struct audio_signal *signal;
 
-	signal = malloc(sizeof(struct audio_signal));
-	memset(signal, 0, sizeof(struct audio_signal));
+	igt_assert(channels > 0);
+	igt_assert(channels <= CHANNELS_MAX);
 
+	signal = calloc(1, sizeof(struct audio_signal));
 	signal->sampling_rate = sampling_rate;
 	signal->channels = channels;
-
 	return signal;
 }
 
@@ -105,6 +119,7 @@ int audio_signal_add_frequency(struct audio_signal *signal, int frequency,
 
 	igt_assert(index < FREQS_MAX);
 	igt_assert(channel < signal->channels);
+	igt_assert(frequency >= MIN_FREQ);
 
 	/* Stay within the Nyquist–Shannon sampling theorem. */
 	if (frequency > signal->sampling_rate / 2) {
@@ -142,7 +157,7 @@ int audio_signal_add_frequency(struct audio_signal *signal, int frequency,
  */
 void audio_signal_synthesize(struct audio_signal *signal)
 {
-	int16_t *period;
+	double *period;
 	double value;
 	size_t period_len;
 	int freq;
@@ -152,13 +167,13 @@ void audio_signal_synthesize(struct audio_signal *signal)
 		freq = signal->freqs[i].freq;
 		period_len = signal->sampling_rate / freq;
 
-		period = calloc(1, period_len * sizeof(int16_t));
+		period = calloc(period_len, sizeof(double));
 
 		for (j = 0; j < period_len; j++) {
 			value = 2.0 * M_PI * freq / signal->sampling_rate * j;
-			value = sin(value) * INT16_MAX / signal->freqs_count;
+			value = sin(value) * SYNTHESIZE_AMPLITUDE;
 
-			period[j] = (int16_t) value;
+			period[j] = value;
 		}
 
 		signal->freqs[i].period = period;
@@ -195,6 +210,49 @@ void audio_signal_reset(struct audio_signal *signal)
 	signal->freqs_count = 0;
 }
 
+static size_t audio_signal_count_freqs(struct audio_signal *signal, int channel)
+{
+	size_t n, i;
+	struct audio_signal_freq *freq;
+
+	n = 0;
+	for (i = 0; i < signal->freqs_count; i++) {
+		freq = &signal->freqs[i];
+		if (freq->channel < 0 || freq->channel == channel)
+			n++;
+	}
+
+	return n;
+}
+
+/** audio_sanity_check:
+ *
+ * Make sure our generated signal is not messed up. In particular, make sure
+ * the maximum reaches a reasonable value but doesn't exceed our
+ * SYNTHESIZE_AMPLITUDE limit. Same for the minimum.
+ *
+ * We want the signal to be powerful enough to be able to hear something. We
+ * want the signal not to reach 1.0 so that we're sure it won't get capped by
+ * the audio card or the receiver.
+ */
+static void audio_sanity_check(double *samples, size_t samples_len)
+{
+	size_t i;
+	double min = 0, max = 0;
+
+	for (i = 0; i < samples_len; i++) {
+		if (samples[i] < min)
+			min = samples[i];
+		if (samples[i] > max)
+			max = samples[i];
+	}
+
+	igt_assert(-SYNTHESIZE_AMPLITUDE <= min);
+	igt_assert(min <= -SYNTHESIZE_AMPLITUDE + SYNTHESIZE_ACCURACY);
+	igt_assert(SYNTHESIZE_AMPLITUDE - SYNTHESIZE_ACCURACY <= max);
+	igt_assert(max <= SYNTHESIZE_AMPLITUDE);
+}
+
 /**
  * audio_signal_fill:
  * @signal: The target signal structure
@@ -202,19 +260,27 @@ void audio_signal_reset(struct audio_signal *signal)
  * @samples: The number of samples to fill
  *
  * Fill the requested number of samples to the target buffer with the audio
- * signal data (in interleaved S16_LE format), at the requested sampling rate
+ * signal data (in interleaved double format), at the requested sampling rate
  * and number of channels.
+ *
+ * Each sample is normalized (ie. between 0 and 1).
  */
-void audio_signal_fill(struct audio_signal *signal, int16_t *buffer,
-		       size_t buffer_len)
+void audio_signal_fill(struct audio_signal *signal, double *buffer,
+		       size_t samples)
 {
-	int16_t *destination, *source;
+	double *dst, *src;
 	struct audio_signal_freq *freq;
 	int total;
 	int count;
 	int i, j, k;
+	size_t freqs_per_channel[CHANNELS_MAX];
 
-	memset(buffer, 0, sizeof(int16_t) * signal->channels * buffer_len);
+	memset(buffer, 0, sizeof(double) * signal->channels * samples);
+
+	for (i = 0; i < signal->channels; i++) {
+		freqs_per_channel[i] = audio_signal_count_freqs(signal, i);
+		igt_assert(freqs_per_channel[i] > 0);
+	}
 
 	for (i = 0; i < signal->freqs_count; i++) {
 		freq = &signal->freqs[i];
@@ -222,13 +288,13 @@ void audio_signal_fill(struct audio_signal *signal, int16_t *buffer,
 
 		igt_assert(freq->period);
 
-		while (total < buffer_len) {
-			source = freq->period + freq->offset;
-			destination = buffer + total * signal->channels;
+		while (total < samples) {
+			src = freq->period + freq->offset;
+			dst = buffer + total * signal->channels;
 
 			count = freq->period_len - freq->offset;
-			if (count > buffer_len - total)
-				count = buffer_len - total;
+			if (count > samples - total)
+				count = samples - total;
 
 			freq->offset += count;
 			freq->offset %= freq->period_len;
@@ -238,24 +304,36 @@ void audio_signal_fill(struct audio_signal *signal, int16_t *buffer,
 					if (freq->channel >= 0 &&
 					    freq->channel != k)
 						continue;
-					destination[j * signal->channels + k] += source[j];
+					dst[j * signal->channels + k] +=
+						src[j] / freqs_per_channel[k];
 				}
 			}
 
 			total += count;
 		}
 	}
+
+	audio_sanity_check(buffer, signal->channels * samples);
+}
+
+/* See https://en.wikipedia.org/wiki/Window_function#Hann_and_Hamming_windows */
+static double hann_window(double v, size_t i, size_t N)
+{
+	return v * 0.5 * (1 - cos(2.0 * M_PI * (double) i / (double) N));
 }
 
 /**
  * Checks that frequencies specified in signal, and only those, are included
  * in the input data.
  *
- * sampling_rate is given in Hz. data_len is the number of elements in data.
+ * sampling_rate is given in Hz. samples_len is the number of elements in
+ * samples.
  */
 bool audio_signal_detect(struct audio_signal *signal, int sampling_rate,
-			 int channel, double *data, size_t data_len)
+			 int channel, const double *samples, size_t samples_len)
 {
+	double *data;
+	size_t data_len = samples_len;
 	size_t bin_power_len = data_len / 2 + 1;
 	double bin_power[bin_power_len];
 	bool detected[FREQS_MAX];
@@ -264,15 +342,31 @@ bool audio_signal_detect(struct audio_signal *signal, int sampling_rate,
 	size_t i, j;
 	bool above, success;
 
+	/* gsl will mutate the array in-place, so make a copy */
+	data = malloc(samples_len * sizeof(double));
+	memcpy(data, samples, samples_len * sizeof(double));
+
+	/* Apply a Hann window to the input signal, to reduce frequency leaks
+	 * due to the endpoints of the signal being discontinuous.
+	 *
+	 * For more info:
+	 * - https://download.ni.com/evaluation/pxi/Understanding%20FFTs%20and%20Windowing.pdf
+	 * - https://en.wikipedia.org/wiki/Window_function
+	 */
+	for (i = 0; i < data_len; i++)
+		data[i] = hann_window(data[i], i, data_len);
+
 	/* Allowed error in Hz due to FFT step */
 	freq_accuracy = sampling_rate / data_len;
 	igt_debug("Allowed freq. error: %d Hz\n", freq_accuracy);
 
 	ret = gsl_fft_real_radix2_transform(data, 1, data_len);
-	igt_assert(ret == 0);
+	if (ret != 0) {
+		free(data);
+		igt_assert(0);
+	}
 
-	/* Compute the power received by every bin of the FFT, and record the
-	 * maximum power received as a way to normalize all the others.
+	/* Compute the power received by every bin of the FFT.
 	 *
 	 * For i < data_len / 2, the real part of the i-th term is stored at
 	 * data[i] and its imaginary part is stored at data[data_len - i].
@@ -282,14 +376,35 @@ bool audio_signal_detect(struct audio_signal *signal, int sampling_rate,
 	 * The power is encoded as the magnitude of the complex number and the
 	 * phase is encoded as its angle.
 	 */
-	max = 0;
 	bin_power[0] = data[0];
 	for (i = 1; i < bin_power_len - 1; i++) {
 		bin_power[i] = hypot(data[i], data[data_len - i]);
-		if (bin_power[i] > max)
-			max = bin_power[i];
 	}
 	bin_power[bin_power_len - 1] = data[data_len / 2];
+
+	/* Normalize the power */
+	for (i = 0; i < bin_power_len; i++)
+		bin_power[i] = 2 * bin_power[i] / data_len;
+
+	/* Detect noise with a threshold on the power of low frequencies */
+	for (i = 0; i < bin_power_len; i++) {
+		freq = sampling_rate * i / data_len;
+		if (freq > MIN_FREQ - 100)
+			break;
+		if (bin_power[i] > NOISE_THRESHOLD) {
+			igt_debug("Noise level too high: freq=%d power=%f\n",
+				  freq, bin_power[i]);
+			return false;
+		}
+	}
+
+	/* Record the maximum power received as a way to normalize all the
+	 * others. */
+	max = NAN;
+	for (i = 0; i < bin_power_len; i++) {
+		if (isnan(max) || bin_power[i] > max)
+			max = bin_power[i];
+	}
 
 	for (i = 0; i < signal->freqs_count; i++)
 		detected[i] = false;
@@ -372,11 +487,19 @@ bool audio_signal_detect(struct audio_signal *signal, int sampling_rate,
 		}
 	}
 
+	free(data);
+
 	return success;
 }
 
 /**
- * Extracts a single channel from a multi-channel S32_LE input buffer.
+ * audio_extract_channel_s32_le: extracts a single channel from a multi-channel
+ * S32_LE input buffer.
+ *
+ * If dst_cap is zero, no copy is performed. This can be used to compute the
+ * minimum required capacity.
+ *
+ * Returns: the number of samples extracted.
  */
 size_t audio_extract_channel_s32_le(double *dst, size_t dst_cap,
 				    int32_t *src, size_t src_len,
@@ -387,11 +510,56 @@ size_t audio_extract_channel_s32_le(double *dst, size_t dst_cap,
 	igt_assert(channel < n_channels);
 	igt_assert(src_len % n_channels == 0);
 	dst_len = src_len / n_channels;
+	if (dst_cap == 0)
+		return dst_len;
+
 	igt_assert(dst_len <= dst_cap);
 	for (i = 0; i < dst_len; i++)
-		dst[i] = (double) src[i * n_channels + channel];
+		dst[i] = (double) src[i * n_channels + channel] / INT32_MAX;
 
 	return dst_len;
+}
+
+static void audio_convert_to_s16_le(int16_t *dst, double *src, size_t len)
+{
+	size_t i;
+
+	for (i = 0; i < len; ++i)
+		dst[i] = INT16_MAX * src[i];
+}
+
+static void audio_convert_to_s24_le(int32_t *dst, double *src, size_t len)
+{
+	size_t i;
+
+	for (i = 0; i < len; ++i)
+		dst[i] = 0x7FFFFF * src[i];
+}
+
+static void audio_convert_to_s32_le(int32_t *dst, double *src, size_t len)
+{
+	size_t i;
+
+	for (i = 0; i < len; ++i)
+		dst[i] = INT32_MAX * src[i];
+}
+
+void audio_convert_to(void *dst, double *src, size_t len,
+		      snd_pcm_format_t format)
+{
+	switch (format) {
+	case SND_PCM_FORMAT_S16_LE:
+		audio_convert_to_s16_le(dst, src, len);
+		break;
+	case SND_PCM_FORMAT_S24_LE:
+		audio_convert_to_s24_le(dst, src, len);
+		break;
+	case SND_PCM_FORMAT_S32_LE:
+		audio_convert_to_s32_le(dst, src, len);
+		break;
+	default:
+		assert(false); /* unreachable */
+	}
 }
 
 #define RIFF_TAG "RIFF"

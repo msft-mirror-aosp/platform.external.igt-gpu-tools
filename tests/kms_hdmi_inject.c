@@ -22,14 +22,35 @@
  *
  */
 
+#include "config.h"
+
 #include <dirent.h>
+
 #include "igt.h"
+#include "igt_edid.h"
+#include "igt_eld.h"
 
 #define HDISPLAY_4K	3840
 #define VDISPLAY_4K	2160
 
 IGT_TEST_DESCRIPTION("Tests 4K and audio HDMI injection.");
 
+/**
+ * This collection of tests performs EDID and status injection tests. Injection
+ * forces a given EDID and status on a connector. The kernel will parse the
+ * forced EDID and we will check whether correct metadata is exposed to
+ * userspace.
+ *
+ * Currently, this can be used to test:
+ *
+ * - 4K modes exposed via KMS
+ * - Audio capabilities of the monitor exposed via ALSA. EDID-Like Data (ELD)
+ *   entries in /proc/asound are verified.
+ *
+ * Injection is performed on a disconnected connector.
+ */
+
+/** get_connector: get the first disconnected HDMI connector */
 static drmModeConnector *
 get_connector(int drm_fd, drmModeRes *res)
 {
@@ -118,88 +139,17 @@ hdmi_inject_4k(int drm_fd, drmModeConnector *connector)
 	free(edid);
 }
 
-static bool
-eld_entry_is_igt(const char* path)
-{
-	FILE *in;
-	char buf[1024];
-	uint8_t eld_valid = 0;
-	uint8_t mon_valid = 0;
-
-	in = fopen(path, "r");
-	if (!in)
-		return false;
-
-	memset(buf, 0, 1024);
-
-	while ((fgets(buf, 1024, in)) != NULL) {
-
-		char *line = buf;
-
-		if (!strncasecmp(line, "eld_valid", 9) &&
-				strstr(line, "1")) {
-			eld_valid++;
-		}
-
-		if (!strncasecmp(line, "monitor_name", 12) &&
-				strstr(line, "IGT")) {
-			mon_valid++;
-		}
-	}
-
-	fclose(in);
-	if (mon_valid && eld_valid)
-		return true;
-
-	return false;
-}
-
-static bool
-eld_is_valid(void)
-{
-	DIR *dir;
-	struct dirent *snd_hda;
-	int i;
-
-	for (i = 0; i < 8; i++) {
-		char cards[128];
-
-		snprintf(cards, sizeof(cards), "/proc/asound/card%d", i);
-		dir = opendir(cards);
-		if (!dir)
-			continue;
-
-		while ((snd_hda = readdir(dir))) {
-			char fpath[PATH_MAX];
-
-			if (*snd_hda->d_name == '.' ||
-			    strstr(snd_hda->d_name, "eld") == 0)
-				continue;
-
-			snprintf(fpath, sizeof(fpath), "%s/%s", cards,
-				 snd_hda->d_name);
-			if (eld_entry_is_igt(fpath)) {
-				closedir(dir);
-				return true;
-			}
-		}
-		closedir(dir);
-	}
-
-	return false;
-}
-
 static void
 hdmi_inject_audio(int drm_fd, drmModeConnector *connector)
 {
-	unsigned char *edid;
+	const unsigned char *edid;
 	size_t length;
 	int fb_id, cid, ret, crtc_mask = -1;
 	struct igt_fb fb;
 	struct kmstest_connector_config config;
 
-	kmstest_edid_add_audio(igt_kms_get_base_edid(), EDID_LENGTH, &edid,
-			       &length);
+	edid = igt_kms_get_hdmi_audio_edid();
+	length = AUDIO_EDID_LENGTH;
 
 	kmstest_force_edid(drm_fd, connector, edid, length);
 
@@ -233,7 +183,7 @@ hdmi_inject_audio(int drm_fd, drmModeConnector *connector)
 	 * Test if we have /proc/asound/HDMI/eld#0.0 and is its contents are
 	 * valid.
 	 */
-	igt_assert(eld_is_valid());
+	igt_assert(eld_has_igt());
 
 	igt_remove_fb(drm_fd, &fb);
 
@@ -242,8 +192,6 @@ hdmi_inject_audio(int drm_fd, drmModeConnector *connector)
 
 	kmstest_force_connector(drm_fd, connector, FORCE_CONNECTOR_UNSPECIFIED);
 	kmstest_force_edid(drm_fd, connector, NULL, 0);
-
-	free(edid);
 }
 
 igt_main
