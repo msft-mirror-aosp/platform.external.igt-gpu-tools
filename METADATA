@@ -1,14 +1,15 @@
 name: "igt-gpu-tools"
-description:
-    "IGT GPU Tools is a collection of tools for development and testing of "
-    "Linux kernel DRM drivers."
-
+description: "IGT GPU Tools is a collection of tools for development and testing of Linux kernel DRM drivers."
 third_party {
   url {
     type: GIT
     value: "https://gitlab.freedesktop.org/drm/igt-gpu-tools"
   }
-  version: "f052e49a43cc9704ea5f240df15dd9d3dfed68ab"
-  last_upgrade_date { year: 2019 month: 5 day: 6 }
+  version: "22850c1906550fb97b405c019275dcfb34be8cf7"
   license_type: NOTICE
+  last_upgrade_date {
+    year: 2019
+    month: 6
+    day: 20
+  }
 }

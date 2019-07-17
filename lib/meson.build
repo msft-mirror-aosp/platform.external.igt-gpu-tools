@@ -1,10 +1,12 @@
 lib_sources = [
 	'drmtest.c',
 	'i915/gem_context.c',
+	'i915/gem_engine_topology.c',
 	'i915/gem_scheduler.c',
 	'i915/gem_submission.c',
 	'i915/gem_ring.c',
 	'i915/gem_mman.c',
+	'i915/gem_vm.c',
 	'igt_color_encoding.c',
 	'igt_debugfs.c',
 	'igt_device.c',
@@ -52,11 +54,13 @@ lib_sources = [
 	'igt_dummyload.c',
 	'uwildmat/uwildmat.c',
 	'igt_kmod.c',
+	'igt_panfrost.c',
 	'igt_v3d.c',
 	'igt_vc4.c',
 	'igt_psr.c',
 	'igt_amd.c',
 	'igt_edid.c',
+	'igt_eld.c',
 ]
 
 lib_deps = [
@@ -67,7 +71,6 @@ lib_deps = [
 	libkmod,
 	libprocps,
 	libudev,
-	libdw,
 	math,
 	pciaccess,
 	pixman,
@@ -103,7 +106,7 @@ if alsa.found()
 	lib_sources += 'igt_alsa.c'
 endif
 
-if chamelium_found
+if chamelium.found()
 	lib_deps += chamelium
 	lib_sources += 'igt_chamelium.c'
 	lib_sources += 'igt_chamelium_stream.c'
@@ -135,7 +138,8 @@ lib_igt_build = shared_library('igt',
     ['dummy.c'],
     link_whole: lib_intermediates,
     dependencies: lib_deps,
-    install : true
+    install : true,
+    soversion : '0',
 )
 
 lib_igt = declare_dependency(link_with : lib_igt_build,

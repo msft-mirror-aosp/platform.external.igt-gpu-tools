@@ -186,7 +186,7 @@ static void create_fb_for_crtc(struct crtc_config *crtc,
 static void get_mode_for_crtc(struct crtc_config *crtc,
 			      drmModeModeInfo *mode_ret)
 {
-	drmModeModeInfo mode;
+	drmModeModeInfo *mode;
 	int i;
 
 	/*
@@ -194,8 +194,8 @@ static void get_mode_for_crtc(struct crtc_config *crtc,
 	 * connectors.
 	 */
 	for (i = 0; i < crtc->connector_count; i++) {
-		mode = crtc->cconfs[i].default_mode;
-		if (crtc_supports_mode(crtc, &mode))
+		mode = &crtc->cconfs[i].default_mode;
+		if (crtc_supports_mode(crtc, mode))
 			goto found;
 	}
 
@@ -204,19 +204,22 @@ static void get_mode_for_crtc(struct crtc_config *crtc,
 	 * connectors.
 	 */
 	for (i = 0; i < crtc->cconfs[0].connector->count_modes; i++) {
-		mode = crtc->cconfs[0].connector->modes[i];
-		if (crtc_supports_mode(crtc, &mode))
+		mode = &crtc->cconfs[0].connector->modes[i];
+		if (crtc_supports_mode(crtc, mode))
 			goto found;
 	}
 
 	/*
-	 * If none is found then just pick the default mode of the first
-	 * connector and hope the other connectors can support it by scaling
-	 * etc.
+	 * If none is found then just pick the default mode from all connectors
+	 * with the smallest clock, hope the other connectors can support it by
+	 * scaling etc.
 	 */
-	mode = crtc->cconfs[0].default_mode;
+	mode = &crtc->cconfs[0].default_mode;
+	for (i = 1; i < crtc->connector_count; i++)
+		if (crtc->cconfs[i].default_mode.clock < mode->clock)
+			mode = &crtc->cconfs[i].default_mode;
 found:
-	*mode_ret = mode;
+	*mode_ret = *mode;
 }
 
 static int get_encoder_idx(drmModeRes *resources, drmModeEncoder *encoder)
@@ -821,13 +824,17 @@ static int opt_handler(int opt, int opt_index, void *data)
 		filter_test_id = atoi(optarg);
 		break;
 	default:
-		igt_assert(0);
+		return IGT_OPT_HANDLER_ERROR;
 	}
 
-	return 0;
+	return IGT_OPT_HANDLER_SUCCESS;
 }
 
-int main(int argc, char **argv)
+const char *help_str =
+	"  -d\t\tDon't run any test, only print what would be done. (still needs DRM access)\n"
+	"  -t <test id>\tRun only the test with this id.";
+
+igt_main_args("dt:", NULL, help_str, opt_handler, NULL)
 {
 	const struct {
 		enum test_flags flags;
@@ -845,16 +852,7 @@ int main(int argc, char **argv)
 		{ TEST_INVALID | TEST_CLONE | TEST_SINGLE_CRTC_CLONE | TEST_STEALING,
 					"invalid-clone-single-crtc-stealing" }
 	};
-	const char *help_str =
-	       "  -d\t\tDon't run any test, only print what would be done. (still needs DRM access)\n"
-	       "  -t <test id>\tRun only the test with this id.";
 	int i;
-	int ret;
-
-	ret = igt_subtest_init_parse_opts(&argc, argv, "dt:", NULL, help_str,
-					  opt_handler, NULL);
-	if (ret < 0)
-		return ret == -1 ? 0 : ret;
 
 	igt_skip_on_simulation();
 
@@ -886,6 +884,4 @@ int main(int argc, char **argv)
 
 		close(drm_fd);
 	}
-
-	igt_exit();
 }
