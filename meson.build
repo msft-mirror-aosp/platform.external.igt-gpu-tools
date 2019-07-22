@@ -77,10 +77,10 @@ foreach cc_arg : cc_args
   endif
 endforeach
 
-build_chamelium = get_option('build_chamelium')
-build_docs = get_option('build_docs')
-build_tests = not get_option('build_tests').disabled()
-with_libdrm = get_option('with_libdrm')
+build_chamelium = get_option('chamelium')
+build_docs = get_option('docs')
+build_tests = not get_option('tests').disabled()
+with_libdrm = get_option('libdrm_drivers')
 
 build_info = ['Build type: ' + get_option('buildtype')]
 
@@ -118,13 +118,13 @@ pciaccess = dependency('pciaccess', version : '>=0.10')
 libkmod = dependency('libkmod')
 libprocps = dependency('libprocps', required : true)
 
-libunwind = dependency('libunwind', required : get_option('with_libunwind'))
+libunwind = dependency('libunwind', required : get_option('libunwind'))
 build_info += 'With libunwind: @0@'.format(libunwind.found())
 
 libdw = dependency('libdw', required : true)
 pixman = dependency('pixman-1', required : true)
 
-valgrind = dependency('valgrind', required : get_option('with_valgrind'))
+valgrind = dependency('valgrind', required : get_option('valgrind'))
 if valgrind.found()
 	config.set('HAVE_VALGRIND', 1)
 endif
@@ -179,6 +179,20 @@ math = cc.find_library('m')
 realtime = cc.find_library('rt')
 dlsym = cc.find_library('dl')
 zlib = cc.find_library('z')
+
+if cc.links('''
+#include <stdint.h>
+int main(void) {
+  uint32_t x32 = 0;
+  uint64_t x64 = 0;
+  __atomic_load_n(&x32, __ATOMIC_SEQ_CST);
+  __atomic_load_n(&x64, __ATOMIC_SEQ_CST);
+  return 0;
+}''', name : 'built-in atomics')
+	libatomic = null_dep
+else
+	libatomic = cc.find_library('atomic')
+endif
 
 if cc.has_header('linux/kd.h')
 	config.set('HAVE_LINUX_KD_H', 1)
@@ -289,7 +303,8 @@ subdir('overlay')
 subdir('man')
 
 gtk_doc = dependency('gtk-doc', required : build_docs)
-if build_tests and gtk_doc.found()
+python3 = find_program('python3', required : build_docs)
+if build_tests and gtk_doc.found() and python3.found()
 	subdir('docs')
 elif build_docs.enabled()
 	error('Documentation requires building tests')

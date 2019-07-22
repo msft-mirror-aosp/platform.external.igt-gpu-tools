@@ -289,3 +289,51 @@ bool gem_has_engine_topology(int fd)
 
 	return !__gem_context_get_param(fd, &param);
 }
+
+struct intel_execution_engine2 gem_eb_flags_to_engine(unsigned int flags)
+{
+	const unsigned int ring = flags & (I915_EXEC_RING_MASK | 3 << 13);
+	struct intel_execution_engine2 e2__ = {
+		.class = -1,
+		.instance = -1,
+		.flags = -1,
+		.name = "invalid"
+	};
+
+	if (ring == I915_EXEC_DEFAULT) {
+		e2__.flags = I915_EXEC_DEFAULT;
+		e2__.name = "default";
+	} else {
+		const struct intel_execution_engine2 *e2;
+
+		__for_each_static_engine(e2) {
+			if (e2->flags == ring)
+				return *e2;
+		}
+	}
+
+	return e2__;
+}
+
+bool gem_context_has_engine_map(int fd, uint32_t ctx)
+{
+	struct drm_i915_gem_context_param param = {
+		.param = I915_CONTEXT_PARAM_ENGINES,
+		.ctx_id = ctx
+	};
+
+	/*
+	 * If the kernel is too old to support PARAM_ENGINES,
+	 * then naturally the context has no engine map.
+	 */
+	if (__gem_context_get_param(fd, &param))
+		return false;
+
+	return param.size;
+}
+
+bool gem_engine_is_equal(const struct intel_execution_engine2 *e1,
+			 const struct intel_execution_engine2 *e2)
+{
+	return e1->class == e2->class && e1->instance == e2->instance;
+}
