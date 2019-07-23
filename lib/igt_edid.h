@@ -32,6 +32,9 @@
 
 #include <xf86drmMode.h>
 
+/**
+ * est_timings: set of established timings
+ */
 struct est_timings {
 	uint8_t t1;
 	uint8_t t2;
@@ -47,6 +50,9 @@ enum std_timing_aspect {
 	STD_TIMING_16_9 = 0b11,
 };
 
+/**
+ * std_timing: a standard timing
+ */
 struct std_timing {
 	uint8_t hsize;
 	uint8_t vfreq_aspect;
@@ -191,11 +197,61 @@ struct cea_sad {
 	uint8_t bitrate;
 } __attribute__((packed));
 
-/* Vendor Specific Data */
-struct cea_vsd {
-	uint8_t ieee_oui[3];
-	char data[];
+/* Indicates that a Short Video Descriptor is native */
+#define CEA_SVD_NATIVE (1 << 7)
+
+enum hdmi_vsdb_flags1 {
+	HDMI_VSDB_DVI_DUAL = 1 << 0,
+	HDMI_VSDB_DC_Y444 = 1 << 3, /* supports YCbCr 4:4:4 */
+	HDMI_VSDB_DC_30BIT = 1 << 4, /* 30 bits per pixel */
+	HDMI_VSDB_DC_36BIT = 1 << 5, /* 36 bits per pixel */
+	HDMI_VSDB_DC_48BIT = 1 << 6, /* 48 bits per pixel */
+	HDMI_VSDB_SUPPORTS_AI = 1 << 7, /* supports ACP, ISRC1 or ISRC2 packets */
 };
+
+enum hdmi_vsdb_flags2 {
+	HDMI_VSDB_CNC_GRAPHICS = 1 << 0,
+	HDMI_VSDB_CNC_PHOTO = 1 << 1,
+	HDMI_VSDB_CNC_CINEMA = 1 << 2,
+	HDMI_VSDB_CNC_GAME = 1 << 3,
+	HDMI_VSDB_VIDEO_PRESENT = 1 << 5,
+	HDMI_VSDB_INTERLACED_LATENCY_PRESENT = 1 << 6,
+	HDMI_VSDB_LATENCY_PRESENT = 1 << 7,
+};
+
+enum hdmi_vsdb_video_flags {
+	HDMI_VSDB_VIDEO_3D_STRUCT_PRESENT = 0b01 << 5,
+	HDMI_VSDB_VIDEO_3D_STRUCT_MASK_PRESENT = 0b10 << 5,
+	HDMI_VSDB_VIDEO_3D_PRESENT = 1 << 7,
+};
+
+/* HDMI's IEEE Registration Identifier */
+extern const uint8_t hdmi_ieee_oui[3];
+
+/* HDMI Vendor-Specific Data Block (defined in the HDMI spec) */
+struct hdmi_vsdb {
+	uint8_t src_phy_addr[2]; /* source physical address */
+
+	/* Extension fields */
+	uint8_t flags1; /* enum hdmi_vsdb_flags1 */
+	uint8_t max_tdms_clock; /* multiply by 5MHz */
+	uint8_t flags2; /* enum hdmi_vsdb_flags2 */
+	char data[]; /* latency, misc, VIC, 3D */
+} __attribute__((packed));
+
+#define HDMI_VSDB_MIN_SIZE 2 /* just the source physical address */
+#define HDMI_VSDB_MAX_SIZE 28
+#define CEA_VSDB_HEADER_SIZE 3 /* IEEE OUI */
+#define CEA_VSDB_HDMI_MIN_SIZE (CEA_VSDB_HEADER_SIZE + HDMI_VSDB_MIN_SIZE)
+#define CEA_VSDB_HDMI_MAX_SIZE (CEA_VSDB_HEADER_SIZE + HDMI_VSDB_MAX_SIZE)
+
+/* Vendor-Specific Data Block */
+struct cea_vsdb {
+	uint8_t ieee_oui[3]; /* 24-bit IEEE Registration Identifier, LSB */
+	union {
+		struct hdmi_vsdb hdmi;
+	} data;
+} __attribute__((packed));
 
 enum cea_speaker_alloc_item {
 	CEA_SPEAKER_FRONT_LEFT_RIGHT = 1 << 0,
@@ -223,7 +279,8 @@ struct edid_cea_data_block {
 	uint8_t type_len; /* type is from enum edid_cea_data_type */
 	union {
 		struct cea_sad sads[0];
-		struct cea_vsd vsds[0];
+		uint8_t svds[0]; /* Short Video Descriptors */
+		struct cea_vsdb vsdbs[0];
 		struct cea_speaker_alloc speakers[0];
 	} data;
 } __attribute__((packed));
@@ -297,6 +354,8 @@ struct edid {
 void edid_init(struct edid *edid);
 void edid_init_with_mode(struct edid *edid, drmModeModeInfo *mode);
 void edid_update_checksum(struct edid *edid);
+size_t edid_get_size(const struct edid *edid);
+void edid_get_mfg(const struct edid *edid, char out[static 3]);
 void detailed_timing_set_mode(struct detailed_timing *dt, drmModeModeInfo *mode,
 			      int width_mm, int height_mm);
 void detailed_timing_set_monitor_range_mode(struct detailed_timing *dt,
@@ -308,14 +367,19 @@ void detailed_timing_set_string(struct detailed_timing *dt,
 void cea_sad_init_pcm(struct cea_sad *sad, int channels,
 		      uint8_t sampling_rates, uint8_t sample_sizes);
 void edid_ext_update_cea_checksum(struct edid_ext *ext);
-const struct cea_vsd *cea_vsd_get_hdmi_default(size_t *size);
+const struct cea_vsdb *cea_vsdb_get_hdmi_default(size_t *size);
 size_t edid_cea_data_block_set_sad(struct edid_cea_data_block *block,
 				   const struct cea_sad *sads, size_t sads_len);
-size_t edid_cea_data_block_set_vsd(struct edid_cea_data_block *block,
-				   const struct cea_vsd *vsd, size_t vsd_size);
+size_t edid_cea_data_block_set_svd(struct edid_cea_data_block *block,
+				   const uint8_t *svds, size_t svds_len);
+size_t edid_cea_data_block_set_vsdb(struct edid_cea_data_block *block,
+				   const struct cea_vsdb *vsdb, size_t vsdb_size);
+size_t edid_cea_data_block_set_hdmi_vsdb(struct edid_cea_data_block *block,
+					 const struct hdmi_vsdb *hdmi,
+					 size_t hdmi_size);
 size_t edid_cea_data_block_set_speaker_alloc(struct edid_cea_data_block *block,
 					     const struct cea_speaker_alloc *speakers);
 void edid_ext_set_cea(struct edid_ext *ext, size_t data_blocks_size,
-		      uint8_t flags);
+		      uint8_t num_native_dtds, uint8_t flags);
 
 #endif
