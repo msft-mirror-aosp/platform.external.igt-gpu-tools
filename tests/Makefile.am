@@ -90,7 +90,7 @@ AM_LDFLAGS = -Wl,--as-needed
 drm_import_export_CFLAGS = $(AM_CFLAGS) $(THREAD_CFLAGS)
 drm_import_export_LDADD = $(LDADD) -lpthread
 gem_create_CFLAGS = $(AM_CFLAGS) $(THREAD_CFLAGS)
-gem_create_LDADD = $(LDADD) -lpthread
+gem_create_LDADD = $(LDADD) -lpthread -latomic
 gem_close_race_CFLAGS = $(AM_CFLAGS) $(THREAD_CFLAGS)
 gem_close_race_LDADD = $(LDADD) -lpthread
 gem_ctx_thrash_CFLAGS = $(AM_CFLAGS) $(THREAD_CFLAGS)
@@ -122,6 +122,7 @@ prime_self_import_LDADD = $(LDADD) -lpthread
 gem_userptr_blits_CFLAGS = $(AM_CFLAGS) $(THREAD_CFLAGS)
 gem_userptr_blits_LDADD = $(LDADD) -lpthread
 perf_pmu_LDADD = $(LDADD) $(top_builddir)/lib/libigt_perf.la
+sw_sync_LDADD = $(LDADD) -latomic
 
 kms_flip_LDADD = $(LDADD) -lpthread
 

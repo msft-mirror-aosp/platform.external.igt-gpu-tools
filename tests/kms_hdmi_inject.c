@@ -33,7 +33,10 @@
 #define HDISPLAY_4K	3840
 #define VDISPLAY_4K	2160
 
-IGT_TEST_DESCRIPTION("Tests 4K and audio HDMI injection.");
+IGT_TEST_DESCRIPTION("Test that in-kernel EDID parsing is producing "
+		     "expected results by forcing a disconnected HDMI "
+		     "connector with a known EDID and checking that the "
+		     "metadata exposed to user space matches.");
 
 /**
  * This collection of tests performs EDID and status injection tests. Injection
@@ -76,8 +79,7 @@ get_connector(int drm_fd, drmModeRes *res)
 static void
 hdmi_inject_4k(int drm_fd, drmModeConnector *connector)
 {
-	unsigned char *edid;
-	size_t length;
+	const unsigned char *edid;
 	struct kmstest_connector_config config;
 	int ret, cid, i, crtc_mask = -1;
 	int fb_id;
@@ -90,10 +92,8 @@ hdmi_inject_4k(int drm_fd, drmModeConnector *connector)
 	/* 4K requires at least HSW */
 	igt_require(IS_HASWELL(devid) || intel_gen(devid) >= 8);
 
-	kmstest_edid_add_4k(igt_kms_get_base_edid(), EDID_LENGTH, &edid,
-			    &length);
-
-	kmstest_force_edid(drm_fd, connector, edid, length);
+	edid = igt_kms_get_4k_edid();
+	kmstest_force_edid(drm_fd, connector, edid);
 
 	if (!kmstest_force_connector(drm_fd, connector, FORCE_CONNECTOR_ON))
 		igt_skip("Could not force connector on\n");
@@ -134,24 +134,19 @@ hdmi_inject_4k(int drm_fd, drmModeConnector *connector)
 	igt_remove_fb(drm_fd, &fb);
 
 	kmstest_force_connector(drm_fd, connector, FORCE_CONNECTOR_UNSPECIFIED);
-	kmstest_force_edid(drm_fd, connector, NULL, 0);
-
-	free(edid);
+	kmstest_force_edid(drm_fd, connector, NULL);
 }
 
 static void
 hdmi_inject_audio(int drm_fd, drmModeConnector *connector)
 {
 	const unsigned char *edid;
-	size_t length;
 	int fb_id, cid, ret, crtc_mask = -1;
 	struct igt_fb fb;
 	struct kmstest_connector_config config;
 
 	edid = igt_kms_get_hdmi_audio_edid();
-	length = AUDIO_EDID_LENGTH;
-
-	kmstest_force_edid(drm_fd, connector, edid, length);
+	kmstest_force_edid(drm_fd, connector, edid);
 
 	if (!kmstest_force_connector(drm_fd, connector, FORCE_CONNECTOR_ON))
 		igt_skip("Could not force connector on\n");
@@ -191,7 +186,7 @@ hdmi_inject_audio(int drm_fd, drmModeConnector *connector)
 	kmstest_dump_mode(&connector->modes[0]);
 
 	kmstest_force_connector(drm_fd, connector, FORCE_CONNECTOR_UNSPECIFIED);
-	kmstest_force_edid(drm_fd, connector, NULL, 0);
+	kmstest_force_edid(drm_fd, connector, NULL);
 }
 
 igt_main
@@ -210,9 +205,13 @@ igt_main
 		igt_require(connector);
 	}
 
+	igt_describe("Make sure that 4K modes exposed by DRM match the "
+                     "forced EDID and modesetting using it succeed.");
 	igt_subtest("inject-4k")
 		hdmi_inject_4k(drm_fd, connector);
 
+	igt_describe("Make sure that audio information exposed by ALSA "
+		     "match the forced EDID.");
 	igt_subtest("inject-audio")
 		hdmi_inject_audio(drm_fd, connector);
 

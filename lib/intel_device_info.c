@@ -3,8 +3,6 @@
 
 #include <strings.h> /* ffs() */
 
-#define BIT(x) (1<<(x))
-
 static const struct intel_device_info intel_generic_info = {
 	.gen = 0,
 };
@@ -71,7 +69,14 @@ static const struct intel_device_info intel_g33_info = {
 	.is_bearlake = true,
 	.codename = "bearlake"
 };
-static const struct intel_device_info intel_pineview_info = {
+
+static const struct intel_device_info intel_pineview_g_info = {
+	.gen = BIT(2),
+	.is_pineview = true,
+	.codename = "pineview"
+};
+
+static const struct intel_device_info intel_pineview_m_info = {
 	.gen = BIT(2),
 	.is_mobile = true,
 	.is_pineview = true,
@@ -304,6 +309,12 @@ static const struct intel_device_info intel_icelake_info = {
 	.codename = "icelake"
 };
 
+static const struct intel_device_info intel_tigerlake_info = {
+	.gen = BIT(11),
+	.is_tigerlake = true,
+	.codename = "tigerlake"
+};
+
 static const struct pci_id_match intel_device_match[] = {
 	INTEL_I810_IDS(&intel_i810_info),
 	INTEL_I815_IDS(&intel_i815_info),
@@ -319,7 +330,8 @@ static const struct pci_id_match intel_device_match[] = {
 	INTEL_I945GM_IDS(&intel_i945m_info),
 
 	INTEL_G33_IDS(&intel_g33_info),
-	INTEL_PINEVIEW_IDS(&intel_pineview_info),
+	INTEL_PINEVIEW_G_IDS(&intel_pineview_g_info),
+	INTEL_PINEVIEW_M_IDS(&intel_pineview_m_info),
 
 	INTEL_I965G_IDS(&intel_i965_info),
 	INTEL_I965GM_IDS(&intel_i965m_info),
@@ -383,6 +395,8 @@ static const struct pci_id_match intel_device_match[] = {
 	INTEL_ICL_11_IDS(&intel_icelake_info),
 
 	INTEL_EHL_IDS(&intel_icelake_info),
+
+	INTEL_TGL_12_IDS(&intel_tigerlake_info),
 
 	INTEL_VGA_DEVICE(PCI_MATCH_ANY, &intel_generic_info),
 };
