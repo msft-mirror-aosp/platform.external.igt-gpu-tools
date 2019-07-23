@@ -53,6 +53,12 @@ enum chamelium_check {
 	CHAMELIUM_CHECK_CRC,
 };
 
+struct chamelium_video_params {
+	double clock;
+	int htotal, hactive, hsync_offset, hsync_width, hsync_polarity;
+	int vtotal, vactive, vsync_offset, vsync_width, vsync_polarity;
+};
+
 struct chamelium_audio_file {
 	char *path;
 	int rate; /* Hz */
@@ -60,6 +66,13 @@ struct chamelium_audio_file {
 };
 
 struct chamelium_edid;
+
+/**
+ * CHAMELIUM_MAX_PORTS: the maximum number of ports supported by igt_chamelium.
+ *
+ * For now, we have 1 VGA, 1 HDMI and 2 DisplayPort ports.
+ */
+#define CHAMELIUM_MAX_PORTS 4
 
 /**
  * CHAMELIUM_DEFAULT_EDID: provide this ID to #chamelium_port_set_edid to use
@@ -102,6 +115,8 @@ void chamelium_schedule_hpd_toggle(struct chamelium *chamelium,
 				   bool rising_edge);
 struct chamelium_edid *chamelium_new_edid(struct chamelium *chamelium,
 					  const unsigned char *edid);
+const struct edid *chamelium_edid_get_raw(struct chamelium_edid *edid,
+					  struct chamelium_port *port);
 void chamelium_port_set_edid(struct chamelium *chamelium,
 			     struct chamelium_port *port,
 			     struct chamelium_edid *edid);
@@ -113,6 +128,10 @@ void chamelium_port_set_ddc_state(struct chamelium *chamelium,
 void chamelium_port_get_resolution(struct chamelium *chamelium,
 				   struct chamelium_port *port,
 				   int *x, int *y);
+bool chamelium_supports_get_video_params(struct chamelium *chamelium);
+void chamelium_port_get_video_params(struct chamelium *chamelium,
+				     struct chamelium_port *port,
+				     struct chamelium_video_params *params);
 igt_crc_t *chamelium_get_crc_for_area(struct chamelium *chamelium,
 				      struct chamelium_port *port,
 				      int x, int y, int w, int h);
