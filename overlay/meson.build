@@ -1,4 +1,4 @@
-build_overlay = get_option('build_overlay')
+build_overlay = get_option('overlay')
 overlay_backends = get_option('overlay_backends')
 
 gpu_overlay_src = [
@@ -11,7 +11,6 @@ gpu_overlay_src = [
 	'gpu-top.c',
 	'gpu-perf.c',
 	'gpu-freq.c',
-	'igfx.c',
 	'overlay.c',
 	'power.c',
 	'rc6.c',
