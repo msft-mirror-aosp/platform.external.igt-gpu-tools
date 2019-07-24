@@ -76,6 +76,8 @@ igt_simple_main
 		{ "base", igt_kms_get_base_edid, 0 },
 		{ "alt", igt_kms_get_alt_edid, 0 },
 		{ "hdmi_audio", igt_kms_get_hdmi_audio_edid, 1 },
+		{ "4k", igt_kms_get_4k_edid, 1 },
+		{ "3d", igt_kms_get_3d_edid, 1 },
 		{0},
 	}, *f;
 	const unsigned char *edid;
@@ -90,6 +92,9 @@ igt_simple_main
 		igt_assert_f(edid_block_checksum(edid),
 			     "checksum failed on %s EDID", f->desc);
 		/* check extension blocks, if any */
+		igt_assert_f(edid[126] == f->exts,
+			     "unexpected number of extensions on %s EDID",
+			     f->desc);
 		for (i = 0; i < f->exts; i++)
 			igt_assert_f(edid_block_checksum(edid + (i + 1) * EDID_LENGTH),
 				     "CEA block checksum failed on %s EDID", f->desc);
