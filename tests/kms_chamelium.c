@@ -184,7 +184,7 @@ check_analog_bridge(data_t *data, struct chamelium_port *port)
 	drmModeConnector *connector = chamelium_port_get_connector(
 	    data->chamelium, port, false);
 	uint64_t edid_blob_id;
-	unsigned char *edid;
+	const struct edid *edid;
 	char edid_vendor[3];
 
 	if (chamelium_port_get_type(port) != DRM_MODE_CONNECTOR_VGA) {
@@ -198,12 +198,8 @@ check_analog_bridge(data_t *data, struct chamelium_port *port)
 	igt_assert(edid_blob = drmModeGetPropertyBlob(data->drm_fd,
 						      edid_blob_id));
 
-	edid = (unsigned char *) edid_blob->data;
-
-	edid_vendor[0] = ((edid[8] & 0x7c) >> 2) + '@';
-	edid_vendor[1] = (((edid[8] & 0x03) << 3) |
-			  ((edid[9] & 0xe0) >> 5)) + '@';
-	edid_vendor[2] = (edid[9] & 0x1f) + '@';
+	edid = (const struct edid *) edid_blob->data;
+	edid_get_mfg(edid, edid_vendor);
 
 	drmModeFreePropertyBlob(edid_blob);
 	drmModeFreeConnector(connector);
@@ -276,9 +272,10 @@ static void
 test_edid_read(data_t *data, struct chamelium_port *port, enum test_edid edid)
 {
 	drmModePropertyBlobPtr edid_blob = NULL;
-	const unsigned char *raw_edid = get_edid(edid);
 	drmModeConnector *connector = chamelium_port_get_connector(
 	    data->chamelium, port, false);
+	size_t raw_edid_size;
+	const struct edid *raw_edid;
 	uint64_t edid_blob_id;
 
 	reset_state(data, port);
@@ -295,7 +292,9 @@ test_edid_read(data_t *data, struct chamelium_port *port, enum test_edid edid)
 	igt_assert(edid_blob = drmModeGetPropertyBlob(data->drm_fd,
 						      edid_blob_id));
 
-	igt_assert(memcmp(raw_edid, edid_blob->data, EDID_LENGTH) == 0);
+	raw_edid = chamelium_edid_get_raw(data->edids[edid], port);
+	raw_edid_size = edid_get_size(raw_edid);
+	igt_assert(memcmp(raw_edid, edid_blob->data, raw_edid_size) == 0);
 
 	drmModeFreePropertyBlob(edid_blob);
 	drmModeFreeConnector(connector);
@@ -468,13 +467,10 @@ prepare_output(data_t *data, struct chamelium_port *port, enum test_edid edid)
 {
 	igt_display_t *display = &data->display;
 	igt_output_t *output;
-	drmModeRes *res;
 	drmModeConnector *connector =
 		chamelium_port_get_connector(data->chamelium, port, false);
 	enum pipe pipe;
 	bool found = false;
-
-	igt_require(res = drmModeGetResources(data->drm_fd));
 
 	/* The chamelium's default EDID has a lot of resolutions, way more then
 	 * we need to test. Additionally the default EDID doesn't support HDMI
@@ -505,7 +501,6 @@ prepare_output(data_t *data, struct chamelium_port *port, enum test_edid edid)
 	igt_output_set_pipe(output, pipe);
 
 	drmModeFreeConnector(connector);
-	drmModeFreeResources(res);
 
 	return output;
 }
@@ -755,6 +750,110 @@ test_display_frame_dump(data_t *data, struct chamelium_port *port)
 			chamelium_assert_frame_eq(data->chamelium, frame, &fb);
 			chamelium_destroy_frame_dump(frame);
 		}
+
+		igt_remove_fb(data->drm_fd, &fb);
+	}
+
+	drmModeFreeConnector(connector);
+}
+
+#define MODE_CLOCK_ACCURACY 0.05 /* 5% */
+
+static void check_mode(struct chamelium *chamelium, struct chamelium_port *port,
+		       drmModeModeInfo *mode)
+{
+	struct chamelium_video_params video_params = {0};
+	double mode_clock;
+	int mode_hsync_offset, mode_vsync_offset;
+	int mode_hsync_width, mode_vsync_width;
+	int mode_hsync_polarity, mode_vsync_polarity;
+
+	chamelium_port_get_video_params(chamelium, port, &video_params);
+
+	mode_clock = (double) mode->clock / 1000;
+	mode_hsync_offset = mode->hsync_start - mode->hdisplay;
+	mode_vsync_offset = mode->vsync_start - mode->vdisplay;
+	mode_hsync_width = mode->hsync_end - mode->hsync_start;
+	mode_vsync_width = mode->vsync_end - mode->vsync_start;
+	mode_hsync_polarity = !!(mode->flags & DRM_MODE_FLAG_PHSYNC);
+	mode_vsync_polarity = !!(mode->flags & DRM_MODE_FLAG_PVSYNC);
+
+	igt_debug("Checking video mode:\n");
+	igt_debug("clock: got %f, expected %f ± %f%%\n",
+		  video_params.clock, mode_clock, MODE_CLOCK_ACCURACY * 100);
+	igt_debug("hactive: got %d, expected %d\n",
+		  video_params.hactive, mode->hdisplay);
+	igt_debug("vactive: got %d, expected %d\n",
+		  video_params.vactive, mode->vdisplay);
+	igt_debug("hsync_offset: got %d, expected %d\n",
+		  video_params.hsync_offset, mode_hsync_offset);
+	igt_debug("vsync_offset: got %d, expected %d\n",
+		  video_params.vsync_offset, mode_vsync_offset);
+	igt_debug("htotal: got %d, expected %d\n",
+		  video_params.htotal, mode->htotal);
+	igt_debug("vtotal: got %d, expected %d\n",
+		  video_params.vtotal, mode->vtotal);
+	igt_debug("hsync_width: got %d, expected %d\n",
+		  video_params.hsync_width, mode_hsync_width);
+	igt_debug("vsync_width: got %d, expected %d\n",
+		  video_params.vsync_width, mode_vsync_width);
+	igt_debug("hsync_polarity: got %d, expected %d\n",
+		  video_params.hsync_polarity, mode_hsync_polarity);
+	igt_debug("vsync_polarity: got %d, expected %d\n",
+		  video_params.vsync_polarity, mode_vsync_polarity);
+
+	if (!isnan(video_params.clock)) {
+		igt_assert(video_params.clock >
+			   mode_clock * (1 - MODE_CLOCK_ACCURACY));
+		igt_assert(video_params.clock <
+			   mode_clock * (1 + MODE_CLOCK_ACCURACY));
+	}
+	igt_assert(video_params.hactive == mode->hdisplay);
+	igt_assert(video_params.vactive == mode->vdisplay);
+	igt_assert(video_params.hsync_offset == mode_hsync_offset);
+	igt_assert(video_params.vsync_offset == mode_vsync_offset);
+	igt_assert(video_params.htotal == mode->htotal);
+	igt_assert(video_params.vtotal == mode->vtotal);
+	igt_assert(video_params.hsync_width == mode_hsync_width);
+	igt_assert(video_params.vsync_width == mode_vsync_width);
+	igt_assert(video_params.hsync_polarity == mode_hsync_polarity);
+	igt_assert(video_params.vsync_polarity == mode_vsync_polarity);
+}
+
+static void test_mode_timings(data_t *data, struct chamelium_port *port)
+{
+	igt_output_t *output;
+	igt_plane_t *primary;
+	drmModeConnector *connector;
+	int fb_id, i;
+	struct igt_fb fb;
+
+	igt_require(chamelium_supports_get_video_params(data->chamelium));
+
+	reset_state(data, port);
+
+	output = prepare_output(data, port, TEST_EDID_BASE);
+	connector = chamelium_port_get_connector(data->chamelium, port, false);
+	primary = igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY);
+	igt_assert(primary);
+
+	igt_assert(connector->count_modes > 0);
+	for (i = 0; i < connector->count_modes; i++) {
+		drmModeModeInfo *mode = &connector->modes[i];
+
+		fb_id = igt_create_color_pattern_fb(data->drm_fd,
+						    mode->hdisplay, mode->vdisplay,
+						    DRM_FORMAT_XRGB8888,
+						    LOCAL_DRM_FORMAT_MOD_NONE,
+						    0, 0, 0, &fb);
+		igt_assert(fb_id > 0);
+
+		enable_output(data, port, output, mode, &fb);
+
+		/* Trigger the FSM */
+		chamelium_capture(data->chamelium, port, 0, 0, 0, 0, 0);
+
+		check_mode(data->chamelium, port, mode);
 
 		igt_remove_fb(data->drm_fd, &fb);
 	}
@@ -2164,8 +2263,9 @@ igt_main
 		connector_subtest("dp-frame-dump", DisplayPort)
 			test_display_frame_dump(&data, port);
 
-		/* The EDID we generate advertises HDMI audio, not DP audio.
-		 * Use the Chamelium's default EDID for DP audio. */
+		connector_subtest("dp-mode-timings", DisplayPort)
+			test_mode_timings(&data, port);
+
 		connector_subtest("dp-audio", DisplayPort)
 			test_display_audio(&data, port, "HDMI",
 					   TEST_EDID_DP_AUDIO);
@@ -2320,6 +2420,9 @@ igt_main
 
 		connector_subtest("hdmi-frame-dump", HDMIA)
 			test_display_frame_dump(&data, port);
+
+		connector_subtest("hdmi-mode-timings", HDMIA)
+			test_mode_timings(&data, port);
 
 		connector_subtest("hdmi-audio", HDMIA)
 			test_display_audio(&data, port, "HDMI",

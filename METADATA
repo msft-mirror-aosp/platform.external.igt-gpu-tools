@@ -5,11 +5,11 @@ third_party {
     type: GIT
     value: "https://gitlab.freedesktop.org/drm/igt-gpu-tools"
   }
-  version: "22850c1906550fb97b405c019275dcfb34be8cf7"
+  version: "1a5b48671e0863cb723e3d0239e54c828360dc99"
   license_type: NOTICE
   last_upgrade_date {
     year: 2019
-    month: 6
-    day: 20
+    month: 7
+    day: 22
   }
 }
