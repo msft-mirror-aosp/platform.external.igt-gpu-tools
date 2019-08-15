@@ -30,7 +30,7 @@
 #include <string.h>
 #include <time.h>
 
-IGT_TEST_DESCRIPTION("Test atomic mode setting with multiple planes ");
+IGT_TEST_DESCRIPTION("Test atomic mode setting with multiple planes.");
 
 #define SIZE_PLANE      256
 #define SIZE_CURSOR     128
@@ -80,16 +80,6 @@ static void test_fini(data_t *data, igt_output_t *output, int n_planes)
 {
 	igt_pipe_crc_stop(data->pipe_crc);
 
-	for (int i = 0; i < n_planes; i++) {
-		igt_plane_t *plane = data->plane[i];
-		if (!plane)
-			continue;
-		if (plane->type == DRM_PLANE_TYPE_PRIMARY)
-			continue;
-		igt_plane_set_fb(plane, NULL);
-		data->plane[i] = NULL;
-	}
-
 	/* reset the constraint on the pipe */
 	igt_output_set_pipe(output, PIPE_ANY);
 
@@ -99,13 +89,14 @@ static void test_fini(data_t *data, igt_output_t *output, int n_planes)
 	free(data->plane);
 	data->plane = NULL;
 
-	igt_remove_fb(data->drm_fd, data->fb);
+	free(data->fb);
+	data->fb = NULL;
 
 	igt_display_reset(&data->display);
 }
 
 static void
-test_grab_crc(data_t *data, igt_output_t *output, enum pipe pipe,
+get_reference_crc(data_t *data, igt_output_t *output, enum pipe pipe,
 	      color_t *color, uint64_t tiling)
 {
 	drmModeModeInfo *mode;
@@ -133,17 +124,6 @@ test_grab_crc(data_t *data, igt_output_t *output, enum pipe pipe,
 	igt_pipe_crc_start(data->pipe_crc);
 	igt_pipe_crc_get_single(data->pipe_crc, &data->ref_crc);
 }
-
-/*
- * Multiple plane position test.
- *   - We start by grabbing a reference CRC of a full blue fb being scanned
- *     out on the primary plane
- *   - Then we scannout number of planes:
- *      * the primary plane uses a blue fb with a black rectangle hole
- *      * planes, on top of the primary plane, with a blue fb that is set-up
- *        to cover the black rectangles of the primary plane fb
- *     The resulting CRC should be identical to the reference CRC
- */
 
 static void
 create_fb_for_mode_position(data_t *data, igt_output_t *output, drmModeModeInfo *mode,
@@ -195,6 +175,7 @@ prepare_planes(data_t *data, enum pipe pipe_id, color_t *color,
 	int *y;
 	int *size;
 	int i;
+	int* suffle;
 
 	igt_output_set_pipe(output, pipe_id);
 	primary = igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY);
@@ -206,6 +187,34 @@ prepare_planes(data_t *data, enum pipe pipe_id, color_t *color,
 	igt_assert_f(y, "Failed to allocate %ld bytes for variable y\n", (long int) (pipe->n_planes * sizeof(*y)));
 	size = malloc(pipe->n_planes * sizeof(*size));
 	igt_assert_f(size, "Failed to allocate %ld bytes for variable size\n", (long int) (pipe->n_planes * sizeof(*size)));
+	suffle = malloc(pipe->n_planes * sizeof(*suffle));
+	igt_assert_f(suffle, "Failed to allocate %ld bytes for variable size\n", (long int) (pipe->n_planes * sizeof(*suffle)));
+
+	for (i = 0; i < pipe->n_planes; i++)
+		suffle[i] = i;
+
+	/*
+	 * suffle table for planes. using rand() should keep it
+	 * 'randomized in expected way'
+	 */
+	for (i = 0; i < 256; i++) {
+		int n, m;
+		int a, b;
+
+		n = rand() % (pipe->n_planes-1);
+		m = rand() % (pipe->n_planes-1);
+
+		/*
+		 * keep primary plane at its place for test's sake.
+		 */
+		if(n == primary->index || m == primary->index)
+			continue;
+
+		a = suffle[n];
+		b = suffle[m];
+		suffle[n] = b;
+		suffle[m] = a;
+	}
 
 	mode = igt_output_get_mode(output);
 
@@ -213,7 +222,11 @@ prepare_planes(data_t *data, enum pipe pipe_id, color_t *color,
 	x[primary->index] = 0;
 	y[primary->index] = 0;
 	for (i = 0; i < max_planes; i++) {
-		igt_plane_t *plane = igt_output_get_plane(output, i);
+		/*
+		 * Here is made assumption primary plane will have
+		 * index zero.
+		 */
+		igt_plane_t *plane = igt_output_get_plane(output, suffle[i]);
 		uint32_t plane_format;
 		uint64_t plane_tiling;
 
@@ -251,7 +264,22 @@ prepare_planes(data_t *data, enum pipe pipe_id, color_t *color,
 	create_fb_for_mode_position(data, output, mode, color, x, y,
 				    size, size, tiling, max_planes);
 	igt_plane_set_fb(data->plane[primary->index], &data->fb[primary->index]);
+	free((void*)x);
+	free((void*)y);
+	free((void*)size);
+	free((void*)suffle);
 }
+
+/*
+ * Multiple plane position test.
+ *   - We start by grabbing a reference CRC of a full blue fb being scanned
+ *     out on the primary plane
+ *   - Then we scannout number of planes:
+ *      * the primary plane uses a blue fb with a black rectangle holes
+ *      * planes, on top of the primary plane, with a blue fb that is set-up
+ *        to cover the black rectangles of the primary plane
+ *     The resulting CRC should be identical to the reference CRC
+ */
 
 static void
 test_plane_position_with_output(data_t *data, enum pipe pipe,
@@ -260,7 +288,9 @@ test_plane_position_with_output(data_t *data, enum pipe pipe,
 {
 	color_t blue  = { 0.0f, 0.0f, 1.0f };
 	igt_crc_t crc;
+	igt_plane_t *plane;
 	int i;
+	int err, c = 0;
 	int iterations = opt.iterations < 1 ? 1 : opt.iterations;
 	bool loop_forever;
 	char info[256];
@@ -274,21 +304,44 @@ test_plane_position_with_output(data_t *data, enum pipe pipe,
 			iterations, iterations > 1 ? "iterations" : "iteration");
 	}
 
-	igt_info("Testing connector %s using pipe %s with %d planes %s with seed %d\n",
-		 igt_output_name(output), kmstest_pipe_name(pipe), n_planes,
-		 info, opt.seed);
-
 	test_init(data, pipe, n_planes);
 
-	test_grab_crc(data, output, pipe, &blue, tiling);
+	get_reference_crc(data, output, pipe, &blue, tiling);
+
+	/* Find out how many planes are allowed simultaneously */
+	do {
+		c++;
+		prepare_planes(data, pipe, &blue, tiling, c, output);
+		err = igt_display_try_commit2(&data->display, COMMIT_ATOMIC);
+
+		for_each_plane_on_pipe(&data->display, pipe, plane)
+			igt_plane_set_fb(plane, NULL);
+
+		for (int x = 0; x < c; x++)
+			igt_remove_fb(data->drm_fd, &data->fb[x]);
+	} while (!err && c < n_planes);
+
+	if (err)
+		c--;
+
+	igt_info("Testing connector %s using pipe %s with %d planes %s with seed %d\n",
+		 igt_output_name(output), kmstest_pipe_name(pipe), c,
+		 info, opt.seed);
 
 	i = 0;
 	while (i < iterations || loop_forever) {
-		prepare_planes(data, pipe, &blue, tiling, n_planes, output);
+		/* randomize planes and set up the holes */
+		prepare_planes(data, pipe, &blue, tiling, c, output);
 
 		igt_display_commit2(&data->display, COMMIT_ATOMIC);
 
 		igt_pipe_crc_get_current(data->display.drm_fd, data->pipe_crc, &crc);
+
+		for_each_plane_on_pipe(&data->display, pipe, plane)
+			igt_plane_set_fb(plane, NULL);
+
+		for (int x = 0; x < c; x++)
+			igt_remove_fb(data->drm_fd, &data->fb[x]);
 
 		igt_assert_crc_equal(&data->ref_crc, &crc);
 
@@ -346,8 +399,8 @@ static int opt_handler(int option, int option_index, void *input)
 		opt.iterations = strtol(optarg, NULL, 0);
 
 		if (opt.iterations < LOOP_FOREVER || opt.iterations == 0) {
-			igt_info("incorrect number of iterations\n");
-			igt_assert(false);
+			igt_info("incorrect number of iterations: %d\n", opt.iterations);
+			return IGT_OPT_HANDLER_ERROR;
 		}
 
 		break;
@@ -356,27 +409,25 @@ static int opt_handler(int option, int option_index, void *input)
 		opt.seed = strtol(optarg, NULL, 0);
 		break;
 	default:
-		igt_assert(false);
+		return IGT_OPT_HANDLER_ERROR;
 	}
 
-	return 0;
+	return IGT_OPT_HANDLER_SUCCESS;
 }
 
 const char *help_str =
 	"  --iterations Number of iterations for test coverage. -1 loop forever, default 64 iterations\n"
 	"  --seed       Seed for random number generator\n";
 
-int main(int argc, char *argv[])
-{
-	struct option long_options[] = {
-		{ "iterations", required_argument, NULL, 'i'},
-		{ "seed",    required_argument, NULL, 's'},
-		{ 0, 0, 0, 0 }
-	};
-	enum pipe pipe;
+struct option long_options[] = {
+	{ "iterations", required_argument, NULL, 'i'},
+	{ "seed",    required_argument, NULL, 's'},
+	{ 0, 0, 0, 0 }
+};
 
-	igt_subtest_init_parse_opts(&argc, argv, "", long_options, help_str,
-				    opt_handler, NULL);
+igt_main_args("", long_options, help_str, opt_handler, NULL)
+{
+	enum pipe pipe;
 
 	igt_skip_on_simulation();
 
@@ -389,6 +440,10 @@ int main(int argc, char *argv[])
 	}
 
 	for_each_pipe_static(pipe) {
+		igt_describe("Check that the kernel handles atomic updates of "
+			     "multiple planes correctly by changing their "
+			     "geometry and making sure the changes are "
+			     "reflected immediately after each commit.");
 		igt_subtest_group
 			run_tests_for_pipe(&data, pipe);
 	}
@@ -396,6 +451,4 @@ int main(int argc, char *argv[])
 	igt_fixture {
 		igt_display_fini(&data.display);
 	}
-
-	igt_exit();
 }

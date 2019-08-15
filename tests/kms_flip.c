@@ -71,6 +71,7 @@
 #define TEST_SUSPEND		(1 << 26)
 #define TEST_BO_TOOBIG		(1 << 28)
 
+#define TEST_NO_VBLANK		(1 << 29)
 #define TEST_BASIC		(1 << 30)
 
 #define EVENT_FLIP		(1 << 0)
@@ -125,6 +126,18 @@ struct event_state {
 	/* Step between the current and next 'target' sequence number. */
 	int seq_step;
 };
+
+static bool vblank_dependence(int flags)
+{
+	int vblank_flags = TEST_VBLANK | TEST_VBLANK_BLOCK |
+			   TEST_VBLANK_ABSOLUTE | TEST_VBLANK_EXPIRED_SEQ |
+			   TEST_CHECK_TS | TEST_VBLANK_RACE | TEST_EBUSY;
+
+	if (flags & vblank_flags)
+		return true;
+
+	return false;
+}
 
 static float timeval_float(const struct timeval *tv)
 {
@@ -494,7 +507,7 @@ static void check_state(const struct test_output *o, const struct event_state *e
 	/* check only valid if no modeset happens in between, that increments by
 	 * (1 << 23) on each step. This bounding matches the one in
 	 * DRM_IOCTL_WAIT_VBLANK. */
-	if (!(o->flags & (TEST_DPMS | TEST_MODESET)))
+	if (!(o->flags & (TEST_DPMS | TEST_MODESET | TEST_NO_VBLANK)))
 		igt_assert_f(es->current_seq - (es->last_seq + o->seq_step) <= 1UL << 23,
 			     "unexpected %s seq %u, should be >= %u\n",
 			     es->name, es->current_seq, es->last_seq + o->seq_step);
@@ -673,14 +686,16 @@ static unsigned int run_test_step(struct test_output *o)
 	    !(o->pending_events & EVENT_VBLANK) && o->flip_state.count > 0) {
 		struct vblank_reply reply;
 		unsigned int exp_seq;
-		unsigned long start;
+		unsigned long start, end;
 
 		exp_seq = o->flip_state.current_seq;
 		start = gettime_us();
 		do_or_die(__wait_for_vblank(TEST_VBLANK_ABSOLUTE |
 					    TEST_VBLANK_BLOCK, o->pipe, exp_seq,
 					    0, &reply));
-		igt_assert(gettime_us() - start < 500);
+		end = gettime_us();
+		igt_debug("Vblank took %luus\n", end - start);
+		igt_assert(end - start < 500);
 		igt_assert_eq(reply.sequence, exp_seq);
 		igt_assert(timercmp(&reply.ts, &o->flip_state.last_ts, ==));
 	}
@@ -1176,6 +1191,7 @@ static void run_test_on_crtc_set(struct test_output *o, int *crtc_idxs,
 	unsigned bo_size = 0;
 	uint64_t tiling;
 	int i;
+	bool vblank = true;
 
 	switch (crtc_count) {
 	case RUN_TEST:
@@ -1231,8 +1247,10 @@ static void run_test_on_crtc_set(struct test_output *o, int *crtc_idxs,
 					 igt_bpp_depth_to_drm_format(o->bpp, o->depth),
 					 tiling, &o->fb_info[0]);
 	o->fb_ids[1] = igt_create_fb_with_bo_size(drm_fd, o->fb_width, o->fb_height,
-					 igt_bpp_depth_to_drm_format(o->bpp, o->depth),
-					 tiling, &o->fb_info[1], bo_size, 0);
+						  igt_bpp_depth_to_drm_format(o->bpp, o->depth),
+						  tiling, IGT_COLOR_YCBCR_BT709,
+						  IGT_COLOR_YCBCR_LIMITED_RANGE,
+						  &o->fb_info[1], bo_size, 0);
 
 	igt_assert(o->fb_ids[0]);
 	igt_assert(o->fb_ids[1]);
@@ -1258,6 +1276,14 @@ static void run_test_on_crtc_set(struct test_output *o, int *crtc_idxs,
 		goto out;
 	}
 	igt_assert(fb_is_bound(o, o->fb_ids[0]));
+
+	vblank = kms_has_vblank(drm_fd);
+	if (!vblank) {
+		if (vblank_dependence(o->flags))
+			igt_require_f(vblank, "There is no VBlank\n");
+		else
+			o->flags |= TEST_NO_VBLANK;
+	}
 
 	/* quiescent the hw a bit so ensure we don't miss a single frame */
 	if (o->flags & TEST_CHECK_TS)
@@ -1481,7 +1507,7 @@ static void test_nonblocking_read(int in)
 	close(fd);
 }
 
-int main(int argc, char **argv)
+igt_main
 {
 	struct {
 		int duration;
@@ -1529,8 +1555,6 @@ int main(int argc, char **argv)
 		{ 10, TEST_FLIP | TEST_SUSPEND, "flip-vs-suspend" },
 	};
 	int i;
-
-	igt_subtest_init(argc, argv);
 
 	igt_fixture {
 		drm_fd = drm_open_driver_master(DRIVER_ANY);
@@ -1591,11 +1615,4 @@ int main(int argc, char **argv)
 			run_pair(tests[i].duration, tests[i].flags);
 	}
 	igt_stop_signal_helper();
-
-	/*
-	 * Let drm_fd leak, since it's needed by the dpms restore
-	 * exit_handler and igt_exit() won't return.
-	 */
-
-	igt_exit();
 }

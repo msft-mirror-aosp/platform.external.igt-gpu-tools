@@ -53,11 +53,38 @@ enum chamelium_check {
 	CHAMELIUM_CHECK_CRC,
 };
 
+struct chamelium_video_params {
+	double clock;
+	int htotal, hactive, hsync_offset, hsync_width, hsync_polarity;
+	int vtotal, vactive, vsync_offset, vsync_width, vsync_polarity;
+};
+
 struct chamelium_audio_file {
 	char *path;
 	int rate; /* Hz */
 	int channels;
 };
+
+struct chamelium_edid;
+
+/**
+ * CHAMELIUM_MAX_PORTS: the maximum number of ports supported by igt_chamelium.
+ *
+ * For now, we have 1 VGA, 1 HDMI and 2 DisplayPort ports.
+ */
+#define CHAMELIUM_MAX_PORTS 4
+
+/**
+ * CHAMELIUM_DEFAULT_EDID: provide this ID to #chamelium_port_set_edid to use
+ * the default EDID.
+ */
+#define CHAMELIUM_DEFAULT_EDID 0
+
+/**
+ * CHAMELIUM_MAX_AUDIO_CHANNELS: the maximum number of audio capture channels
+ * supported by Chamelium.
+ */
+#define CHAMELIUM_MAX_AUDIO_CHANNELS 8
 
 struct chamelium *chamelium_init(int drm_fd);
 void chamelium_deinit(struct chamelium *chamelium);
@@ -86,9 +113,13 @@ void chamelium_fire_hpd_pulses(struct chamelium *chamelium,
 void chamelium_schedule_hpd_toggle(struct chamelium *chamelium,
 				   struct chamelium_port *port, int delay_ms,
 				   bool rising_edge);
-int chamelium_new_edid(struct chamelium *chamelium, const unsigned char *edid);
+struct chamelium_edid *chamelium_new_edid(struct chamelium *chamelium,
+					  const unsigned char *edid);
+const struct edid *chamelium_edid_get_raw(struct chamelium_edid *edid,
+					  struct chamelium_port *port);
 void chamelium_port_set_edid(struct chamelium *chamelium,
-			     struct chamelium_port *port, int edid_id);
+			     struct chamelium_port *port,
+			     struct chamelium_edid *edid);
 bool chamelium_port_get_ddc_state(struct chamelium *chamelium,
 				  struct chamelium_port *port);
 void chamelium_port_set_ddc_state(struct chamelium *chamelium,
@@ -97,6 +128,10 @@ void chamelium_port_set_ddc_state(struct chamelium *chamelium,
 void chamelium_port_get_resolution(struct chamelium *chamelium,
 				   struct chamelium_port *port,
 				   int *x, int *y);
+bool chamelium_supports_get_video_params(struct chamelium *chamelium);
+void chamelium_port_get_video_params(struct chamelium *chamelium,
+				     struct chamelium_port *port,
+				     struct chamelium_video_params *params);
 igt_crc_t *chamelium_get_crc_for_area(struct chamelium *chamelium,
 				      struct chamelium_port *port,
 				      int x, int y, int w, int h);
@@ -106,9 +141,11 @@ void chamelium_start_capture(struct chamelium *chamelium,
 void chamelium_stop_capture(struct chamelium *chamelium, int frame_count);
 void chamelium_capture(struct chamelium *chamelium, struct chamelium_port *port,
 		       int x, int y, int w, int h, int frame_count);
+bool chamelium_has_audio_support(struct chamelium *chamelium,
+				 struct chamelium_port *port);
 void chamelium_get_audio_channel_mapping(struct chamelium *chamelium,
 					 struct chamelium_port *port,
-					 int mapping[static 8]);
+					 int mapping[static CHAMELIUM_MAX_AUDIO_CHANNELS]);
 void chamelium_get_audio_format(struct chamelium *chamelium,
 				struct chamelium_port *port,
 				int *rate, int *channels);

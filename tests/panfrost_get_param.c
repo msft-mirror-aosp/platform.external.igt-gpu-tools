@@ -1,5 +1,6 @@
 /*
- * Copyright © 2013 Intel Corporation
+ * Copyright © 2017 Broadcom
+ * Copyright © 2019 Collabora, Ltd.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -19,26 +20,54 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
- *
  */
 
-#ifndef IGFX_H
-#define IGFX_H
+#include "igt.h"
+#include "igt_panfrost.h"
+#include <unistd.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <fcntl.h>
+#include <inttypes.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <sys/ioctl.h>
+#include <poll.h>
+#include "panfrost_drm.h"
 
-struct igfx_info {
-	int gen;
-};
-
-struct pci_device;
-
-struct pci_device *igfx_get(void);
-const struct igfx_info *igfx_get_info(struct pci_device *pci_dev);
-void *igfx_get_mmio(struct pci_device *pci_dev);
-
-static inline uint32_t
-igfx_read(void *mmio, uint32_t reg)
+igt_main
 {
-	return *(volatile uint32_t *)((volatile char *)mmio + reg);
-}
+	int fd;
 
-#endif /* IGFX_H */
+	igt_fixture
+		fd = drm_open_driver(DRIVER_PANFROST);
+
+	igt_subtest("base-params") {
+		int last_base_param = DRM_PANFROST_PARAM_GPU_PROD_ID;
+		uint32_t results[last_base_param + 1];
+
+		for (int i = 0; i < ARRAY_SIZE(results); i++)
+			results[i] = igt_panfrost_get_param(fd, i);
+
+		igt_assert(results[DRM_PANFROST_PARAM_GPU_PROD_ID]);
+	}
+
+	igt_subtest("get-bad-param") {
+		struct drm_panfrost_get_param get = {
+			.param = 0xd0d0d0d0,
+		};
+		do_ioctl_err(fd, DRM_IOCTL_PANFROST_GET_PARAM, &get, EINVAL);
+	}
+
+	igt_subtest("get-bad-padding") {
+		struct drm_panfrost_get_param get = {
+			.param = DRM_PANFROST_PARAM_GPU_PROD_ID,
+			.pad = 1,
+		};
+		do_ioctl_err(fd, DRM_IOCTL_PANFROST_GET_PARAM, &get, EINVAL);
+	}
+
+	igt_fixture
+		close(fd);
+}

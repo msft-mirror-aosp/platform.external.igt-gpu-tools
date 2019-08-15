@@ -69,10 +69,10 @@
 #include <stdlib.h>
 #include <signal.h>
 
-#define SUBTEST_OPTS	 1
-#define HELP_DESCRIPTION 2
-#define Yb_OPT		 3
-#define Yf_OPT		 4
+enum {
+	OPT_YB,
+	OPT_YF,
+};
 
 static int tio_fd;
 struct termios saved_tio;
@@ -80,13 +80,14 @@ struct termios saved_tio;
 drmModeRes *resources;
 int drm_fd, modes;
 int test_all_modes = 0, test_preferred_mode = 0, force_mode = 0, test_plane,
-    test_stereo_modes;
+    test_stereo_modes, test_aspect_ratio;
 uint64_t tiling = LOCAL_DRM_FORMAT_MOD_NONE;
 int sleep_between_modes = 0;
 int do_dpms = 0; /* This aliases to DPMS_ON */
 uint32_t depth = 24, stride, bpp;
 int qr_code = 0;
 int specified_mode_num = -1, specified_disp_id = -1;
+bool opt_dump_info = false;
 
 drmModeModeInfo force_timing;
 
@@ -247,6 +248,24 @@ static void paint_image(cairo_t *cr, const char *file)
 	igt_paint_image(cr, file, img_x, img_y, img_h, img_w);
 }
 
+static const char *picture_aspect_ratio_str(uint32_t flags)
+{
+	switch (flags & DRM_MODE_FLAG_PIC_AR_MASK) {
+	case DRM_MODE_FLAG_PIC_AR_NONE:
+		return "";
+	case DRM_MODE_FLAG_PIC_AR_4_3:
+		return "(4:3) ";
+	case DRM_MODE_FLAG_PIC_AR_16_9:
+		return "(16:9) ";
+	case DRM_MODE_FLAG_PIC_AR_64_27:
+		return "(64:27) ";
+	case DRM_MODE_FLAG_PIC_AR_256_135:
+		return "(256:135) ";
+	default:
+		return "(invalid) ";
+	}
+}
+
 static void paint_output_info(struct connector *c, struct igt_fb *fb)
 {
 	cairo_t *cr = igt_get_cairo_ctx(drm_fd, fb);
@@ -287,8 +306,10 @@ static void paint_output_info(struct connector *c, struct igt_fb *fb)
 			cairo_move_to(cr, x, top_y);
 		}
 		str_width = igt_cairo_printf_line(cr, align_right, 10,
-			"%s @ %dHz", c->connector->modes[i].name,
-			 c->connector->modes[i].vrefresh);
+						  "%s%s @ %dHz",
+						  picture_aspect_ratio_str(c->connector->modes[i].flags),
+						  c->connector->modes[i].name,
+						  c->connector->modes[i].vrefresh);
 		if (str_width > max_width)
 			max_width = str_width;
 	}
@@ -519,29 +540,6 @@ int update_display(bool probe)
 	return 1;
 }
 
-static char optstr[] = "3hiaf:s:d:p:mrto:j:y";
-
-static void __attribute__((noreturn)) usage(char *name, char opt)
-{
-	igt_info("usage: %s [-hiasdpmtf]\n", name);
-	igt_info("\t-i\tdump info\n");
-	igt_info("\t-a\ttest all modes\n");
-	igt_info("\t-s\t<duration>\tsleep between each mode test (default: 0)\n");
-	igt_info("\t-d\t<depth>\tbit depth of scanout buffer\n");
-	igt_info("\t-p\t<planew,h>,<crtcx,y>,<crtcw,h> test overlay plane\n");
-	igt_info("\t-m\ttest the preferred mode\n");
-	igt_info("\t-3\ttest all 3D modes\n");
-	igt_info("\t-t\tuse a tiled framebuffer\n");
-	igt_info("\t-j\tdo dpms off, optional arg to select dpms leve (1-3)\n");
-	igt_info("\t-r\tprint a QR code on the screen whose content is \"pass\" for the automatic test\n");
-	igt_info("\t-o\t<id of the display>,<number of the mode>\tonly test specified mode on the specified display\n");
-	igt_info("\t-f\t<clock MHz>,<hdisp>,<hsync-start>,<hsync-end>,<htotal>,\n");
-	igt_info("\t\t<vdisp>,<vsync-start>,<vsync-end>,<vtotal>\n");
-	igt_info("\t\ttest force mode\n");
-	igt_info("\tDefault is to test all modes.\n");
-	exit((opt != 'h') ? -1 : 0);
-}
-
 #define dump_resource(res) if (res) dump_##res()
 
 static void __attribute__((noreturn)) cleanup_and_exit(int ret)
@@ -564,17 +562,12 @@ static gboolean input_event(GIOChannel *source, GIOCondition condition,
 	return TRUE;
 }
 
-static void enter_exec_path(const char **argv)
+static void enter_exec_path(void)
 {
-	char *argv0, *exec_path;
-	int ret;
+	char path[PATH_MAX];
 
-	argv0 = strdup(argv[0]);
-	igt_assert(argv0);
-	exec_path = dirname(argv0);
-	ret = chdir(exec_path);
-	igt_assert_eq(ret, 0);
-	free(argv0);
+	if (readlink("/proc/self/exe", path, sizeof(path)) > 0)
+		chdir(dirname(path));
 }
 
 static void restore_termio_mode(int sig)
@@ -600,101 +593,112 @@ static void set_termio_mode(void)
 	tcsetattr(tio_fd, TCSANOW, &tio);
 }
 
-int main(int argc, char **argv)
+static char optstr[] = "3Aiaf:s:d:p:mrto:j:y";
+static struct option long_opts[] = {
+	{"yb", 0, 0, OPT_YB},
+	{"yf", 0, 0, OPT_YF},
+	{ 0, 0, 0, 0 }
+};
+
+static const char *help_str =
+	"  -i\tdump info\n"
+	"  -a\ttest all modes\n"
+	"  -s\t<duration>\tsleep between each mode test (default: 0)\n"
+	"  -d\t<depth>\tbit depth of scanout buffer\n"
+	"  -p\t<planew,h>,<crtcx,y>,<crtcw,h> test overlay plane\n"
+	"  -m\ttest the preferred mode\n"
+	"  -3\ttest all 3D modes\n"
+	"  -A\ttest all aspect ratios\n"
+	"  -t\tuse an X-tiled framebuffer\n"
+	"  -y, --yb\n"
+	"  \tuse a Y-tiled framebuffer\n"
+	"  --yf\tuse a Yf-tiled framebuffer\n"
+	"  -j\tdo dpms off, optional arg to select dpms level (1-3)\n"
+	"  -r\tprint a QR code on the screen whose content is \"pass\" for the automatic test\n"
+	"  -o\t<id of the display>,<number of the mode>\tonly test specified mode on the specified display\n"
+	"  -f\t<clock MHz>,<hdisp>,<hsync-start>,<hsync-end>,<htotal>,\n"
+	"  \t<vdisp>,<vsync-start>,<vsync-end>,<vtotal>\n"
+	"  \ttest force mode\n"
+	"  \tDefault is to test all modes.\n"
+	;
+
+static int opt_handler(int opt, int opt_index, void *data)
 {
-	int c;
+	float force_clock;
+
+	switch (opt) {
+	case '3':
+		test_stereo_modes = 1;
+		break;
+	case 'A':
+		test_aspect_ratio = 1;
+		break;
+	case 'i':
+		opt_dump_info = true;
+		break;
+	case 'a':
+		test_all_modes = 1;
+		break;
+	case 'f':
+		force_mode = 1;
+		if (sscanf(optarg,"%f,%hu,%hu,%hu,%hu,%hu,%hu,%hu,%hu",
+			   &force_clock,&force_timing.hdisplay, &force_timing.hsync_start,&force_timing.hsync_end,&force_timing.htotal,
+			   &force_timing.vdisplay, &force_timing.vsync_start, &force_timing.vsync_end, &force_timing.vtotal)!= 9)
+			return IGT_OPT_HANDLER_ERROR;
+		force_timing.clock = force_clock*1000;
+
+		break;
+	case 's':
+		sleep_between_modes = atoi(optarg);
+		break;
+	case 'j':
+		do_dpms = atoi(optarg);
+		if (do_dpms == 0)
+			do_dpms = DRM_MODE_DPMS_OFF;
+		break;
+	case 'd':
+		depth = atoi(optarg);
+		igt_info("using depth %d\n", depth);
+		break;
+	case 'p':
+		if (sscanf(optarg, "%d,%d,%d,%d,%d,%d", &plane_width,
+			   &plane_height, &crtc_x, &crtc_y,
+			   &crtc_w, &crtc_h) != 6)
+			return IGT_OPT_HANDLER_ERROR;
+		test_plane = 1;
+		break;
+	case 'm':
+		test_preferred_mode = 1;
+		break;
+	case 't':
+		tiling = LOCAL_I915_FORMAT_MOD_X_TILED;
+		break;
+	case 'y':
+	case OPT_YB:
+		tiling = LOCAL_I915_FORMAT_MOD_Y_TILED;
+		break;
+	case OPT_YF:
+		tiling = LOCAL_I915_FORMAT_MOD_Yf_TILED;
+		break;
+	case 'r':
+		qr_code = 1;
+		break;
+	case 'o':
+		sscanf(optarg, "%d,%d", &specified_disp_id, &specified_mode_num);
+		break;
+	}
+
+	return IGT_OPT_HANDLER_SUCCESS;
+}
+
+igt_simple_main_args(optstr, long_opts, help_str, opt_handler, NULL)
+{
 	int ret = 0;
 	GIOChannel *stdinchannel;
 	GMainLoop *mainloop;
-	float force_clock;
-	bool opt_dump_info = false;
-	struct option long_opts[] = {
-		{"list-subtests", 0, 0, SUBTEST_OPTS},
-		{"run-subtest", 1, 0, SUBTEST_OPTS},
-		{"help-description", 0, 0, HELP_DESCRIPTION},
-		{"help", 0, 0, 'h'},
-		{"yb", 0, 0, Yb_OPT},
-		{"yf", 0, 0, Yf_OPT},
-		{ 0, 0, 0, 0 }
-	};
-
 	igt_skip_on_simulation();
 
-	enter_exec_path((const char **) argv);
-
-	while ((c = getopt_long(argc, argv, optstr, long_opts, NULL)) != -1) {
-		switch (c) {
-		case '3':
-			test_stereo_modes = 1;
-			break;
-		case 'i':
-			opt_dump_info = true;
-			break;
-		case 'a':
-			test_all_modes = 1;
-			break;
-		case 'f':
-			force_mode = 1;
-			if(sscanf(optarg,"%f,%hu,%hu,%hu,%hu,%hu,%hu,%hu,%hu",
-				&force_clock,&force_timing.hdisplay, &force_timing.hsync_start,&force_timing.hsync_end,&force_timing.htotal,
-				&force_timing.vdisplay, &force_timing.vsync_start, &force_timing.vsync_end, &force_timing.vtotal)!= 9)
-				usage(argv[0], c);
-			force_timing.clock = force_clock*1000;
-
-			break;
-		case 's':
-			sleep_between_modes = atoi(optarg);
-			break;
-		case 'j':
-			do_dpms = atoi(optarg);
-			if (do_dpms == 0)
-				do_dpms = DRM_MODE_DPMS_OFF;
-			break;
-		case 'd':
-			depth = atoi(optarg);
-			igt_info("using depth %d\n", depth);
-			break;
-		case 'p':
-			if (sscanf(optarg, "%d,%d,%d,%d,%d,%d", &plane_width,
-				   &plane_height, &crtc_x, &crtc_y,
-				   &crtc_w, &crtc_h) != 6)
-				usage(argv[0], c);
-			test_plane = 1;
-			break;
-		case 'm':
-			test_preferred_mode = 1;
-			break;
-		case 't':
-			tiling = LOCAL_I915_FORMAT_MOD_X_TILED;
-			break;
-		case 'y':
-		case Yb_OPT:
-			tiling = LOCAL_I915_FORMAT_MOD_Y_TILED;
-			break;
-		case Yf_OPT:
-			tiling = LOCAL_I915_FORMAT_MOD_Yf_TILED;
-			break;
-		case 'r':
-			qr_code = 1;
-			break;
-		case 'o':
-			sscanf(optarg, "%d,%d", &specified_disp_id, &specified_mode_num);
-			break;
-		case SUBTEST_OPTS:
-			/* invalid subtest options */
-			exit(IGT_EXIT_INVALID);
-			break;
-		case HELP_DESCRIPTION:
-			igt_info("Tests display functionality.");
-			exit(0);
-			break;
-		default:
-			/* fall through */
-		case 'h':
-			usage(argv[0], c);
-			break;
-		}
-	}
+	enter_exec_path();
 
 	set_termio_mode();
 
@@ -714,6 +718,12 @@ int main(int argc, char **argv)
 	if (test_stereo_modes &&
 	    drmSetClientCap(drm_fd, DRM_CLIENT_CAP_STEREO_3D, 1) < 0) {
 		igt_warn("DRM_CLIENT_CAP_STEREO_3D failed\n");
+		goto out_close;
+	}
+
+	if (test_aspect_ratio &&
+	    drmSetClientCap(drm_fd, DRM_CLIENT_CAP_ASPECT_RATIO, 1) < 0) {
+		igt_warn("DRM_CLIENT_CAP_ASPECT_RATIO failed\n");
 		goto out_close;
 	}
 
@@ -771,6 +781,4 @@ out_close:
 	close(drm_fd);
 
 	igt_assert_eq(ret, 0);
-
-	igt_exit();
 }

@@ -83,6 +83,7 @@ typedef struct {
 } igt_crc_t;
 
 #define INTEL_PIPE_CRC_SOURCE_AUTO "auto"
+#define AMDGPU_PIPE_CRC_SOURCE_DPRX "dprx"
 
 void igt_assert_crc_equal(const igt_crc_t *a, const igt_crc_t *b);
 bool igt_check_crc_equal(const igt_crc_t *a, const igt_crc_t *b);
@@ -201,6 +202,7 @@ void igt_enable_prefault(void);
  * gem buffer objects
  */
 int igt_get_stable_obj_count(int driver);
-void igt_debugfs_dump(int device, const char *filename);
+void __igt_debugfs_dump(int device, const char *filename, int level);
+#define igt_debugfs_dump(d, f) __igt_debugfs_dump(d, f, IGT_LOG_DEBUG)
 
 #endif /* __IGT_DEBUGFS_H__ */

@@ -28,6 +28,7 @@
 
 #include <string.h>
 #include <errno.h>
+#include <math.h>
 #include <xmlrpc-c/base.h>
 #include <xmlrpc-c/client.h>
 #include <pthread.h>
@@ -38,6 +39,7 @@
 #include "igt_chamelium.h"
 #include "igt_core.h"
 #include "igt_aux.h"
+#include "igt_edid.h"
 #include "igt_frame.h"
 #include "igt_list.h"
 #include "igt_kms.h"
@@ -81,7 +83,10 @@
  */
 
 struct chamelium_edid {
-	int id;
+	struct chamelium *chamelium;
+	struct edid *base;
+	struct edid *raw[CHAMELIUM_MAX_PORTS];
+	int ids[CHAMELIUM_MAX_PORTS];
 	struct igt_list link;
 };
 
@@ -117,8 +122,8 @@ struct chamelium {
 
 	int drm_fd;
 
-	struct chamelium_edid *edids;
-	struct chamelium_port *ports;
+	struct igt_list edids;
+	struct chamelium_port ports[CHAMELIUM_MAX_PORTS];
 	int port_count;
 };
 
@@ -265,14 +270,13 @@ static void *chamelium_fsm_mon(void *data)
 	return NULL;
 }
 
-static xmlrpc_value *chamelium_rpc(struct chamelium *chamelium,
-				   struct chamelium_port *fsm_port,
-				   const char *method_name,
-				   const char *format_str,
-				   ...)
+static xmlrpc_value *__chamelium_rpc_va(struct chamelium *chamelium,
+					struct chamelium_port *fsm_port,
+					const char *method_name,
+					const char *format_str,
+					va_list va_args)
 {
-	xmlrpc_value *res;
-	va_list va_args;
+	xmlrpc_value *res = NULL;
 	struct fsm_monitor_args monitor_args;
 	pthread_t fsm_thread_id;
 
@@ -296,16 +300,49 @@ static xmlrpc_value *chamelium_rpc(struct chamelium *chamelium,
 			       &monitor_args);
 	}
 
-	va_start(va_args, format_str);
 	xmlrpc_client_call2f_va(&chamelium->env, chamelium->client,
 				chamelium->url, method_name, format_str, &res,
 				va_args);
-	va_end(va_args);
 
 	if (fsm_port) {
 		pthread_cancel(fsm_thread_id);
+		pthread_join(fsm_thread_id, NULL);
 		igt_cleanup_hotplug(monitor_args.mon);
 	}
+
+	return res;
+}
+
+static xmlrpc_value *__chamelium_rpc(struct chamelium *chamelium,
+				     struct chamelium_port *fsm_port,
+				     const char *method_name,
+				     const char *format_str,
+				     ...)
+{
+	xmlrpc_value *res;
+	va_list va_args;
+
+	va_start(va_args, format_str);
+	res = __chamelium_rpc_va(chamelium, fsm_port, method_name,
+				 format_str, va_args);
+	va_end(va_args);
+
+	return res;
+}
+
+static xmlrpc_value *chamelium_rpc(struct chamelium *chamelium,
+				   struct chamelium_port *fsm_port,
+				   const char *method_name,
+				   const char *format_str,
+				   ...)
+{
+	xmlrpc_value *res;
+	va_list va_args;
+
+	va_start(va_args, format_str);
+	res = __chamelium_rpc_va(chamelium, fsm_port, method_name,
+				 format_str, va_args);
+	va_end(va_args);
 
 	igt_assert_f(!chamelium->env.fault_occurred,
 		     "Chamelium RPC call failed: %s\n",
@@ -324,7 +361,7 @@ static xmlrpc_value *chamelium_rpc(struct chamelium *chamelium,
  */
 void chamelium_plug(struct chamelium *chamelium, struct chamelium_port *port)
 {
-	igt_debug("Plugging %s\n", port->name);
+	igt_debug("Plugging %s (Chamelium port ID %d)\n", port->name, port->id);
 	xmlrpc_DECREF(chamelium_rpc(chamelium, NULL, "Plug", "(i)", port->id));
 }
 
@@ -489,38 +526,16 @@ void chamelium_schedule_hpd_toggle(struct chamelium *chamelium,
 				    "(iii)", port->id, delay_ms, rising_edge));
 }
 
-/**
- * chamelium_new_edid:
- * @chamelium: The Chamelium instance to use
- * @edid: The edid blob to upload to the chamelium
- *
- * Uploads and registers a new EDID with the chamelium. The EDID will be
- * destroyed automatically when #chamelium_deinit is called.
- *
- * Returns: The ID of the EDID uploaded to the chamelium.
- */
-int chamelium_new_edid(struct chamelium *chamelium, const unsigned char *edid)
+static int chamelium_upload_edid(struct chamelium *chamelium,
+				 const struct edid *edid)
 {
 	xmlrpc_value *res;
-	struct chamelium_edid *allocated_edid;
 	int edid_id;
 
 	res = chamelium_rpc(chamelium, NULL, "CreateEdid", "(6)",
-			    edid, EDID_LENGTH);
-
+			    edid, edid_get_size(edid));
 	xmlrpc_read_int(&chamelium->env, res, &edid_id);
 	xmlrpc_DECREF(res);
-
-	allocated_edid = malloc(sizeof(struct chamelium_edid));
-	memset(allocated_edid, 0, sizeof(*allocated_edid));
-
-	allocated_edid->id = edid_id;
-	igt_list_init(&allocated_edid->link);
-
-	if (chamelium->edids)
-		igt_list_add(&chamelium->edids->link, &allocated_edid->link);
-	else
-		chamelium->edids = allocated_edid;
 
 	return edid_id;
 }
@@ -532,21 +547,116 @@ static void chamelium_destroy_edid(struct chamelium *chamelium, int edid_id)
 }
 
 /**
+ * chamelium_new_edid:
+ * @chamelium: The Chamelium instance to use
+ * @edid: The edid blob to upload to the chamelium
+ *
+ * Uploads and registers a new EDID with the chamelium. The EDID will be
+ * destroyed automatically when #chamelium_deinit is called.
+ *
+ * Callers shouldn't assume that the raw EDID they provide is uploaded as-is to
+ * the Chamelium. The EDID may be mutated (e.g. a serial number can be appended
+ * to be able to uniquely identify the EDID). To retrieve the exact EDID that
+ * will be applied to a particular port, use #chamelium_edid_get_raw.
+ *
+ * Returns: An opaque pointer to the Chamelium EDID
+ */
+struct chamelium_edid *chamelium_new_edid(struct chamelium *chamelium,
+					  const unsigned char *raw_edid)
+{
+	struct chamelium_edid *chamelium_edid;
+	const struct edid *edid = (struct edid *) raw_edid;
+	size_t edid_size = edid_get_size(edid);
+
+	chamelium_edid = calloc(1, sizeof(struct chamelium_edid));
+	chamelium_edid->chamelium = chamelium;
+	chamelium_edid->base = malloc(edid_size);
+	memcpy(chamelium_edid->base, edid, edid_size);
+	igt_list_add(&chamelium_edid->link, &chamelium->edids);
+
+	return chamelium_edid;
+}
+
+/**
+ * chamelium_port_tag_edid: tag the EDID with the provided Chamelium port.
+ */
+static void chamelium_port_tag_edid(struct chamelium_port *port,
+				    struct edid *edid)
+{
+	uint32_t *serial;
+
+	/* Product code: Chamelium */
+	edid->prod_code[0] = 'C';
+	edid->prod_code[1] = 'H';
+
+	/* Serial: Chamelium port ID */
+	serial = (uint32_t *) &edid->serial;
+	*serial = port->id;
+
+	edid_update_checksum(edid);
+}
+
+/**
+ * chamelium_edid_get_raw: get the raw EDID
+ * @edid: the Chamelium EDID
+ * @port: the Chamelium port
+ *
+ * The EDID provided to #chamelium_new_edid may be mutated for identification
+ * purposes. This function allows to retrieve the exact EDID that will be set
+ * for a given port.
+ *
+ * The returned raw EDID is only valid until the next call to this function.
+ */
+const struct edid *chamelium_edid_get_raw(struct chamelium_edid *edid,
+					  struct chamelium_port *port)
+{
+	size_t port_index = port - edid->chamelium->ports;
+	size_t edid_size;
+
+	if (!edid->raw[port_index]) {
+		edid_size = edid_get_size(edid->base);
+		edid->raw[port_index] = malloc(edid_size);
+		memcpy(edid->raw[port_index], edid->base, edid_size);
+		chamelium_port_tag_edid(port, edid->raw[port_index]);
+	}
+
+	return edid->raw[port_index];
+}
+
+/**
  * chamelium_port_set_edid:
  * @chamelium: The Chamelium instance to use
  * @port: The port on the Chamelium to set the EDID on
- * @edid_id: The ID of an EDID on the chamelium created with
- * #chamelium_new_edid, or 0 to disable the EDID on the port
+ * @edid: The Chamelium EDID to set or NULL to use the default Chamelium EDID
  *
  * Sets a port on the chamelium to use the specified EDID. This does not fire a
  * hotplug pulse on it's own, and merely changes what EDID the chamelium port
  * will report to us the next time we probe it. Users will need to reprobe the
  * connectors themselves if they want to see the EDID reported by the port
  * change.
+ *
+ * To create an EDID, see #chamelium_new_edid.
  */
 void chamelium_port_set_edid(struct chamelium *chamelium,
-			     struct chamelium_port *port, int edid_id)
+			     struct chamelium_port *port,
+			     struct chamelium_edid *edid)
 {
+	int edid_id;
+	size_t port_index;
+	const struct edid *raw_edid;
+
+	if (edid) {
+		port_index = port - chamelium->ports;
+		edid_id = edid->ids[port_index];
+		if (edid_id == 0) {
+			raw_edid = chamelium_edid_get_raw(edid, port);
+			edid_id = chamelium_upload_edid(chamelium, raw_edid);
+			edid->ids[port_index] = edid_id;
+		}
+	} else {
+		edid_id = 0;
+	}
+
 	xmlrpc_DECREF(chamelium_rpc(chamelium, NULL, "ApplyEdid", "(ii)",
 				    port->id, edid_id));
 }
@@ -624,6 +734,90 @@ void chamelium_port_get_resolution(struct chamelium *chamelium,
 
 	xmlrpc_DECREF(res_x);
 	xmlrpc_DECREF(res_y);
+	xmlrpc_DECREF(res);
+}
+
+/** chamelium_supports_method: checks if the Chamelium board supports a method.
+ *
+ * Note: this actually tries to call the method.
+ *
+ * See https://crbug.com/977995 for a discussion about a better solution.
+ */
+static bool chamelium_supports_method(struct chamelium *chamelium,
+				      const char *name)
+{
+	xmlrpc_value *res;
+
+	res = __chamelium_rpc(chamelium, NULL, name, "()");
+	if (res)
+		xmlrpc_DECREF(res);
+
+	/* XML-RPC has a special code for unsupported methods
+	 * (XMLRPC_NO_SUCH_METHOD_ERROR) however the Chamelium implementation
+	 * doesn't return it. */
+	return (!chamelium->env.fault_occurred ||
+		strstr(chamelium->env.fault_string, "not supported") == NULL);
+}
+
+bool chamelium_supports_get_video_params(struct chamelium *chamelium)
+{
+	return chamelium_supports_method(chamelium, "GetVideoParams");
+}
+
+static void read_int_from_xml_struct(struct chamelium *chamelium,
+				     xmlrpc_value *struct_val, const char *key,
+				     int *dst)
+{
+	xmlrpc_value *val = NULL;
+
+	xmlrpc_struct_find_value(&chamelium->env, struct_val, key, &val);
+	if (val) {
+		xmlrpc_read_int(&chamelium->env, val, dst);
+		xmlrpc_DECREF(val);
+	} else
+		*dst = -1;
+}
+
+static void video_params_from_xml(struct chamelium *chamelium,
+				  xmlrpc_value *res,
+				  struct chamelium_video_params *params)
+{
+	xmlrpc_value *val = NULL;
+
+	xmlrpc_struct_find_value(&chamelium->env, res, "clock", &val);
+	if (val) {
+		xmlrpc_read_double(&chamelium->env, val, &params->clock);
+		xmlrpc_DECREF(val);
+	} else
+		params->clock = NAN;
+
+	read_int_from_xml_struct(chamelium, res, "htotal", &params->htotal);
+	read_int_from_xml_struct(chamelium, res, "hactive", &params->hactive);
+	read_int_from_xml_struct(chamelium, res, "hsync_offset",
+				 &params->hsync_offset);
+	read_int_from_xml_struct(chamelium, res, "hsync_width",
+				 &params->hsync_width);
+	read_int_from_xml_struct(chamelium, res, "hsync_polarity",
+				 &params->hsync_polarity);
+	read_int_from_xml_struct(chamelium, res, "vtotal", &params->vtotal);
+	read_int_from_xml_struct(chamelium, res, "vactive", &params->vactive);
+	read_int_from_xml_struct(chamelium, res, "vsync_offset",
+				 &params->vsync_offset);
+	read_int_from_xml_struct(chamelium, res, "vsync_width",
+				 &params->vsync_width);
+	read_int_from_xml_struct(chamelium, res, "vsync_polarity",
+				 &params->vsync_polarity);
+}
+
+void chamelium_port_get_video_params(struct chamelium *chamelium,
+				     struct chamelium_port *port,
+				     struct chamelium_video_params *params)
+{
+	xmlrpc_value *res;
+
+	res = chamelium_rpc(chamelium, NULL, "GetVideoParams", "(i)", port->id);
+	video_params_from_xml(chamelium, res, params);
+
 	xmlrpc_DECREF(res);
 }
 
@@ -930,6 +1124,24 @@ int chamelium_get_captured_frame_count(struct chamelium *chamelium)
 	return ret;
 }
 
+bool chamelium_has_audio_support(struct chamelium *chamelium,
+				 struct chamelium_port *port)
+{
+	xmlrpc_value *res;
+	xmlrpc_bool has_support;
+
+	if (!chamelium_supports_method(chamelium, "GetAudioFormat")) {
+		igt_debug("The Chamelium device doesn't support GetAudioFormat\n");
+		return false;
+	}
+
+	res = chamelium_rpc(chamelium, port, "HasAudioSupport", "(i)", port->id);
+	xmlrpc_read_bool(&chamelium->env, res, &has_support);
+	xmlrpc_DECREF(res);
+
+	return has_support;
+}
+
 /**
  * chamelium_get_audio_channel_mapping:
  * @chamelium: the Chamelium instance
@@ -947,7 +1159,7 @@ int chamelium_get_captured_frame_count(struct chamelium *chamelium)
  */
 void chamelium_get_audio_channel_mapping(struct chamelium *chamelium,
 					 struct chamelium_port *port,
-					 int mapping[static 8])
+					 int mapping[static CHAMELIUM_MAX_AUDIO_CHANNELS])
 {
 	xmlrpc_value *res, *res_channel;
 	int res_len, i;
@@ -955,7 +1167,7 @@ void chamelium_get_audio_channel_mapping(struct chamelium *chamelium,
 	res = chamelium_rpc(chamelium, port, "GetAudioChannelMapping", "(i)",
 			    port->id);
 	res_len = xmlrpc_array_size(&chamelium->env, res);
-	igt_assert(res_len == 8);
+	igt_assert(res_len == CHAMELIUM_MAX_AUDIO_CHANNELS);
 	for (i = 0; i < res_len; i++) {
 		xmlrpc_array_read_item(&chamelium->env, res, i, &res_channel);
 		xmlrpc_read_int(&chamelium->env, res_channel, &mapping[i]);
@@ -985,8 +1197,10 @@ static void audio_format_from_xml(struct chamelium *chamelium,
 
 	if (rate)
 		xmlrpc_read_int(&chamelium->env, res_rate, rate);
-	if (channels)
+	if (channels) {
 		xmlrpc_read_int(&chamelium->env, res_channel, channels);
+		igt_assert(*channels <= CHAMELIUM_MAX_AUDIO_CHANNELS);
+	}
 
 	xmlrpc_DECREF(res_channel);
 	xmlrpc_DECREF(res_sample_format);
@@ -1611,6 +1825,50 @@ static unsigned int chamelium_get_port_type(struct chamelium *chamelium,
 	return port_type;
 }
 
+static bool chamelium_has_video_support(struct chamelium *chamelium,
+					int port_id)
+{
+	xmlrpc_value *res;
+	int has_video_support;
+
+	res = chamelium_rpc(chamelium, NULL, "HasVideoSupport", "(i)", port_id);
+	xmlrpc_read_bool(&chamelium->env, res, &has_video_support);
+	xmlrpc_DECREF(res);
+
+	return has_video_support;
+}
+
+/**
+ * chamelium_get_video_ports: retrieve a list of video port IDs
+ *
+ * Returns: the number of video port IDs
+ */
+static size_t chamelium_get_video_ports(struct chamelium *chamelium,
+					int port_ids[static CHAMELIUM_MAX_PORTS])
+{
+	xmlrpc_value *res, *res_port;
+	int res_len, i, port_id;
+	size_t port_ids_len = 0;
+
+	res = chamelium_rpc(chamelium, NULL, "GetSupportedInputs", "()");
+	res_len = xmlrpc_array_size(&chamelium->env, res);
+	for (i = 0; i < res_len; i++) {
+		xmlrpc_array_read_item(&chamelium->env, res, i, &res_port);
+		xmlrpc_read_int(&chamelium->env, res_port, &port_id);
+		xmlrpc_DECREF(res_port);
+
+		if (!chamelium_has_video_support(chamelium, port_id))
+			continue;
+
+		igt_assert(port_ids_len < CHAMELIUM_MAX_PORTS);
+		port_ids[port_ids_len] = port_id;
+		port_ids_len++;
+	}
+	xmlrpc_DECREF(res);
+
+	return port_ids_len;
+}
+
 static bool chamelium_read_port_mappings(struct chamelium *chamelium,
 					 int drm_fd)
 {
@@ -1634,11 +1892,9 @@ static bool chamelium_read_port_mappings(struct chamelium *chamelium,
 		if (strstr(group_list[i], "Chamelium:"))
 			chamelium->port_count++;
 	}
+	igt_assert(chamelium->port_count <= CHAMELIUM_MAX_PORTS);
 
-	chamelium->ports = calloc(sizeof(struct chamelium_port),
-				  chamelium->port_count);
 	port_i = 0;
-
 	for (i = 0; group_list[i] != NULL; i++) {
 		group = group_list[i];
 
@@ -1704,6 +1960,212 @@ out:
 	return ret;
 }
 
+static int port_id_from_edid(int drm_fd, drmModeConnector *connector)
+{
+	int port_id = -1;
+	bool ok;
+	uint64_t edid_blob_id;
+	drmModePropertyBlobRes *edid_blob;
+	const struct edid *edid;
+	char mfg[3];
+
+	if (connector->connection != DRM_MODE_CONNECTED) {
+		igt_debug("Skipping auto-discovery for connector %s-%d: "
+			  "connector status is not connected\n",
+			  kmstest_connector_type_str(connector->connector_type),
+			  connector->connector_type_id);
+		return -1;
+	}
+
+	ok = kmstest_get_property(drm_fd, connector->connector_id,
+				  DRM_MODE_OBJECT_CONNECTOR, "EDID",
+				  NULL, &edid_blob_id, NULL);
+	if (!ok || !edid_blob_id) {
+		igt_debug("Skipping auto-discovery for connector %s-%d: "
+			  "missing the EDID property\n",
+			  kmstest_connector_type_str(connector->connector_type),
+			  connector->connector_type_id);
+		return -1;
+	}
+
+	edid_blob = drmModeGetPropertyBlob(drm_fd, edid_blob_id);
+	igt_assert(edid_blob);
+
+	edid = (const struct edid *) edid_blob->data;
+
+	edid_get_mfg(edid, mfg);
+	if (memcmp(mfg, "IGT", 3) != 0) {
+		igt_debug("Skipping connector %s-%d for auto-discovery: "
+			  "manufacturer is %.3s, not IGT\n",
+			  kmstest_connector_type_str(connector->connector_type),
+			  connector->connector_type_id, mfg);
+		goto out;
+	}
+
+	if (edid->prod_code[0] != 'C' || edid->prod_code[1] != 'H') {
+		igt_warn("Invalid EDID for IGT connector %s-%d: "
+			  "invalid product code\n",
+			  kmstest_connector_type_str(connector->connector_type),
+			  connector->connector_type_id);
+		goto out;
+	}
+
+	port_id = *(uint32_t *) &edid->serial;
+	igt_debug("Auto-discovery mapped connector %s-%d to Chamelium "
+		  "port ID %d\n",
+		  kmstest_connector_type_str(connector->connector_type),
+		  connector->connector_type_id, port_id);
+
+out:
+	drmModeFreePropertyBlob(edid_blob);
+	return port_id;
+}
+
+/**
+ * chamelium_autodiscover: automagically discover the Chamelium port mapping
+ *
+ * The Chamelium API uses port IDs wheras the Device Under Test uses DRM
+ * connectors. We need to know which Chamelium port is plugged to a given DRM
+ * connector. This has typically been done via a configuration file in the
+ * past (see #chamelium_read_port_mappings), but this function provides an
+ * automatic way to do it.
+ *
+ * We will plug all Chamelium ports with a different EDID on each. Then we'll
+ * read the EDID on each DRM connector and infer the Chamelium port ID.
+ */
+static bool chamelium_autodiscover(struct chamelium *chamelium, int drm_fd)
+{
+	int candidate_ports[CHAMELIUM_MAX_PORTS];
+	size_t candidate_ports_len;
+	drmModeRes *res;
+	drmModeConnector *connector;
+	struct chamelium_port *port;
+	size_t i, j, port_count;
+	int port_id;
+	uint32_t conn_id;
+	struct chamelium_edid *edid;
+	bool found;
+	uint32_t discovered_conns[CHAMELIUM_MAX_PORTS] = {0};
+	char conn_name[64];
+	struct timespec start;
+	uint64_t elapsed_ns;
+
+	candidate_ports_len = chamelium_get_video_ports(chamelium,
+							candidate_ports);
+
+	igt_debug("Starting Chamelium port auto-discovery on %zu ports\n",
+		  candidate_ports_len);
+	igt_gettime(&start);
+
+	edid = chamelium_new_edid(chamelium, igt_kms_get_base_edid());
+
+	/* Set EDID and plug ports we want to auto-discover */
+	port_count = chamelium->port_count;
+	for (i = 0; i < candidate_ports_len; i++) {
+		port_id = candidate_ports[i];
+
+		/* Get or add a chamelium_port slot */
+		port = NULL;
+		for (j = 0; j < chamelium->port_count; j++) {
+			if (chamelium->ports[j].id == port_id) {
+				port = &chamelium->ports[j];
+				break;
+			}
+		}
+		if (!port) {
+			igt_assert(port_count < CHAMELIUM_MAX_PORTS);
+			port = &chamelium->ports[port_count];
+			port_count++;
+
+			port->id = port_id;
+		}
+
+		chamelium_port_set_edid(chamelium, port, edid);
+		chamelium_plug(chamelium, port);
+	}
+
+	/* Reprobe connectors and build the mapping */
+	res = drmModeGetResources(drm_fd);
+	if (!res)
+		return false;
+
+	for (i = 0; i < res->count_connectors; i++) {
+		conn_id = res->connectors[i];
+
+		/* Read the EDID and parse the Chamelium port ID we stored
+		 * there. */
+		connector = drmModeGetConnector(drm_fd, res->connectors[i]);
+		port_id = port_id_from_edid(drm_fd, connector);
+		drmModeFreeConnector(connector);
+		if (port_id < 0)
+			continue;
+
+		/* If we already have a mapping from the config file, check
+		 * that it's consistent. */
+		found = false;
+		for (j = 0; j < chamelium->port_count; j++) {
+			port = &chamelium->ports[j];
+			if (port->connector_id == conn_id) {
+				found = true;
+				igt_assert_f(port->id == port_id,
+					     "Inconsistency detected in .igtrc: "
+					     "connector %s is configured with "
+					     "Chamelium port %d, but is "
+					     "connected to port %d\n",
+					     port->name, port->id, port_id);
+				break;
+			}
+		}
+		if (found)
+			continue;
+
+		/* We got a new mapping */
+		found = false;
+		for (j = 0; j < candidate_ports_len; j++) {
+			if (port_id == candidate_ports[j]) {
+				found = true;
+				discovered_conns[j] = conn_id;
+				break;
+			}
+		}
+		igt_assert_f(found, "Auto-discovered a port (%d) we haven't "
+			     "setup\n", port_id);
+	}
+
+	drmModeFreeResources(res);
+
+	/* We now have a Chamelium port ID ↔ DRM connector ID mapping:
+	 * candidate_ports contains the Chamelium port IDs and
+	 * discovered_conns contains the DRM connector IDs. */
+	for (i = 0; i < candidate_ports_len; i++) {
+		port_id = candidate_ports[i];
+		conn_id = discovered_conns[i];
+		if (!conn_id) {
+			continue;
+		}
+
+		port = &chamelium->ports[chamelium->port_count];
+		chamelium->port_count++;
+
+		port->id = port_id;
+		port->type = chamelium_get_port_type(chamelium, port);
+		port->connector_id = conn_id;
+
+		connector = drmModeGetConnectorCurrent(drm_fd, conn_id);
+		snprintf(conn_name, sizeof(conn_name), "%s-%u",
+			 kmstest_connector_type_str(connector->connector_type),
+			 connector->connector_type_id);
+		drmModeFreeConnector(connector);
+		port->name = strdup(conn_name);
+	}
+
+	elapsed_ns = igt_nsec_elapsed(&start);
+	igt_debug("Auto-discovery took %fms\n",
+		  (float) elapsed_ns / (1000 * 1000));
+
+	return true;
+}
+
 static bool chamelium_read_config(struct chamelium *chamelium, int drm_fd)
 {
 	GError *error = NULL;
@@ -1721,7 +2183,10 @@ static bool chamelium_read_config(struct chamelium *chamelium, int drm_fd)
 		return false;
 	}
 
-	return chamelium_read_port_mappings(chamelium, drm_fd);
+	if (!chamelium_read_port_mappings(chamelium, drm_fd)) {
+		return false;
+	}
+	return chamelium_autodiscover(chamelium, drm_fd);
 }
 
 /**
@@ -1774,6 +2239,7 @@ struct chamelium *chamelium_init(int drm_fd)
 
 	memset(chamelium, 0, sizeof(*chamelium));
 	chamelium->drm_fd = drm_fd;
+	igt_list_init(&chamelium->edids);
 
 	/* Setup the libxmlrpc context */
 	xmlrpc_env_init(&chamelium->env);
@@ -1825,8 +2291,13 @@ void chamelium_deinit(struct chamelium *chamelium)
 		chamelium_plug(chamelium, &chamelium->ports[i]);
 
 	/* Destroy any EDIDs we created to make sure we don't leak them */
-	igt_list_for_each_safe(pos, tmp, &chamelium->edids->link, link) {
-		chamelium_destroy_edid(chamelium, pos->id);
+	igt_list_for_each_safe(pos, tmp, &chamelium->edids, link) {
+		for (i = 0; i < CHAMELIUM_MAX_PORTS; i++) {
+			if (pos->ids[i])
+				chamelium_destroy_edid(chamelium, pos->ids[i]);
+			free(pos->raw[i]);
+		}
+		free(pos->base);
 		free(pos);
 	}
 
@@ -1836,7 +2307,6 @@ void chamelium_deinit(struct chamelium *chamelium)
 	for (i = 0; i < chamelium->port_count; i++)
 		free(chamelium->ports[i].name);
 
-	free(chamelium->ports);
 	free(chamelium);
 }
 

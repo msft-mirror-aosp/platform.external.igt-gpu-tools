@@ -119,7 +119,7 @@ extern char *igt_frame_dump_path;
  *
  * Exit status indicating a test failure
  */
-#define IGT_EXIT_FAILURE 99
+#define IGT_EXIT_FAILURE 98
 
 bool __igt_fixture(void);
 void __igt_fixture_complete(void);
@@ -145,6 +145,8 @@ void __igt_fixture_end(void) __attribute__((noreturn));
 /* subtest infrastructure */
 jmp_buf igt_subtest_jmpbuf;
 typedef int (*igt_opt_handler_t)(int opt, int opt_index, void *data);
+#define IGT_OPT_HANDLER_SUCCESS 0
+#define IGT_OPT_HANDLER_ERROR -2
 #ifndef __GTK_DOC_IGNORE__ /* gtkdoc wants to document this forward decl */
 struct option;
 #endif
@@ -172,7 +174,7 @@ int igt_subtest_init_parse_opts(int *argc, char **argv,
 #define igt_subtest_init(argc, argv) \
 	igt_subtest_init_parse_opts(&argc, argv, NULL, NULL, NULL, NULL, NULL);
 
-bool __igt_run_subtest(const char *subtest_name);
+bool __igt_run_subtest(const char *subtest_name, const char *file, const int line);
 #define __igt_tokencat2(x, y) x ## y
 
 /**
@@ -196,14 +198,14 @@ bool __igt_run_subtest(const char *subtest_name);
  *
  * This is a simpler version of igt_subtest_f()
  */
-#define igt_subtest(name) for (; __igt_run_subtest((name)) && \
+#define igt_subtest(name) for (; __igt_run_subtest((name), __FILE__, __LINE__) && \
 				   (sigsetjmp(igt_subtest_jmpbuf, 1) == 0); \
 				   igt_success())
 #define __igt_subtest_f(tmp, format...) \
 	for (char tmp [256]; \
 	     snprintf( tmp , sizeof( tmp ), \
 		      format), \
-	     __igt_run_subtest( tmp ) && \
+	     __igt_run_subtest(tmp, __FILE__, __LINE__) && \
 	     (sigsetjmp(igt_subtest_jmpbuf, 1) == 0); \
 	     igt_success())
 
@@ -225,8 +227,8 @@ bool __igt_run_subtest(const char *subtest_name);
 const char *igt_subtest_name(void);
 bool igt_only_list_subtests(void);
 
-void __igt_subtest_group_save(int *);
-void __igt_subtest_group_restore(int);
+void __igt_subtest_group_save(int *, int *);
+void __igt_subtest_group_restore(int, int);
 /**
  * igt_subtest_group:
  *
@@ -243,29 +245,47 @@ void __igt_subtest_group_restore(int);
  * group will fail or skip. Subtest groups can be arbitrarily nested.
  */
 #define igt_subtest_group for (int igt_tokencat(__tmpint,__LINE__) = 0, \
-			       igt_tokencat(__save,__LINE__) = 0; \
+			       igt_tokencat(__save,__LINE__) = 0, \
+			       igt_tokencat(__desc,__LINE__) = 0; \
 			       igt_tokencat(__tmpint,__LINE__) < 1 && \
-			       (__igt_subtest_group_save(& igt_tokencat(__save,__LINE__) ), true); \
+			       (__igt_subtest_group_save(& igt_tokencat(__save,__LINE__), \
+							 & igt_tokencat(__desc,__LINE__) ), true); \
 			       igt_tokencat(__tmpint,__LINE__) ++, \
-			       __igt_subtest_group_restore(igt_tokencat(__save,__LINE__) ))
+			       __igt_subtest_group_restore(igt_tokencat(__save,__LINE__), \
+							   igt_tokencat(__desc,__LINE__)))
 
 /**
- * igt_main:
+ * igt_main_args:
+ * @extra_short_opts: getopt_long() compliant list with additional short options
+ * @extra_long_opts: getopt_long() compliant list with additional long options
+ * @help_str: help string for the additional options
+ * @extra_opt_handler: handler for the additional options
+ * @handler_data: user data given to @extra_opt_handler when invoked
  *
- * This is a magic control flow block used instead of a main() function for
- * tests with subtests. Open-coding the main() function is only recommended if
- * the test needs to parse additional command line arguments of its own.
+ * This is a magic control flow block used instead of a main()
+ * function for tests with subtests, along with custom command line
+ * arguments. The macro parameters are passed directly to
+ * #igt_subtest_init_parse_opts.
  */
-#define igt_main \
+#define igt_main_args(short_opts, long_opts, help_str, opt_handler, handler_data) \
 	static void igt_tokencat(__real_main, __LINE__)(void); \
 	int main(int argc, char **argv) { \
-		igt_subtest_init_parse_opts(&argc, argv, NULL, NULL, NULL, \
-					    NULL, NULL); \
+		igt_subtest_init_parse_opts(&argc, argv, \
+					    short_opts, long_opts, help_str, \
+					    opt_handler, handler_data); \
 		igt_tokencat(__real_main, __LINE__)(); \
 		igt_exit(); \
 	} \
 	static void igt_tokencat(__real_main, __LINE__)(void) \
 
+
+/**
+ * igt_main:
+ *
+ * This is a magic control flow block used instead of a main() function for
+ * tests with subtests. Open-coding the main() function is not recommended.
+ */
+#define igt_main igt_main_args(NULL, NULL, NULL, NULL, NULL)
 
 const char *igt_test_name(void);
 void igt_simple_init_parse_opts(int *argc, char **argv,
@@ -289,22 +309,39 @@ void igt_simple_init_parse_opts(int *argc, char **argv,
 #define igt_simple_init(argc, argv) \
 	igt_simple_init_parse_opts(&argc, argv, NULL, NULL, NULL, NULL, NULL);
 
+
 /**
- * igt_simple_main:
+ * igt_simple_main_args:
+ * @extra_short_opts: getopt_long() compliant list with additional short options
+ * @extra_long_opts: getopt_long() compliant list with additional long options
+ * @help_str: help string for the additional options
+ * @extra_opt_handler: handler for the additional options
+ * @handler_data: user data given to @extra_opt_handler when invoked
  *
- * This is a magic control flow block used instead of a main() function for
- * simple tests. Open-coding the main() function is only recommended if
- * the test needs to parse additional command line arguments of its own.
+ * This is a magic control flow block used instead of a main()
+ * function for simple tests with custom command line arguments. The
+ * macro parameters are passed directly to
+ * #igt_simple_init_parse_opts.
  */
-#define igt_simple_main \
+#define igt_simple_main_args(short_opts, long_opts, help_str, opt_handler, handler_data) \
 	static void igt_tokencat(__real_main, __LINE__)(void); \
 	int main(int argc, char **argv) { \
-		igt_simple_init_parse_opts(&argc, argv, NULL, NULL, NULL, \
-					   NULL, NULL); \
+		igt_simple_init_parse_opts(&argc, argv, \
+					   short_opts, long_opts, help_str, \
+					   opt_handler, handler_data);	\
 		igt_tokencat(__real_main, __LINE__)(); \
 		igt_exit(); \
 	} \
 	static void igt_tokencat(__real_main, __LINE__)(void) \
+
+
+/**
+ * igt_simple_main:
+ *
+ * This is a magic control flow block used instead of a main() function for
+ * simple tests. Open-coding the main() function is not recommended.
+ */
+#define igt_simple_main igt_simple_main_args(NULL, NULL, NULL, NULL, NULL)
 
 /**
  * igt_constructor:
@@ -350,6 +387,124 @@ void igt_fatal_error(void) __attribute__((noreturn));
 static inline void igt_ignore_warn(bool value)
 {
 }
+
+__attribute__((format(printf, 1, 2)))
+void igt_describe_f(const char *fmt, ...);
+
+/**
+ * igt_describe:
+ * @dsc: string containing description
+ *
+ * Attach a description to the following #igt_subtest or #igt_subtest_group
+ * block.
+ *
+ * The description should complement the test/subtest name and provide more
+ * context on what is being tested. It should explain the idea of the test and
+ * do not mention implementation details, so that it never goes out of date.
+ *
+ * DO:
+ *  * focus on the userspace's perspective
+ *  * try to capture the reason for the test's existence
+ *  * be brief
+ *
+ * DON'T:
+ *  * try to translate the code into English
+ *  * explain all the checks the test does
+ *  * delve on the implementation
+ *
+ * Good examples:
+ *  * "make sure that legacy cursor updates do not stall atomic commits"
+ *  * "check that atomic updates of many planes are indeed atomic and take
+ *     effect immediately after the commit"
+ *  * "make sure that the meta-data exposed by the kernel to the userspace
+ *     is correct and matches the used EDID"
+ *
+ * Bad examples:
+ *  * "spawn 10 threads, each pinning cpu core with a busy loop..."
+ *  * "randomly generate holes in a primary plane then try to cover each hole
+ *    with a plane and make sure that CRC matches, do 25 gazillion rounds of
+ *    that..."
+ *
+ *
+ * Resulting #igt_subtest documentation is a concatenation of its own
+ * description and all the parenting #igt_subtest_group descriptions, starting
+ * from the outermost one. Example:
+ *
+ * |[<!-- language="C" -->
+ * #include "igt.h"
+ *
+ * IGT_TEST_DESCRIPTION("Global description of the whole binary");
+ * igt_main
+ * {
+ * 	igt_describe("Desc of the subgroup with A and B");
+ * 	igt_subtest_group {
+ * 		igt_describe("Desc of the subtest A");
+ * 		igt_subtest("subtest-a") {
+ * 			...
+ * 		}
+ *
+ * 		igt_describe("Desc of the subtest B");
+ * 		igt_subtest("subtest-b") {
+ * 			...
+ * 		}
+ * 	}
+ *
+ * 	igt_describe("Desc of the subtest C");
+ * 	igt_subtest("subtest-c") {
+ * 		...
+ * 	}
+ * }
+ * ]|
+ *
+ * It's will accessible via --describe command line switch:
+ *
+ * |[
+ * $ test --describe
+ * Global description of the whole binary
+ *
+ * SUB subtest-a test.c:5:
+ *   Desc of the subgroup with A and B
+ *
+ *   Desc of the subtest A
+ *
+ * SUB subtest-b test.c:10:
+ *   Desc of the subgroup with A and B
+ *
+ *   Desc of the subtest B
+ *
+ * SUB subtest-c test.c:15:
+ *   Desc of the subtest C
+ * ]|
+ *
+ * Every single #igt_subtest does not have to be preceded with a #igt_describe
+ * as long as it has good-enough explanation provided on the #igt_subtest_group
+ * level.
+ *
+ * Example:
+ *
+ * |[<!-- language="C" -->
+ * #include "igt.h"
+ *
+ * igt_main
+ * {
+ * 	igt_describe("check xyz with different tilings");
+ * 	igt_subtest_group {
+ * 		// no need for extra description, group is enough and tiling is
+ * 		// obvious from the test name
+ * 		igt_subtest("foo-tiling-x") {
+ * 			...
+ * 		}
+ *
+ * 		igt_subtest("foo-tiling-y") {
+ * 			...
+ * 		}
+ * 	}
+ * }
+ * ]|
+ *
+ */
+#define igt_describe(dsc) \
+	igt_describe_f("%s", dsc)
 
 /**
  * igt_assert:
@@ -843,6 +998,7 @@ bool igt_run_in_simulation(void);
 void igt_skip_on_simulation(void);
 
 extern const char *igt_interactive_debug;
+extern bool igt_skip_crc_compare;
 
 /**
  * igt_log_level:

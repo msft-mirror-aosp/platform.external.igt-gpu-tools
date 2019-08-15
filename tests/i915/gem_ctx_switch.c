@@ -44,7 +44,8 @@
 #define LOCAL_I915_EXEC_NO_RELOC (1<<11)
 #define LOCAL_I915_EXEC_HANDLE_LUT (1<<12)
 
-#define INTERRUPTIBLE 1
+#define INTERRUPTIBLE 0x1
+#define QUEUE 0x2
 
 static double elapsed(const struct timespec *start, const struct timespec *end)
 {
@@ -54,7 +55,7 @@ static double elapsed(const struct timespec *start, const struct timespec *end)
 
 static int measure_qlen(int fd,
 			struct drm_i915_gem_execbuffer2 *execbuf,
-			unsigned int *engine, unsigned int nengine,
+			const struct intel_engine_data *engines,
 			int timeout)
 {
 	const struct drm_i915_gem_exec_object2 * const obj =
@@ -62,15 +63,17 @@ static int measure_qlen(int fd,
 	uint32_t ctx[64];
 	int min = INT_MAX, max = 0;
 
-	for (int i = 0; i < ARRAY_SIZE(ctx); i++)
+	for (int i = 0; i < ARRAY_SIZE(ctx); i++) {
 		ctx[i] = gem_context_create(fd);
+		gem_context_set_all_engines(fd, ctx[i]);
+	}
 
-	for (unsigned int n = 0; n < nengine; n++) {
+	for (unsigned int n = 0; n < engines->nengines; n++) {
 		uint64_t saved = execbuf->flags;
 		struct timespec tv = {};
 		int q;
 
-		execbuf->flags |= engine[n];
+		execbuf->flags |= engines->engines[n].flags;
 
 		for (int i = 0; i < ARRAY_SIZE(ctx); i++) {
 			execbuf->rsvd1 = ctx[i];
@@ -89,7 +92,8 @@ static int measure_qlen(int fd,
 		 * Be conservative and aim not to overshoot timeout, so scale
 		 * down by 8 for hopefully a max of 12.5% error.
 		 */
-		q = ARRAY_SIZE(ctx) * timeout * 1e9 / igt_nsec_elapsed(&tv) / 8 + 1;
+		q = ARRAY_SIZE(ctx) * timeout * 1e9 / igt_nsec_elapsed(&tv) /
+		    8 + 1;
 		if (q < min)
 			min = q;
 		if (q > max)
@@ -106,7 +110,7 @@ static int measure_qlen(int fd,
 }
 
 static void single(int fd, uint32_t handle,
-		   const struct intel_execution_engine *e,
+		   const struct intel_execution_engine2 *e2,
 		   unsigned flags,
 		   const int ncpus,
 		   int timeout)
@@ -124,10 +128,15 @@ static void single(int fd, uint32_t handle,
 	shared = mmap(NULL, 4096, PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
 	igt_assert(shared != MAP_FAILED);
 
-	gem_require_ring(fd, e->exec_id | e->flags);
+	for (n = 0; n < 64; n++) {
+		if (flags & QUEUE)
+			contexts[n] = gem_queue_create(fd);
+		else
+			contexts[n] = gem_context_create(fd);
 
-	for (n = 0; n < 64; n++)
-		contexts[n] = gem_context_create(fd);
+		if (gem_context_has_engine_map(fd, 0))
+			gem_context_set_all_engines(fd, contexts[n]);
+	}
 
 	memset(&obj, 0, sizeof(obj));
 	obj.handle = handle;
@@ -147,12 +156,12 @@ static void single(int fd, uint32_t handle,
 	execbuf.buffers_ptr = to_user_pointer(&obj);
 	execbuf.buffer_count = 1;
 	execbuf.rsvd1 = contexts[0];
-	execbuf.flags = e->exec_id | e->flags;
+	execbuf.flags = e2->flags;
 	execbuf.flags |= LOCAL_I915_EXEC_HANDLE_LUT;
 	execbuf.flags |= LOCAL_I915_EXEC_NO_RELOC;
 	igt_require(__gem_execbuf(fd, &execbuf) == 0);
 	if (__gem_execbuf(fd, &execbuf)) {
-		execbuf.flags = e->exec_id | e->flags;
+		execbuf.flags = e2->flags;
 		reloc.target_handle = obj.handle;
 		gem_execbuf(fd, &execbuf);
 	}
@@ -185,7 +194,8 @@ static void single(int fd, uint32_t handle,
 		clock_gettime(CLOCK_MONOTONIC, &now);
 
 		igt_info("[%d] %s: %'u cycles: %.3fus%s\n",
-			 child, e->name, count, elapsed(&start, &now)*1e6 / count,
+			 child, e2->name, count,
+			 elapsed(&start, &now) * 1e6 / count,
 			 flags & INTERRUPTIBLE ? " (interruptible)" : "");
 
 		shared[child].elapsed = elapsed(&start, &now);
@@ -204,7 +214,7 @@ static void single(int fd, uint32_t handle,
 		}
 
 		igt_info("Total %s: %'lu cycles: %.3fus%s\n",
-			 e->name, total, max*1e6 / total,
+			 e2->name, total, max*1e6 / total,
 			 flags & INTERRUPTIBLE ? " (interruptible)" : "");
 	}
 
@@ -218,22 +228,21 @@ static void all(int fd, uint32_t handle, unsigned flags, int timeout)
 {
 	struct drm_i915_gem_execbuffer2 execbuf;
 	struct drm_i915_gem_exec_object2 obj[2];
-	unsigned int engine[16], e;
-	const char *name[16];
+	struct intel_engine_data engines = { };
 	uint32_t contexts[65];
-	unsigned int nengine;
 	int n, qlen;
 
-	nengine = 0;
-	for_each_physical_engine(fd, e) {
-		engine[nengine] = e;
-		name[nengine] = e__->name;
-		nengine++;
-	}
-	igt_require(nengine);
+	engines = intel_init_engine_list(fd, 0);
+	igt_require(engines.nengines);
 
-	for (n = 0; n < ARRAY_SIZE(contexts); n++)
-		contexts[n] = gem_context_create(fd);
+	for (n = 0; n < ARRAY_SIZE(contexts); n++) {
+		if (flags & QUEUE)
+			contexts[n] = gem_queue_create(fd);
+		else
+			contexts[n] = gem_context_create(fd);
+
+		gem_context_set_all_engines(fd, contexts[n]);
+	}
 
 	memset(obj, 0, sizeof(obj));
 	obj[1].handle = handle;
@@ -247,7 +256,7 @@ static void all(int fd, uint32_t handle, unsigned flags, int timeout)
 	igt_require(__gem_execbuf(fd, &execbuf) == 0);
 	gem_sync(fd, handle);
 
-	qlen = measure_qlen(fd, &execbuf, engine, nengine, timeout);
+	qlen = measure_qlen(fd, &execbuf, &engines, timeout);
 	igt_info("Using timing depth of %d batches\n", qlen);
 
 	execbuf.buffers_ptr = to_user_pointer(obj);
@@ -255,13 +264,15 @@ static void all(int fd, uint32_t handle, unsigned flags, int timeout)
 
 	for (int pot = 2; pot <= 64; pot *= 2) {
 		for (int nctx = pot - 1; nctx <= pot + 1; nctx++) {
-			igt_fork(child, nengine) {
+			igt_fork(child, engines.nengines) {
 				struct timespec start, now;
 				unsigned int count = 0;
 
 				obj[0].handle = gem_create(fd, 4096);
-				execbuf.flags |= engine[child];
-				for (int loop = 0; loop < ARRAY_SIZE(contexts); loop++) {
+				execbuf.flags |= engines.engines[child].flags;
+				for (int loop = 0;
+				     loop < ARRAY_SIZE(contexts);
+				     loop++) {
 					execbuf.rsvd1 = contexts[loop];
 					gem_execbuf(fd, &execbuf);
 				}
@@ -270,7 +281,8 @@ static void all(int fd, uint32_t handle, unsigned flags, int timeout)
 				clock_gettime(CLOCK_MONOTONIC, &start);
 				do {
 					for (int loop = 0; loop < qlen; loop++) {
-						execbuf.rsvd1 = contexts[loop % nctx];
+						execbuf.rsvd1 =
+							contexts[loop % nctx];
 						gem_execbuf(fd, &execbuf);
 					}
 					count += qlen;
@@ -282,8 +294,11 @@ static void all(int fd, uint32_t handle, unsigned flags, int timeout)
 				gem_close(fd, obj[0].handle);
 
 				igt_info("[%d:%d] %s: %'u cycles: %.3fus%s (elapsed: %.3fs)\n",
-					 nctx, child, name[child], count, elapsed(&start, &now)*1e6 / count,
-					 flags & INTERRUPTIBLE ? " (interruptible)" : "",
+					 nctx, child,
+					 engines.engines[child].name, count,
+					 elapsed(&start, &now) * 1e6 / count,
+					 flags & INTERRUPTIBLE ?
+					 " (interruptible)" : "",
 					 elapsed(&start, &now));
 			}
 			igt_waitchildren();
@@ -297,7 +312,19 @@ static void all(int fd, uint32_t handle, unsigned flags, int timeout)
 igt_main
 {
 	const int ncpus = sysconf(_SC_NPROCESSORS_ONLN);
+	const struct intel_execution_engine2 *e2;
 	const struct intel_execution_engine *e;
+	static const struct {
+		const char *name;
+		unsigned int flags;
+		bool (*require)(int fd);
+	} phases[] = {
+		{ "", 0, NULL },
+		{ "-interruptible", INTERRUPTIBLE, NULL },
+		{ "-queue", QUEUE, gem_has_queues },
+		{ "-queue-interruptible", QUEUE | INTERRUPTIBLE, gem_has_queues },
+		{ }
+	};
 	uint32_t light = 0, heavy;
 	int fd = -1;
 
@@ -318,28 +345,85 @@ igt_main
 		igt_fork_hang_detector(fd);
 	}
 
+	/* Legacy testing must be first. */
 	for (e = intel_execution_engines; e->name; e++) {
-		igt_subtest_f("%s%s", e->exec_id == 0 ? "basic-" : "", e->name)
-			single(fd, light, e, 0, 1, 5);
+		struct intel_execution_engine2 e2__;
 
-		igt_skip_on_simulation();
+		e2__ = gem_eb_flags_to_engine(e->exec_id | e->flags);
+		if (e2__.flags == -1)
+			continue; /* I915_EXEC_BSD with no ring selectors */
 
-		igt_subtest_f("%s%s-heavy", e->exec_id == 0 ? "basic-" : "", e->name)
-			single(fd, heavy, e, 0, 1, 5);
-		igt_subtest_f("%s-interruptible", e->name)
-			single(fd, light, e, INTERRUPTIBLE, 1, 150);
-		igt_subtest_f("forked-%s", e->name)
-			single(fd, light, e, 0, ncpus, 150);
-		igt_subtest_f("forked-%s-heavy", e->name)
-			single(fd, heavy, e, 0, ncpus, 150);
-		igt_subtest_f("forked-%s-interruptible", e->name)
-			single(fd, light, e, INTERRUPTIBLE, ncpus, 150);
+		e2 = &e2__;
+
+		for (typeof(*phases) *p = phases; p->name; p++) {
+			igt_subtest_group {
+				igt_fixture {
+					gem_require_ring(fd, e2->flags);
+					if (p->require)
+						igt_require(p->require(fd));
+				}
+
+				igt_subtest_f("legacy-%s%s", e->name, p->name)
+					single(fd, light, e2, p->flags, 1, 5);
+
+				igt_skip_on_simulation();
+
+				igt_subtest_f("legacy-%s-heavy%s",
+					      e->name, p->name)
+					single(fd, heavy, e2, p->flags, 1, 5);
+				igt_subtest_f("legacy-%s-forked%s",
+					      e->name, p->name)
+					single(fd, light, e2, p->flags, ncpus,
+					       150);
+				igt_subtest_f("legacy-%s-forked-heavy%s",
+					      e->name, p->name)
+					single(fd, heavy, e2, p->flags, ncpus,
+					       150);
+			}
+		}
 	}
 
-	igt_subtest("basic-all-light")
+	/* Must come after legacy subtests. */
+	__for_each_physical_engine(fd, e2) {
+		for (typeof(*phases) *p = phases; p->name; p++) {
+			igt_subtest_group {
+				igt_fixture {
+					if (p->require)
+						igt_require(p->require(fd));
+				}
+
+				igt_subtest_f("%s%s", e2->name, p->name)
+					single(fd, light, e2, p->flags, 1, 5);
+
+				igt_skip_on_simulation();
+
+				igt_subtest_f("%s-heavy%s", e2->name, p->name)
+					single(fd, heavy, e2, p->flags, 1, 5);
+				igt_subtest_f("%s-forked%s", e2->name, p->name)
+					single(fd, light, e2, p->flags, ncpus,
+					       150);
+				igt_subtest_f("%s-forked-heavy%s",
+					      e2->name, p->name)
+					single(fd, heavy, e2, p->flags, ncpus,
+					       150);
+			}
+		}
+	}
+
+	igt_subtest("all-light")
 		all(fd, light, 0, 5);
-	igt_subtest("basic-all-heavy")
+	igt_subtest("all-heavy")
 		all(fd, heavy, 0, 5);
+
+	igt_subtest_group {
+		igt_fixture {
+			igt_require(gem_has_queues(fd));
+		}
+		igt_subtest("queue-light")
+			all(fd, light, QUEUE, 5);
+		igt_subtest("queue-heavy")
+			all(fd, heavy, QUEUE, 5);
+	}
 
 	igt_fixture {
 		igt_stop_hang_detector();

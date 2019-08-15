@@ -1,5 +1,5 @@
 /*
- * Copyright © 2017 Intel Corporation
+ * Copyright © 2019 Intel Corporation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -20,9 +20,16 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  *
+ * Authors: Simon Ser <simon.ser@intel.com>
  */
 
-#include "igt.h"
+#include "config.h"
+
+#include <stdbool.h>
+
+#include "igt_core.h"
+#include "igt_kms.h"
+#include "igt_edid.h"
 
 static const unsigned char edid_header[] = {
 	0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00
@@ -30,67 +37,66 @@ static const unsigned char edid_header[] = {
 
 /**
  * Sanity check the header of the base EDID block.
- *
- * Return: 8 if the header is perfect, down to 0 if it's totally wrong.
  */
-static int edid_header_is_valid(const unsigned char *raw_edid)
+static bool edid_header_is_valid(const unsigned char *raw_edid)
 {
-	int i, score = 0;
+	size_t i;
 
 	for (i = 0; i < sizeof(edid_header); i++)
-		if (raw_edid[i] == edid_header[i])
-			score++;
+		if (raw_edid[i] != edid_header[i])
+			return false;
 
-	return score;
+	return true;
 }
 
 /**
  * Sanity check the checksum of the EDID block.
- *
- * Return: 0 if the block is perfect.
- * See byte 127 of spec
- * https://en.wikipedia.org/wiki/Extended_Display_Identification_Data#EDID_1.3_data_format
  */
-static int edid_block_checksum(const unsigned char *raw_edid)
+static bool edid_block_checksum(const unsigned char *raw_edid)
 {
-	int i;
+	size_t i;
 	unsigned char csum = 0;
+
 	for (i = 0; i < EDID_LENGTH; i++) {
 		csum += raw_edid[i];
 	}
 
-	return csum;
+	return csum == 0;
 }
 
-typedef void (*hdmi_inject_func)(const unsigned char *edid, size_t length,
-				 unsigned char *new_edid_ptr[], size_t *new_length);
+typedef const unsigned char *(*get_edid_func)(void);
 
 igt_simple_main
 {
 	const struct {
 		const char *desc;
-		hdmi_inject_func inject;
+		get_edid_func f;
+		size_t exts;
 	} funcs[] = {
-		{ "3D", kmstest_edid_add_3d },
-		{ "4k", kmstest_edid_add_4k },
-		{ "audio", kmstest_edid_add_audio },
-		{ NULL, NULL },
+		{ "base", igt_kms_get_base_edid, 0 },
+		{ "alt", igt_kms_get_alt_edid, 0 },
+		{ "hdmi_audio", igt_kms_get_hdmi_audio_edid, 1 },
+		{ "4k", igt_kms_get_4k_edid, 1 },
+		{ "3d", igt_kms_get_3d_edid, 1 },
+		{0},
 	}, *f;
+	const unsigned char *edid;
+	size_t i;
 
-	for (f = funcs; f->inject; f++) {
-		unsigned char *edid;
-		size_t length;
+	for (f = funcs; f->f; f++) {
+		edid = f->f();
 
-		f->inject(igt_kms_get_base_edid(), EDID_LENGTH, &edid,
-			  &length);
-
-		igt_assert_f(edid_header_is_valid(edid) == 8,
-			     "invalid header on HDMI %s", f->desc);
+		igt_assert_f(edid_header_is_valid(edid),
+			     "invalid header on %s EDID", f->desc);
 		/* check base edid block */
-		igt_assert_f(edid_block_checksum(edid) == 0,
-			     "checksum failed on HDMI %s", f->desc);
-		/* check extension block */
-		igt_assert_f(edid_block_checksum(edid + EDID_LENGTH) == 0,
-			     "CEA block checksum failed on HDMI %s", f->desc);
+		igt_assert_f(edid_block_checksum(edid),
+			     "checksum failed on %s EDID", f->desc);
+		/* check extension blocks, if any */
+		igt_assert_f(edid[126] == f->exts,
+			     "unexpected number of extensions on %s EDID",
+			     f->desc);
+		for (i = 0; i < f->exts; i++)
+			igt_assert_f(edid_block_checksum(edid + (i + 1) * EDID_LENGTH),
+				     "CEA block checksum failed on %s EDID", f->desc);
 	}
 }

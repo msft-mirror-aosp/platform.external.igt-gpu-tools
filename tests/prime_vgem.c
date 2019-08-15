@@ -82,6 +82,8 @@ static void test_fence_read(int i915, int vgem)
 	close(dmabuf);
 
 	igt_fork(child, 1) {
+		close(master[0]);
+		close(slave[1]);
 		for (i = 0; i < 1024; i++) {
 			uint32_t tmp;
 			gem_read(i915, handle, 4096*i, &tmp, sizeof(tmp));
@@ -97,6 +99,8 @@ static void test_fence_read(int i915, int vgem)
 		gem_close(i915, handle);
 	}
 
+	close(master[1]);
+	close(slave[0]);
 	read(master[0], &i, sizeof(i));
 	fence = vgem_fence_attach(vgem, &scratch, VGEM_FENCE_WRITE);
 	write(slave[1], &i, sizeof(i));
@@ -110,8 +114,6 @@ static void test_fence_read(int i915, int vgem)
 
 	igt_waitchildren();
 	close(master[0]);
-	close(master[1]);
-	close(slave[0]);
 	close(slave[1]);
 }
 
@@ -137,6 +139,8 @@ static void test_fence_mmap(int i915, int vgem)
 	close(dmabuf);
 
 	igt_fork(child, 1) {
+		close(master[0]);
+		close(slave[1]);
 		ptr = gem_mmap__gtt(i915, handle, 4096*1024, PROT_READ);
 
 		gem_set_domain(i915, handle, I915_GEM_DOMAIN_GTT, 0);
@@ -153,6 +157,8 @@ static void test_fence_mmap(int i915, int vgem)
 		gem_close(i915, handle);
 	}
 
+	close(master[1]);
+	close(slave[0]);
 	read(master[0], &i, sizeof(i));
 	fence = vgem_fence_attach(vgem, &scratch, VGEM_FENCE_WRITE);
 	write(slave[1], &i, sizeof(i));
@@ -166,8 +172,6 @@ static void test_fence_mmap(int i915, int vgem)
 
 	igt_waitchildren();
 	close(master[0]);
-	close(master[1]);
-	close(slave[0]);
 	close(slave[1]);
 }
 
@@ -741,16 +745,30 @@ static void flip_to_vgem(int i915, int vgem,
 
 static void test_flip(int i915, int vgem, unsigned hang)
 {
-	struct vgem_bo bo[2];
+	drmModeModeInfo *mode = NULL;
 	uint32_t fb_id[2], handle[2], crtc_id;
+	igt_display_t display;
+	igt_output_t *output;
+	struct vgem_bo bo[2];
+	enum pipe pipe;
+
+	igt_display_require(&display, i915);
+	igt_display_require_output(&display);
+
+	for_each_pipe_with_valid_output(&display, pipe, output) {
+		mode = igt_output_get_mode(output);
+		break;
+	}
+
+	igt_assert(mode);
 
 	for (int i = 0; i < 2; i++) {
 		uint32_t strides[4] = {};
 		uint32_t offsets[4] = {};
 		int fd;
 
-		bo[i].width = 1024;
-		bo[i].height = 768;
+		bo[i].width = mode->hdisplay;
+		bo[i].height = mode->vdisplay;
 		bo[i].bpp = 32;
 		vgem_create(vgem, &bo[i]);
 
@@ -831,7 +849,7 @@ igt_main
 			      e->exec_id == 0 ? "basic-" : "",
 			      e->name) {
 			gem_require_ring(i915, e->exec_id | e->flags);
-			igt_require(gem_can_store_dword(i915, e->exec_id) | e->flags);
+			igt_require(gem_can_store_dword(i915, e->exec_id | e->flags));
 
 			gem_quiescent_gpu(i915);
 			test_sync(i915, vgem, e->exec_id, e->flags);
@@ -843,7 +861,7 @@ igt_main
 			      e->exec_id == 0 ? "basic-" : "",
 			      e->name) {
 			gem_require_ring(i915, e->exec_id | e->flags);
-			igt_require(gem_can_store_dword(i915, e->exec_id) | e->flags);
+			igt_require(gem_can_store_dword(i915, e->exec_id | e->flags));
 
 			gem_quiescent_gpu(i915);
 			test_busy(i915, vgem, e->exec_id, e->flags);
@@ -855,7 +873,7 @@ igt_main
 			      e->exec_id == 0 ? "basic-" : "",
 			      e->name) {
 			gem_require_ring(i915, e->exec_id | e->flags);
-			igt_require(gem_can_store_dword(i915, e->exec_id) | e->flags);
+			igt_require(gem_can_store_dword(i915, e->exec_id | e->flags));
 
 			gem_quiescent_gpu(i915);
 			test_wait(i915, vgem, e->exec_id, e->flags);
@@ -878,7 +896,7 @@ igt_main
 					e->exec_id == 0 ? "basic-" : "",
 					e->name) {
 				gem_require_ring(i915, e->exec_id | e->flags);
-				igt_require(gem_can_store_dword(i915, e->exec_id) | e->flags);
+				igt_require(gem_can_store_dword(i915, e->exec_id | e->flags));
 
 				gem_quiescent_gpu(i915);
 				test_fence_wait(i915, vgem, e->exec_id, e->flags);

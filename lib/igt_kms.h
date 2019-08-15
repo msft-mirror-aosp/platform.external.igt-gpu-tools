@@ -194,11 +194,8 @@ enum intel_broadcast_rgb_mode {
 
 bool kmstest_force_connector(int fd, drmModeConnector *connector,
 			     enum kmstest_force_connector_state state);
-void kmstest_edid_add_3d(const unsigned char *edid, size_t length, unsigned char *new_edid_ptr[], size_t *new_length);
-void kmstest_edid_add_4k(const unsigned char *edid, size_t length, unsigned char *new_edid_ptr[], size_t *new_length);
-void kmstest_edid_add_audio(const unsigned char *edid, size_t length, unsigned char *new_edid_ptr[], size_t *new_length);
 void kmstest_force_edid(int drm_fd, drmModeConnector *connector,
-			const unsigned char *edid, size_t length);
+			const unsigned char *edid);
 
 bool kmstest_get_connector_default_mode(int drm_fd, drmModeConnector *connector,
 					drmModeModeInfo *mode);
@@ -229,6 +226,8 @@ void kmstest_dumb_destroy(int fd, uint32_t handle);
 void kmstest_wait_for_pageflip(int fd);
 unsigned int kmstest_get_vblank(int fd, int pipe, unsigned int flags);
 void igt_assert_plane_visible(int fd, enum pipe pipe, int plane_index, bool visibility);
+
+bool kms_has_vblank(int fd);
 
 /*
  * A small modeset API
@@ -754,9 +753,16 @@ void igt_reset_connectors(void);
 
 uint32_t kmstest_get_vbl_flag(uint32_t pipe_id);
 
+struct cea_sad;
+struct cea_speaker_alloc;
+
 #define EDID_LENGTH 128
-const unsigned char* igt_kms_get_base_edid(void);
-const unsigned char* igt_kms_get_alt_edid(void);
+const unsigned char *igt_kms_get_base_edid(void);
+const unsigned char *igt_kms_get_alt_edid(void);
+const unsigned char *igt_kms_get_hdmi_audio_edid(void);
+const unsigned char *igt_kms_get_dp_audio_edid(void);
+const unsigned char *igt_kms_get_4k_edid(void);
+const unsigned char *igt_kms_get_3d_edid(void);
 
 struct udev_monitor *igt_watch_hotplug(void);
 bool igt_hotplug_detected(struct udev_monitor *mon,

@@ -34,6 +34,21 @@
 #include "igt_core.h"
 #include "igt_edid.h"
 
+/**
+ * SECTION:igt_edid
+ * @short_description: EDID generation library
+ * @title: EDID
+ * @include: igt_edid.h
+ *
+ * This library contains helpers to generate custom EDIDs.
+
+ * The E-EDID specification is available at:
+ * https://glenwing.github.io/docs/VESA-EEDID-A2.pdf
+ *
+ * The EDID CEA extension is defined in CEA-861-D section 7. The HDMI VSDB is
+ * defined in the HDMI spec.
+ */
+
 static const char edid_header[] = {
 	0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00
 };
@@ -41,6 +56,8 @@ static const char edid_header[] = {
 static const char monitor_range_padding[] = {
 	0x0a, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20
 };
+
+const uint8_t hdmi_ieee_oui[3] = {0x03, 0x0C, 0x00};
 
 /* vfreq is in Hz */
 static void std_timing_set(struct std_timing *st, int hsize, int vfreq,
@@ -110,7 +127,7 @@ void detailed_timing_set_mode(struct detailed_timing *dt, drmModeModeInfo *mode,
 	pt->width_height_mm_hi = (width_mm & 0xF00) >> 4
 				 | (height_mm & 0xF00) >> 8;
 
-	pt->misc = 0;
+	pt->misc = EDID_PT_SYNC_DIGITAL_SEPARATE;
 	if (mode->flags & DRM_MODE_FLAG_PHSYNC)
 		pt->misc |= EDID_PT_HSYNC_POSITIVE;
 	if (mode->flags & DRM_MODE_FLAG_PVSYNC)
@@ -170,6 +187,19 @@ void detailed_timing_set_string(struct detailed_timing *dt,
 	len = strlen(str);
 	if (len < sizeof(ds->str))
 		ds->str[len] = '\n';
+}
+
+/**
+ * edid_get_mfg: reads the 3-letter manufacturer identifier
+ *
+ * The string is *not* NULL-terminated.
+ */
+void edid_get_mfg(const struct edid *edid, char out[static 3])
+{
+	out[0] = ((edid->mfg_id[0] & 0x7C) >> 2) + '@';
+	out[1] = (((edid->mfg_id[0] & 0x03) << 3) |
+		 ((edid->mfg_id[1] & 0xE0) >> 5)) + '@';
+	out[2] = (edid->mfg_id[1] & 0x1F) + '@';
 }
 
 static void edid_set_mfg(struct edid *edid, const char mfg[static 3])
@@ -252,19 +282,192 @@ void edid_init_with_mode(struct edid *edid, drmModeModeInfo *mode)
 				   EDID_DETAIL_MONITOR_NAME, "IGT");
 }
 
+static uint8_t compute_checksum(const uint8_t *buf, size_t size)
+{
+	size_t i;
+	uint8_t sum = 0;
+
+	assert(size > 0);
+	for (i = 0; i < size - 1; i++) {
+		sum += buf[i];
+	}
+
+	return 256 - sum;
+}
+
 /**
  * edid_update_checksum: compute and update the EDID checksum
  */
 void edid_update_checksum(struct edid *edid)
 {
-	size_t i;
-	const uint8_t *buf = (const uint8_t *) edid;
-	uint8_t sum = 0;
+	edid->checksum = compute_checksum((uint8_t *) edid,
+					  sizeof(struct edid));
+}
 
-	/* calculate checksum */
-	for (i = 0; i < sizeof(struct edid) - 1; i++) {
-		sum = sum + buf[i];
-	}
+/**
+ * edid_get_size: return the size of the EDID block in bytes including EDID
+ * extensions, if any.
+ */
+size_t edid_get_size(const struct edid *edid)
+{
+	return sizeof(struct edid) +
+	       edid->extensions_len * sizeof(struct edid_ext);
+}
 
-	edid->checksum = 256 - sum;
+/**
+ * cea_sad_init_pcm:
+ * @channels: the number of supported channels (max. 8)
+ * @sampling_rates: bitfield of enum cea_sad_sampling_rate
+ * @sample_sizes: bitfield of enum cea_sad_pcm_sample_size
+ *
+ * Initialize a Short Audio Descriptor to advertise PCM support.
+ */
+void cea_sad_init_pcm(struct cea_sad *sad, int channels,
+		      uint8_t sampling_rates, uint8_t sample_sizes)
+{
+	assert(channels <= 8);
+	sad->format_channels = CEA_SAD_FORMAT_PCM << 3 | (channels - 1);
+	sad->sampling_rates = sampling_rates;
+	sad->bitrate = sample_sizes;
+}
+
+/**
+ * cea_vsdb_get_hdmi_default:
+ *
+ * Returns the default Vendor Specific Data block for HDMI.
+ */
+const struct cea_vsdb *cea_vsdb_get_hdmi_default(size_t *size)
+{
+	/* We'll generate a VSDB with 2 extension fields. */
+	static char raw[CEA_VSDB_HDMI_MIN_SIZE + 2] = {0};
+	struct cea_vsdb *vsdb;
+	struct hdmi_vsdb *hdmi;
+
+	*size = sizeof(raw);
+
+	/* Magic incantation. Works better if you orient your screen in the
+	 * direction of the VESA headquarters. */
+	vsdb = (struct cea_vsdb *) raw;
+	memcpy(vsdb->ieee_oui, hdmi_ieee_oui, sizeof(hdmi_ieee_oui));
+	hdmi = &vsdb->data.hdmi;
+	hdmi->src_phy_addr[0] = 0x10;
+	hdmi->src_phy_addr[1] = 0x00;
+	/* 2 VSDB extension fields */
+	hdmi->flags1 = 0x38;
+	hdmi->max_tdms_clock = 0x2D;
+
+	return vsdb;
+}
+
+static void edid_cea_data_block_init(struct edid_cea_data_block *block,
+				     enum edid_cea_data_type type, size_t size)
+{
+	assert(size <= 0xFF);
+	block->type_len = type << 5 | size;
+}
+
+/**
+ * edid_cea_data_block_set_sad: initialize a CEA data block to contain Short
+ * Audio Descriptors
+ */
+size_t edid_cea_data_block_set_sad(struct edid_cea_data_block *block,
+				   const struct cea_sad *sads, size_t sads_len)
+{
+	size_t sads_size;
+
+	sads_size = sizeof(struct cea_sad) * sads_len;
+	edid_cea_data_block_init(block, EDID_CEA_DATA_AUDIO, sads_size);
+
+	memcpy(block->data.sads, sads, sads_size);
+
+	return sizeof(struct edid_cea_data_block) + sads_size;
+}
+
+/**
+ * edid_cea_data_block_set_svd: initialize a CEA data block to contain Short
+ * Video Descriptors
+ */
+size_t edid_cea_data_block_set_svd(struct edid_cea_data_block *block,
+				   const uint8_t *svds, size_t svds_len)
+{
+	edid_cea_data_block_init(block, EDID_CEA_DATA_VIDEO, svds_len);
+	memcpy(block->data.svds, svds, svds_len);
+	return sizeof(struct edid_cea_data_block) + svds_len;
+}
+
+/**
+ * edid_cea_data_block_set_vsdb: initialize a CEA data block to contain a
+ * Vendor Specific Data Block
+ */
+size_t edid_cea_data_block_set_vsdb(struct edid_cea_data_block *block,
+				    const struct cea_vsdb *vsdb, size_t vsdb_size)
+{
+	edid_cea_data_block_init(block, EDID_CEA_DATA_VENDOR_SPECIFIC,
+				 vsdb_size);
+
+	memcpy(block->data.vsdbs, vsdb, vsdb_size);
+
+	return sizeof(struct edid_cea_data_block) + vsdb_size;
+}
+
+/**
+ * edid_cea_data_block_set_hdmi_vsdb: initialize a CEA data block to contain an
+ * HDMI VSDB
+ */
+size_t edid_cea_data_block_set_hdmi_vsdb(struct edid_cea_data_block *block,
+					 const struct hdmi_vsdb *hdmi,
+					 size_t hdmi_size)
+{
+	char raw_vsdb[CEA_VSDB_HDMI_MAX_SIZE] = {0};
+	struct cea_vsdb *vsdb = (struct cea_vsdb *) raw_vsdb;
+
+	assert(hdmi_size >= HDMI_VSDB_MIN_SIZE &&
+	       hdmi_size <= HDMI_VSDB_MAX_SIZE);
+	memcpy(vsdb->ieee_oui, hdmi_ieee_oui, sizeof(hdmi_ieee_oui));
+	memcpy(&vsdb->data.hdmi, hdmi, hdmi_size);
+
+	return edid_cea_data_block_set_vsdb(block, vsdb,
+					    CEA_VSDB_HEADER_SIZE + hdmi_size);
+}
+
+/**
+ * edid_cea_data_block_set_speaker_alloc: initialize a CEA data block to
+ * contain a Speaker Allocation Data block
+ */
+size_t edid_cea_data_block_set_speaker_alloc(struct edid_cea_data_block *block,
+					     const struct cea_speaker_alloc *speakers)
+{
+	size_t size;
+
+	size = sizeof(struct cea_speaker_alloc);
+	edid_cea_data_block_init(block, EDID_CEA_DATA_SPEAKER_ALLOC, size);
+	memcpy(block->data.speakers, speakers, size);
+
+	return sizeof(struct edid_cea_data_block) + size;
+}
+
+/**
+ * edid_ext_set_cea: initialize an EDID extension block to contain a CEA
+ * extension. CEA extensions contain a Data Block Collection (with multiple
+ * CEA data blocks) followed by multiple Detailed Timing Descriptors.
+ */
+void edid_ext_set_cea(struct edid_ext *ext, size_t data_blocks_size,
+		      uint8_t num_native_dtds, uint8_t flags)
+{
+	struct edid_cea *cea = &ext->data.cea;
+
+	ext->tag = EDID_EXT_CEA;
+
+	assert(num_native_dtds <= 0x0F);
+	assert((flags & 0x0F) == 0);
+	assert(data_blocks_size <= sizeof(cea->data));
+	cea->revision = 3;
+	cea->dtd_start = 4 + data_blocks_size;
+	cea->misc = flags | num_native_dtds;
+}
+
+void edid_ext_update_cea_checksum(struct edid_ext *ext)
+{
+	ext->data.cea.checksum = compute_checksum((uint8_t *) ext,
+						  sizeof(struct edid_ext));
 }

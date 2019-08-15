@@ -228,7 +228,7 @@ static void dump_backlight_info(struct context *context,
 				const struct bdb_block *block)
 {
 	const struct bdb_lfp_backlight_data *backlight = block->data;
-	const struct bdb_lfp_backlight_data_entry *blc;
+	const struct lfp_backlight_data_entry *blc;
 
 	if (sizeof(*blc) != backlight->entry_size) {
 		printf("\tBacklight struct sizes don't match (expected %zu, got %u), skipping\n",
@@ -629,8 +629,8 @@ static void dump_lvds_data(struct context *context,
 		const uint8_t *lfp_data_ptr =
 		    (const uint8_t *) lvds_data->data + lfp_data_size * i;
 		const uint8_t *timing_data = lfp_data_ptr + dvo_offset;
-		const struct bdb_lvds_lfp_data_entry *lfp_data =
-		    (const struct bdb_lvds_lfp_data_entry *)lfp_data_ptr;
+		const struct lvds_lfp_data_entry *lfp_data =
+		    (const struct lvds_lfp_data_entry *)lfp_data_ptr;
 		char marker;
 
 		if (i != context->panel_type && !context->dump_all_panel_types)
@@ -944,11 +944,13 @@ static void dump_psr(struct context *context,
 {
 	const struct bdb_psr *psr_block = block->data;
 	int i;
+	uint32_t psr2_tp_time;
 
 	/* The same block ID was used for something else before? */
 	if (context->bdb->version < 165)
 		return;
 
+	psr2_tp_time = psr_block->psr2_tp2_tp3_wakeup_time;
 	for (i = 0; i < 16; i++) {
 		const struct psr_table *psr = &psr_block->psr_table[i];
 
@@ -987,6 +989,15 @@ static void dump_psr(struct context *context,
 		printf("\t\tTP2/TP3 wakeup time: %d usec (0x%x)\n",
 		       psr->tp2_tp3_wakeup_time * 100,
 		       psr->tp2_tp3_wakeup_time);
+
+		if (context->bdb->version >= 226) {
+			int index;
+			static const uint16_t psr2_tp_times[] = {500, 100, 2500, 5};
+
+			index = (psr2_tp_time >> (i * 2)) & 0x3;
+			printf("\t\tPSR2 TP2/TP3 wakeup time: %d usec (0x%x)\n",
+			       psr2_tp_times[index], index);
+		}
 	}
 }
 

@@ -70,6 +70,7 @@
 #include "igt_sysfs.h"
 #include "igt_sysrq.h"
 #include "igt_rc.h"
+#include "igt_list.h"
 
 #define UNW_LOCAL_ONLY
 #include <libunwind.h>
@@ -256,9 +257,11 @@
 
 static unsigned int exit_handler_count;
 const char *igt_interactive_debug;
+bool igt_skip_crc_compare;
 
 /* subtests helpers */
 static bool list_subtests = false;
+static bool describe_subtests = false;
 static char *run_single_subtest = NULL;
 static bool run_single_subtest_found = false;
 static const char *in_subtest = NULL;
@@ -271,6 +274,16 @@ static enum {
 	CONT = 0, SKIP, FAIL
 } skip_subtests_henceforth = CONT;
 
+static char __current_description[512];
+
+struct description_node {
+	char desc[sizeof(__current_description)];
+	struct igt_list link;
+};
+
+static struct igt_list subgroup_descriptions;
+
+
 bool __igt_plain_output = false;
 
 /* fork support state */
@@ -280,12 +293,18 @@ int test_children_sz;
 bool test_child;
 
 enum {
- OPT_LIST_SUBTESTS,
- OPT_RUN_SUBTEST,
- OPT_DESCRIPTION,
- OPT_DEBUG,
- OPT_INTERACTIVE_DEBUG,
- OPT_HELP = 'h'
+	/*
+	 * Let the first values be used by individual tests so options don't
+	 * conflict with core ones
+	 */
+	OPT_LIST_SUBTESTS = 500,
+	OPT_DESCRIBE_SUBTESTS,
+	OPT_RUN_SUBTEST,
+	OPT_DESCRIPTION,
+	OPT_DEBUG,
+	OPT_INTERACTIVE_DEBUG,
+	OPT_SKIP_CRC,
+	OPT_HELP = 'h'
 };
 
 static int igt_exitcode = IGT_EXIT_SUCCESS;
@@ -524,10 +543,59 @@ static void common_exit_handler(int sig)
 	assert(sig != 0 || igt_exit_called);
 }
 
+static void print_line_wrapping(const char *indent, const char *text)
+{
+	char *copy, *curr, *next_space;
+	int current_line_length = 0;
+	bool done = false;
+
+	const int total_line_length = 80;
+	const int line_length = total_line_length - strlen(indent);
+
+	copy = malloc(strlen(text) + 1);
+	memcpy(copy, text, strlen(text) + 1);
+
+	curr = copy;
+
+	printf("%s", indent);
+
+	while (!done) {
+		next_space = strchr(curr, ' ');
+
+		if (!next_space) { /* no more spaces, print everything that is left */
+			done = true;
+			next_space = strchr(curr, '\0');
+		}
+
+		*next_space = '\0';
+
+		if ((next_space - curr) + current_line_length > line_length && curr != copy) {
+			printf("\n%s", indent);
+			current_line_length = 0;
+		}
+
+		if (current_line_length == 0)
+			printf("%s", curr); /* first word in a line, don't space out */
+		else
+			printf(" %s", curr);
+
+		current_line_length += next_space - curr;
+		curr = next_space + 1;
+	}
+
+	printf("\n");
+
+	free(copy);
+}
+
+
 static void print_test_description(void)
 {
-	if (&__igt_test_description)
-		printf("%s\n", __igt_test_description);
+	if (&__igt_test_description) {
+		print_line_wrapping("", __igt_test_description);
+		if (describe_subtests)
+			printf("\n");
+	}
 }
 
 static void print_version(void)
@@ -553,8 +621,10 @@ static void print_usage(const char *help_str, bool output_on_stderr)
 		   "  --run-subtest <pattern>\n"
 		   "  --debug[=log-domain]\n"
 		   "  --interactive-debug[=domain]\n"
+		   "  --skip-crc-compare\n"
 		   "  --help-description\n"
-		   "  --help\n");
+		   "  --describe\n"
+		   "  --help|-h\n");
 	if (help_str)
 		fprintf(f, "%s\n", help_str);
 }
@@ -666,69 +736,83 @@ static int common_init(int *argc, char **argv,
 {
 	int c, option_index = 0, i, x;
 	static struct option long_options[] = {
-		{"list-subtests", 0, 0, OPT_LIST_SUBTESTS},
-		{"run-subtest", 1, 0, OPT_RUN_SUBTEST},
-		{"help-description", 0, 0, OPT_DESCRIPTION},
-		{"debug", optional_argument, 0, OPT_DEBUG},
-		{"interactive-debug", optional_argument, 0, OPT_INTERACTIVE_DEBUG},
-		{"help", 0, 0, OPT_HELP},
+		{"list-subtests",     no_argument,       NULL, OPT_LIST_SUBTESTS},
+		{"describe",          optional_argument, NULL, OPT_DESCRIBE_SUBTESTS},
+		{"run-subtest",       required_argument, NULL, OPT_RUN_SUBTEST},
+		{"help-description",  no_argument,       NULL, OPT_DESCRIPTION},
+		{"debug",             optional_argument, NULL, OPT_DEBUG},
+		{"interactive-debug", optional_argument, NULL, OPT_INTERACTIVE_DEBUG},
+		{"skip-crc-compare",  no_argument,       NULL, OPT_SKIP_CRC},
+		{"help",              no_argument,       NULL, OPT_HELP},
 		{0, 0, 0, 0}
 	};
 	char *short_opts;
 	const char *std_short_opts = "h";
+	size_t std_short_opts_len = strlen(std_short_opts);
 	struct option *combined_opts;
 	int extra_opt_count;
 	int all_opt_count;
 	int ret = 0;
 
 	common_init_env();
+	igt_list_init(&subgroup_descriptions);
 
 	command_str = argv[0];
 	if (strrchr(command_str, '/'))
 		command_str = strrchr(command_str, '/') + 1;
 
-	/* First calculate space for all passed-in extra long options */
-	all_opt_count = 0;
-	while (extra_long_opts && extra_long_opts[all_opt_count].name) {
+	/* Check for conflicts and calculate space for passed-in extra long options */
+	for  (extra_opt_count = 0; extra_long_opts && extra_long_opts[extra_opt_count].name; extra_opt_count++) {
+		char *conflicting_char;
 
 		/* check for conflicts with standard long option values */
-		for (i = 0; long_options[i].name; i++)
-			if (extra_long_opts[all_opt_count].val == long_options[i].val)
-				igt_warn("Conflicting long option values between --%s and --%s\n",
-					 extra_long_opts[all_opt_count].name,
-					 long_options[i].name);
+		for (i = 0; long_options[i].name; i++) {
+			if (0 == strcmp(extra_long_opts[extra_opt_count].name, long_options[i].name)) {
+				igt_critical("Conflicting extra long option defined --%s\n", long_options[i].name);
+				assert(0);
 
-		/* check for conflicts with short options */
-		if (extra_long_opts[all_opt_count].val != ':'
-		    && strchr(std_short_opts, extra_long_opts[all_opt_count].val)) {
-			igt_warn("Conflicting long and short option values between --%s and -%s\n",
-				 extra_long_opts[all_opt_count].name,
-				 long_options[i].name);
+			}
+
+			if (extra_long_opts[extra_opt_count].val == long_options[i].val) {
+				igt_critical("Conflicting long option 'val' representation between --%s and --%s\n",
+					     extra_long_opts[extra_opt_count].name,
+					     long_options[i].name);
+				assert(0);
+			}
 		}
 
-
-		all_opt_count++;
+		/* check for conflicts with standard short options */
+		if (extra_long_opts[extra_opt_count].val != ':'
+		    && (conflicting_char = memchr(std_short_opts, extra_long_opts[extra_opt_count].val, std_short_opts_len))) {
+			igt_critical("Conflicting long and short option 'val' representation between --%s and -%c\n",
+				     extra_long_opts[extra_opt_count].name,
+				     *conflicting_char);
+			assert(0);
+		}
 	}
-	extra_opt_count = all_opt_count;
 
 	/* check for conflicts in extra short options*/
 	for (i = 0; extra_short_opts && extra_short_opts[i]; i++) {
-
 		if (extra_short_opts[i] == ':')
 			continue;
 
 		/* check for conflicts with standard short options */
-		if (strchr(std_short_opts, extra_short_opts[i]))
-			igt_warn("Conflicting short option: -%c\n", std_short_opts[i]);
+		if (memchr(std_short_opts, extra_short_opts[i], std_short_opts_len)) {
+			igt_critical("Conflicting short option: -%c\n", std_short_opts[i]);
+			assert(0);
+		}
 
 		/* check for conflicts with standard long option values */
-		for (x = 0; long_options[x].name; x++)
-			if (long_options[x].val == extra_short_opts[i])
-				igt_warn("Conflicting short option and long option value: --%s and -%c\n",
-					 long_options[x].name, extra_short_opts[i]);
+		for (x = 0; long_options[x].name; x++) {
+			if (long_options[x].val == extra_short_opts[i]) {
+				igt_critical("Conflicting short option and long option 'val' representation: --%s and -%c\n",
+					     long_options[x].name, extra_short_opts[i]);
+				assert(0);
+			}
+		}
 	}
 
-	all_opt_count += ARRAY_SIZE(long_options);
+	all_opt_count = extra_opt_count + ARRAY_SIZE(long_options);
 
 	combined_opts = malloc(all_opt_count * sizeof(*combined_opts));
 	if (extra_opt_count > 0)
@@ -762,6 +846,13 @@ static int common_init(int *argc, char **argv,
 			if (!run_single_subtest)
 				list_subtests = true;
 			break;
+		case OPT_DESCRIBE_SUBTESTS:
+			if (optarg)
+				run_single_subtest = strdup(optarg);
+			list_subtests = true;
+			describe_subtests = true;
+			print_test_description();
+			break;
 		case OPT_RUN_SUBTEST:
 			assert(optarg);
 			if (!list_subtests)
@@ -770,6 +861,9 @@ static int common_init(int *argc, char **argv,
 		case OPT_DESCRIPTION:
 			print_test_description();
 			ret = -1;
+			goto out;
+		case OPT_SKIP_CRC:
+			igt_skip_crc_compare = true;
 			goto out;
 		case OPT_HELP:
 			print_usage(help_str, false);
@@ -847,8 +941,18 @@ out:
  * additional knobs to tune when run manually like the number of rounds execute
  * or the size of the allocated buffer objects.
  *
- * Tests without special needs should just use igt_subtest_init() or use
- * #igt_main directly instead of their own main() function.
+ * Tests should use #igt_main_args instead of their own main()
+ * function and calling this function.
+ *
+ * The @help_str parameter is printed directly after the help text of
+ * standard arguments. The formatting of the string should be:
+ * - One line per option
+ * - Two spaces, option flag, tab character, help text, newline character
+ *
+ * Example: "  -s\tBuffer size\n"
+ *
+ * The opt handler function must return #IGT_OPT_HANDLER_SUCCESS on
+ * successful handling, #IGT_OPT_HANDLER_ERROR on errors.
  *
  * Returns: Forwards any option parsing errors from getopt_long.
  */
@@ -881,7 +985,22 @@ enum igt_log_level igt_log_level = IGT_LOG_INFO;
  * @handler_data: user data given to @extra_opt_handler when invoked
  *
  * This initializes a simple test without any support for subtests and allows
- * an arbitrary set of additional options.
+ * an arbitrary set of additional options. This is useful for tests which have
+ * additional knobs to tune when run manually like the number of rounds execute
+ * or the size of the allocated buffer objects.
+ *
+ * Tests should use #igt_simple_main_args instead of their own main()
+ * function and calling this function.
+ *
+ * The @help_str parameter is printed directly after the help text of
+ * standard arguments. The formatting of the string should be:
+ * - One line per option
+ * - Two spaces, option flag, tab character, help text, newline character
+ *
+ * Example: "  -s\tBuffer size\n"
+ *
+ * The opt handler function must return #IGT_OPT_HANDLER_SUCCESS on
+ * successful handling, #IGT_OPT_HANDLER_ERROR on errors.
  */
 void igt_simple_init_parse_opts(int *argc, char **argv,
 				const char *extra_short_opts,
@@ -894,18 +1013,45 @@ void igt_simple_init_parse_opts(int *argc, char **argv,
 		    extra_opt_handler, handler_data);
 }
 
+static void _clear_current_description(void) {
+	__current_description[0] = '\0';
+}
+
+static void __igt_print_description(const char *subtest_name, const char *file, int line)
+{
+	struct description_node *desc;
+	const char indent[] = "  ";
+	bool has_doc = false;
+
+
+	printf("SUB %s %s:%d:\n", subtest_name, file, line);
+
+	igt_list_for_each(desc, &subgroup_descriptions, link) {
+		print_line_wrapping(indent, desc->desc);
+		printf("\n");
+		has_doc = true;
+	}
+
+	if (__current_description[0] != '\0') {
+		print_line_wrapping(indent, __current_description);
+		printf("\n");
+		has_doc = true;
+	}
+
+	if (!has_doc)
+		printf("%sNO DOCUMENTATION!\n\n", indent);
+}
+
 /*
  * Note: Testcases which use these helpers MUST NOT output anything to stdout
  * outside of places protected by igt_run_subtest checks - the piglit
  * runner adds every line to the subtest list.
  */
-bool __igt_run_subtest(const char *subtest_name)
+bool __igt_run_subtest(const char *subtest_name, const char *file, const int line)
 {
 	int i;
 
-	assert(!in_subtest);
-	assert(!in_fixture);
-	assert(test_with_subtests);
+	assert(!igt_can_fail());
 
 	/* check the subtest name only contains a-z, A-Z, 0-9, '-' and '_' */
 	for (i = 0; subtest_name[i] != '\0'; i++)
@@ -916,17 +1062,24 @@ bool __igt_run_subtest(const char *subtest_name)
 			igt_exit();
 		}
 
-	if (list_subtests) {
+	if (run_single_subtest) {
+		if (uwildmat(subtest_name, run_single_subtest) == 0) {
+			_clear_current_description();
+			return false;
+		} else {
+			run_single_subtest_found = true;
+		}
+	}
+
+	if (describe_subtests) {
+		__igt_print_description(subtest_name, file, line);
+		_clear_current_description();
+		return false;
+	} else if (list_subtests) {
 		printf("%s\n", subtest_name);
 		return false;
 	}
 
-	if (run_single_subtest) {
-		if (uwildmat(subtest_name, run_single_subtest) == 0)
-			return false;
-		else
-			run_single_subtest_found = true;
-	}
 
 	if (skip_subtests_henceforth) {
 		printf("%sSubtest %s: %s%s\n",
@@ -976,15 +1129,32 @@ bool igt_only_list_subtests(void)
 	return list_subtests;
 }
 
-void __igt_subtest_group_save(int *save)
+
+
+void __igt_subtest_group_save(int *save, int *desc)
 {
 	assert(test_with_subtests);
+
+	if (__current_description[0] != '\0') {
+		struct description_node *new = calloc(1, sizeof(*new));
+		memcpy(new->desc, __current_description, sizeof(__current_description));
+		igt_list_add_tail(&new->link, &subgroup_descriptions);
+		_clear_current_description();
+		*desc = true;
+	}
 
 	*save = skip_subtests_henceforth;
 }
 
-void __igt_subtest_group_restore(int save)
+void __igt_subtest_group_restore(int save, int desc)
 {
+	if (desc) {
+		struct description_node *last =
+			igt_list_last_entry(&subgroup_descriptions, last, link);
+		igt_list_del(&last->link);
+		free(last);
+	}
+
 	skip_subtests_henceforth = save;
 }
 
@@ -1189,6 +1359,34 @@ void  __attribute__((noreturn)) igt_fatal_error(void)
 bool igt_can_fail(void)
 {
 	return !test_with_subtests || in_fixture || in_subtest;
+}
+
+/**
+ * igt_describe_f:
+ * @fmt: format string containing description
+ * @...: argument used by the format string
+ *
+ * Attach a description to the following #igt_subtest or #igt_subtest_group
+ * block.
+ *
+ * Check #igt_describe for more details.
+ *
+ */
+void igt_describe_f(const char *fmt, ...)
+{
+	int ret;
+	va_list args;
+
+	if (!describe_subtests)
+		return;
+
+	va_start(args, fmt);
+
+	ret = vsnprintf(__current_description, sizeof(__current_description), fmt, args);
+
+	va_end(args);
+
+	assert(ret < sizeof(__current_description));
 }
 
 static bool running_under_gdb(void)
@@ -1502,7 +1700,7 @@ void igt_exit(void)
 		g_key_file_free(igt_key_file);
 
 	if (run_single_subtest && !run_single_subtest_found) {
-		igt_warn("Unknown subtest: %s\n", run_single_subtest);
+		igt_critical("Unknown subtest: %s\n", run_single_subtest);
 		exit(IGT_EXIT_INVALID);
 	}
 
@@ -1733,6 +1931,7 @@ bool __igt_fork(void)
 		exit_handler_count = 0;
 		reset_helper_process_list();
 		oom_adjust_for_doom();
+		igt_unshare_spins();
 
 		return true;
 	default:
@@ -1992,7 +2191,7 @@ static void fatal_sig_handler(int sig)
 #ifdef __linux__
 	/* Workaround cached PID and TID races on glibc and Bionic libc. */
 		pid_t pid = syscall(SYS_getpid);
-		pid_t tid = syscall(SYS_gettid);
+		pid_t tid = gettid();
 
 		syscall(SYS_tgkill, pid, tid, sig);
 #else

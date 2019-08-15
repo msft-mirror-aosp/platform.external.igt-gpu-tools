@@ -1,4 +1,4 @@
-jsonc = dependency('json-c', required: _runner_required)
+build_runner = get_option('runner')
 
 runnerlib_sources = [ 'settings.c',
 		      'job_list.c',
@@ -12,12 +12,18 @@ results_sources = [ 'results.c' ]
 runner_test_sources = [ 'runner_tests.c' ]
 runner_json_test_sources = [ 'runner_json_tests.c' ]
 
-if _build_runner and jsonc.found()
+jsonc = dependency('json-c', required: build_runner)
+
+if not build_tests and jsonc.found()
+	error('Building test runner requires building tests')
+endif
+
+if jsonc.found()
 	subdir('testdata')
 
 	runnerlib = static_library('igt_runner', runnerlib_sources,
 				   include_directories : inc,
-				   dependencies : jsonc)
+				   dependencies : [jsonc, glib])
 
 	runner = executable('igt_runner', runner_sources,
 			    link_with : runnerlib,
@@ -54,7 +60,7 @@ if _build_runner and jsonc.found()
 				      dependencies : [igt_deps, jsonc])
 	test('runner_json', runner_json_test)
 
-	build_info += 'Build test runner: Yes'
+	build_info += 'Build test runner: true'
 else
-	build_info += 'Build test runner: No'
+	build_info += 'Build test runner: false'
 endif

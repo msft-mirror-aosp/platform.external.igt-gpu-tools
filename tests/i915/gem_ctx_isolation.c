@@ -33,7 +33,6 @@
 #define DIRTY2 0x2
 #define RESET 0x4
 
-#define BIT(x) (1ul << (x))
 #define ENGINE(x, y) BIT(4*(x) + (y))
 
 enum {
@@ -321,8 +320,7 @@ static uint32_t read_regs(int fd,
 	memset(&execbuf, 0, sizeof(execbuf));
 	execbuf.buffers_ptr = to_user_pointer(obj);
 	execbuf.buffer_count = 2;
-	execbuf.flags =
-		gem_class_instance_to_eb_flags(fd, e->class, e->instance);
+	execbuf.flags = e->flags;
 	execbuf.rsvd1 = ctx;
 	gem_execbuf(fd, &execbuf);
 	gem_close(fd, obj[1].handle);
@@ -377,8 +375,7 @@ static void write_regs(int fd,
 	memset(&execbuf, 0, sizeof(execbuf));
 	execbuf.buffers_ptr = to_user_pointer(&obj);
 	execbuf.buffer_count = 1;
-	execbuf.flags =
-		gem_class_instance_to_eb_flags(fd, e->class, e->instance);
+	execbuf.flags = e->flags;
 	execbuf.rsvd1 = ctx;
 	gem_execbuf(fd, &execbuf);
 	gem_close(fd, obj.handle);
@@ -448,8 +445,7 @@ static void restore_regs(int fd,
 	memset(&execbuf, 0, sizeof(execbuf));
 	execbuf.buffers_ptr = to_user_pointer(obj);
 	execbuf.buffer_count = 2;
-	execbuf.flags =
-		gem_class_instance_to_eb_flags(fd, e->class, e->instance);
+	execbuf.flags = e->flags;
 	execbuf.rsvd1 = ctx;
 	gem_execbuf(fd, &execbuf);
 	gem_close(fd, obj[1].handle);
@@ -559,8 +555,7 @@ static void nonpriv(int fd,
 		0x0505c0c0,
 		0xdeadbeef
 	};
-	unsigned int engine =
-		gem_class_instance_to_eb_flags(fd, e->class, e->instance);
+	unsigned int engine = e->flags;
 	unsigned int num_values = ARRAY_SIZE(values);
 
 	/* Sigh -- hsw: we need cmdparser access to our own registers! */
@@ -616,9 +611,7 @@ static void isolation(int fd,
 		0xaaaaaaaa,
 		0xdeadbeef
 	};
-	unsigned int engine = gem_class_instance_to_eb_flags(fd,
-							     e->class,
-							     e->instance);
+	unsigned int engine = e->flags;
 	unsigned int num_values =
 		flags & (DIRTY1 | DIRTY2) ? ARRAY_SIZE(values) : 1;
 
@@ -729,8 +722,7 @@ static void preservation(int fd,
 		0xdeadbeef
 	};
 	const unsigned int num_values = ARRAY_SIZE(values);
-	unsigned int engine =
-		gem_class_instance_to_eb_flags(fd, e->class, e->instance);
+	unsigned int engine = e->flags;
 	uint32_t ctx[num_values +1 ];
 	uint32_t regs[num_values + 1][2];
 	igt_spin_t *spin;
@@ -840,7 +832,7 @@ igt_main
 		igt_subtest_group {
 			igt_fixture {
 				igt_require(has_context_isolation & (1 << e->class));
-				gem_require_engine(fd, e->class, e->instance);
+				gem_require_ring(fd, e->flags);
 				igt_fork_hang_detector(fd);
 			}
 

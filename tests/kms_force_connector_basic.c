@@ -48,7 +48,7 @@ static void reset_connectors(void)
 		kmstest_force_connector(drm_fd, connector,
 					FORCE_CONNECTOR_UNSPECIFIED);
 
-		kmstest_force_edid(drm_fd, connector, NULL, 0);
+		kmstest_force_edid(drm_fd, connector, NULL);
 
 		drmModeFreeConnector(connector);
 	}
@@ -65,25 +65,23 @@ static int opt_handler(int opt, int opt_index, void *data)
 		break;
 	}
 
-	return 0;
+	return IGT_OPT_HANDLER_SUCCESS;
 }
 
-int main(int argc, char **argv)
+struct option long_opts[] = {
+	{"reset", 0, 0, 'r'},
+	{0, 0, 0, 0}
+};
+const char *help_str =
+	"  --reset\t\tReset all connector force states and edid.\n";
+
+igt_main_args("", long_opts, help_str, opt_handler, NULL)
 {
 	/* force the VGA output and test that it worked */
 	int drm_fd = 0;
 	drmModeRes *res;
 	drmModeConnector *vga_connector = NULL, *temp;
 	int start_n_modes, start_connection;
-	struct option long_opts[] = {
-		{"reset", 0, 0, 'r'},
-		{0, 0, 0, 0}
-	};
-	const char *help_str =
-	       "  --reset\t\tReset all connector force states and edid.\n";
-
-	igt_subtest_init_parse_opts(&argc, argv, "", long_opts, help_str,
-				    opt_handler, NULL);
 
 	igt_fixture {
 		unsigned vga_connector_id = 0;
@@ -249,7 +247,7 @@ int main(int argc, char **argv)
 
 		/* test edid forcing */
 		kmstest_force_edid(drm_fd, vga_connector,
-				   igt_kms_get_base_edid(), EDID_LENGTH);
+				   igt_kms_get_base_edid());
 		temp = drmModeGetConnectorCurrent(drm_fd,
 						  vga_connector->connector_id);
 
@@ -262,7 +260,7 @@ int main(int argc, char **argv)
 		drmModeFreeConnector(temp);
 
 		/* remove edid */
-		kmstest_force_edid(drm_fd, vga_connector, NULL, 0);
+		kmstest_force_edid(drm_fd, vga_connector, NULL);
 		kmstest_force_connector(drm_fd, vga_connector,
 					FORCE_CONNECTOR_UNSPECIFIED);
 		temp = drmModeGetConnectorCurrent(drm_fd,
@@ -282,7 +280,7 @@ int main(int argc, char **argv)
 
 		/* test pruning of stale modes */
 		kmstest_force_edid(drm_fd, vga_connector,
-				   igt_kms_get_alt_edid(), EDID_LENGTH);
+				   igt_kms_get_alt_edid());
 		temp = drmModeGetConnectorCurrent(drm_fd,
 						  vga_connector->connector_id);
 
@@ -296,7 +294,7 @@ int main(int argc, char **argv)
 		drmModeFreeConnector(temp);
 
 		kmstest_force_edid(drm_fd, vga_connector,
-				   igt_kms_get_base_edid(), EDID_LENGTH);
+				   igt_kms_get_base_edid());
 		temp = drmModeGetConnectorCurrent(drm_fd,
 						  vga_connector->connector_id);
 
@@ -309,7 +307,7 @@ int main(int argc, char **argv)
 
 		drmModeFreeConnector(temp);
 
-		kmstest_force_edid(drm_fd, vga_connector, NULL, 0);
+		kmstest_force_edid(drm_fd, vga_connector, NULL);
 		kmstest_force_connector(drm_fd, vga_connector,
 					FORCE_CONNECTOR_UNSPECIFIED);
 	}
@@ -320,6 +318,4 @@ int main(int argc, char **argv)
 
 		reset_connectors();
 	}
-
-	igt_exit();
 }

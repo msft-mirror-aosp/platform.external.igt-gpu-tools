@@ -98,6 +98,12 @@ static const struct format_desc_struct {
 	  .num_planes = 1, .plane_bpp = { 16, },
 	  .hsub = 1, .vsub = 1,
 	},
+	{ .name = "C8", .depth = -1, .drm_id = DRM_FORMAT_C8,
+	  .cairo_id = CAIRO_FORMAT_INVALID,
+	  .pixman_id = PIXMAN_r3g3b2,
+	  .num_planes = 1, .plane_bpp = { 8, },
+	  .hsub = 1, .vsub = 1,
+	},
 	{ .name = "XRGB1555", .depth = -1, .drm_id = DRM_FORMAT_XRGB1555,
 	  .cairo_id = CAIRO_FORMAT_INVALID,
 	  .pixman_id = PIXMAN_x1r5g5b5,
@@ -897,6 +903,200 @@ int igt_create_bo_with_dimensions(int fd, int width, int height,
 	return fb.gem_handle;
 }
 
+#define get_u16_bit(x, n) 	((x & (1 << n)) >> n )
+#define set_u16_bit(x, n, val)	((x & ~(1 << n)) | (val << n))
+/*
+ * update_crc16_dp:
+ * @crc_old: old 16-bit CRC value to be updated
+ * @d: input 16-bit data on which to calculate 16-bit CRC
+ *
+ * CRC algorithm implementation described in DP 1.4 spec Appendix J
+ * the 16-bit CRC IBM is applied, with the following polynomial:
+ *
+ *       f(x) = x ^ 16 + x ^ 15 + x ^ 2 + 1
+ *
+ * the MSB is shifted in first, for any color format that is less than 16 bits
+ * per component, the LSB is zero-padded.
+ *
+ * The following implementation is based on the hardware parallel 16-bit CRC
+ * generation and ported to C code.
+ *
+ * Reference: VESA DisplayPort Standard v1.4, appendix J
+ *
+ * Returns:
+ * updated 16-bit CRC value.
+ */
+static uint16_t update_crc16_dp(uint16_t crc_old, uint16_t d)
+{
+	uint16_t crc_new = 0;	/* 16-bit CRC output */
+
+	/* internal use */
+	uint16_t b = crc_old;
+	uint8_t val;
+
+	/* b[15] */
+	val = get_u16_bit(b, 0) ^ get_u16_bit(b, 1) ^ get_u16_bit(b, 2) ^
+	      get_u16_bit(b, 3) ^ get_u16_bit(b, 4) ^ get_u16_bit(b, 5) ^
+	      get_u16_bit(b, 6) ^ get_u16_bit(b, 7) ^ get_u16_bit(b, 8) ^
+	      get_u16_bit(b, 9) ^ get_u16_bit(b, 10) ^ get_u16_bit(b, 11) ^
+	      get_u16_bit(b, 12) ^ get_u16_bit(b, 14) ^ get_u16_bit(b, 15) ^
+	      get_u16_bit(d, 0) ^ get_u16_bit(d, 1) ^ get_u16_bit(d, 2) ^
+	      get_u16_bit(d, 3) ^ get_u16_bit(d, 4) ^ get_u16_bit(d, 5) ^
+	      get_u16_bit(d, 6) ^ get_u16_bit(d, 7) ^ get_u16_bit(d, 8) ^
+	      get_u16_bit(d, 9) ^ get_u16_bit(d, 10) ^ get_u16_bit(d, 11) ^
+	      get_u16_bit(d, 12) ^ get_u16_bit(d, 14) ^ get_u16_bit(d, 15);
+	crc_new = set_u16_bit(crc_new, 15, val);
+
+	/* b[14] */
+	val = get_u16_bit(b, 12) ^ get_u16_bit(b, 13) ^
+	      get_u16_bit(d, 12) ^ get_u16_bit(d, 13);
+	crc_new = set_u16_bit(crc_new, 14, val);
+
+	/* b[13] */
+	val = get_u16_bit(b, 11) ^ get_u16_bit(b, 12) ^
+	      get_u16_bit(d, 11) ^ get_u16_bit(d, 12);
+	crc_new = set_u16_bit(crc_new, 13, val);
+
+	/* b[12] */
+	val = get_u16_bit(b, 10) ^ get_u16_bit(b, 11) ^
+	      get_u16_bit(d, 10) ^ get_u16_bit(d, 11);
+	crc_new = set_u16_bit(crc_new, 12, val);
+
+	/* b[11] */
+	val = get_u16_bit(b, 9) ^ get_u16_bit(b, 10) ^
+	      get_u16_bit(d, 9) ^ get_u16_bit(d, 10);
+	crc_new = set_u16_bit(crc_new, 11, val);
+
+	/* b[10] */
+	val = get_u16_bit(b, 8) ^ get_u16_bit(b, 9) ^
+	      get_u16_bit(d, 8) ^ get_u16_bit(d, 9);
+	crc_new = set_u16_bit(crc_new, 10, val);
+
+	/* b[9] */
+	val = get_u16_bit(b, 7) ^ get_u16_bit(b, 8) ^
+	      get_u16_bit(d, 7) ^ get_u16_bit(d, 8);
+	crc_new = set_u16_bit(crc_new, 9, val);
+
+	/* b[8] */
+	val = get_u16_bit(b, 6) ^ get_u16_bit(b, 7) ^
+	      get_u16_bit(d, 6) ^ get_u16_bit(d, 7);
+	crc_new = set_u16_bit(crc_new, 8, val);
+
+	/* b[7] */
+	val = get_u16_bit(b, 5) ^ get_u16_bit(b, 6) ^
+	      get_u16_bit(d, 5) ^ get_u16_bit(d, 6);
+	crc_new = set_u16_bit(crc_new, 7, val);
+
+	/* b[6] */
+	val = get_u16_bit(b, 4) ^ get_u16_bit(b, 5) ^
+	      get_u16_bit(d, 4) ^ get_u16_bit(d, 5);
+	crc_new = set_u16_bit(crc_new, 6, val);
+
+	/* b[5] */
+	val = get_u16_bit(b, 3) ^ get_u16_bit(b, 4) ^
+	      get_u16_bit(d, 3) ^ get_u16_bit(d, 4);
+	crc_new = set_u16_bit(crc_new, 5, val);
+
+	/* b[4] */
+	val = get_u16_bit(b, 2) ^ get_u16_bit(b, 3) ^
+	      get_u16_bit(d, 2) ^ get_u16_bit(d, 3);
+	crc_new = set_u16_bit(crc_new, 4, val);
+
+	/* b[3] */
+	val = get_u16_bit(b, 1) ^ get_u16_bit(b, 2) ^ get_u16_bit(b, 15) ^
+	      get_u16_bit(d, 1) ^ get_u16_bit(d, 2) ^ get_u16_bit(d, 15);
+	crc_new = set_u16_bit(crc_new, 3, val);
+
+	/* b[2] */
+	val = get_u16_bit(b, 0) ^ get_u16_bit(b, 1) ^ get_u16_bit(b, 14) ^
+	      get_u16_bit(d, 0) ^ get_u16_bit(d, 1) ^ get_u16_bit(d, 14);
+	crc_new = set_u16_bit(crc_new, 2, val);
+
+	/* b[1] */
+	val = get_u16_bit(b, 1) ^ get_u16_bit(b, 2) ^ get_u16_bit(b, 3) ^
+	      get_u16_bit(b, 4) ^ get_u16_bit(b, 5) ^ get_u16_bit(b, 6) ^
+	      get_u16_bit(b, 7) ^ get_u16_bit(b, 8) ^ get_u16_bit(b, 9) ^
+	      get_u16_bit(b, 10) ^ get_u16_bit(b, 11) ^ get_u16_bit(b, 12) ^
+	      get_u16_bit(b, 13) ^ get_u16_bit(b, 14) ^
+	      get_u16_bit(d, 1) ^ get_u16_bit(d, 2) ^ get_u16_bit(d, 3) ^
+	      get_u16_bit(d, 4) ^ get_u16_bit(d, 5) ^ get_u16_bit(d, 6) ^
+	      get_u16_bit(d, 7) ^ get_u16_bit(d, 8) ^ get_u16_bit(d, 9) ^
+	      get_u16_bit(d, 10) ^ get_u16_bit(d, 11) ^ get_u16_bit(d, 12) ^
+	      get_u16_bit(d, 13) ^ get_u16_bit(d, 14);
+	crc_new = set_u16_bit(crc_new, 1, val);
+
+	/* b[0] */
+	val = get_u16_bit(b, 0) ^ get_u16_bit(b, 1) ^ get_u16_bit(b, 2) ^
+	      get_u16_bit(b, 3) ^ get_u16_bit(b, 4) ^ get_u16_bit(b, 5) ^
+	      get_u16_bit(b, 6) ^ get_u16_bit(b, 7) ^ get_u16_bit(b, 8) ^
+	      get_u16_bit(b, 9) ^ get_u16_bit(b, 10) ^ get_u16_bit(b, 11) ^
+	      get_u16_bit(b, 12) ^ get_u16_bit(b, 13) ^ get_u16_bit(b, 15) ^
+	      get_u16_bit(d, 0) ^ get_u16_bit(d, 1) ^ get_u16_bit(d, 2) ^
+	      get_u16_bit(d, 3) ^ get_u16_bit(d, 4) ^ get_u16_bit(d, 5) ^
+	      get_u16_bit(d, 6) ^ get_u16_bit(d, 7) ^ get_u16_bit(d, 8) ^
+	      get_u16_bit(d, 9) ^ get_u16_bit(d, 10) ^ get_u16_bit(d, 11) ^
+	      get_u16_bit(d, 12) ^ get_u16_bit(d, 13) ^ get_u16_bit(d, 15);
+	crc_new = set_u16_bit(crc_new, 0, val);
+
+	return crc_new;
+}
+
+/**
+ * igt_fb_calc_crc:
+ * @fb: pointer to an #igt_fb structure
+ * @crc: pointer to an #igt_crc_t structure
+ *
+ * This function calculate the 16-bit frame CRC of RGB components over all
+ * the active pixels.
+ */
+void igt_fb_calc_crc(struct igt_fb *fb, igt_crc_t *crc)
+{
+	int x, y, i;
+	void *ptr;
+	uint8_t *data;
+	uint16_t din;
+
+	igt_assert(fb && crc);
+
+	ptr = igt_fb_map_buffer(fb->fd, fb);
+	igt_assert(ptr);
+
+	/* set for later CRC comparison */
+	crc->has_valid_frame = true;
+	crc->frame = 0;
+	crc->n_words = 3;
+	crc->crc[0] = 0;	/* R */
+	crc->crc[1] = 0;	/* G */
+	crc->crc[2] = 0;	/* B */
+
+	data = ptr + fb->offsets[0];
+	for (y = 0; y < fb->height; ++y) {
+		for (x = 0; x < fb->width; ++x) {
+			switch (fb->drm_format) {
+			case DRM_FORMAT_XRGB8888:
+				i = x * 4 + y * fb->strides[0];
+
+				din = data[i + 2] << 8; /* padding-zeros */
+				crc->crc[0] = update_crc16_dp(crc->crc[0], din);
+
+				/* Green-component */
+				din = data[i + 1] << 8;
+				crc->crc[1] = update_crc16_dp(crc->crc[1], din);
+
+				/* Blue-component */
+				din = data[i] << 8;
+				crc->crc[2] = update_crc16_dp(crc->crc[2], din);
+				break;
+			default:
+				igt_assert_f(0, "DRM Format Invalid");
+				break;
+			}
+		}
+	}
+
+	igt_fb_unmap_buffer(fb, ptr);
+}
+
 /**
  * igt_paint_color:
  * @cr: cairo drawing context
@@ -1215,6 +1415,8 @@ void igt_paint_image(cairo_t *cr, const char *filename,
  * @height: height of the framebuffer in pixel
  * @format: drm fourcc pixel format code
  * @modifier: tiling layout of the framebuffer (as framebuffer modifier)
+ * @color_encoding: color encoding for YCbCr formats (ignored otherwise)
+ * @color_range: color range for YCbCr formats (ignored otherwise)
  * @fb: pointer to an #igt_fb structure
  * @bo_size: size of the backing bo (0 for automatic size)
  * @bo_stride: stride of the backing bo (0 for automatic stride)
@@ -1232,12 +1434,11 @@ void igt_paint_image(cairo_t *cr, const char *filename,
 unsigned int
 igt_create_fb_with_bo_size(int fd, int width, int height,
 			   uint32_t format, uint64_t modifier,
+			   enum igt_color_encoding color_encoding,
+			   enum igt_color_range color_range,
 			   struct igt_fb *fb, uint64_t bo_size,
 			   unsigned bo_stride)
 {
-	/* FIXME allow the caller to pass these in */
-	enum igt_color_encoding color_encoding = IGT_COLOR_YCBCR_BT709;
-	enum igt_color_range color_range = IGT_COLOR_YCBCR_LIMITED_RANGE;
 	uint32_t flags = 0;
 
 	fb_init(fb, fd, width, height, format, modifier,
@@ -1293,8 +1494,10 @@ igt_create_fb_with_bo_size(int fd, int width, int height,
 unsigned int igt_create_fb(int fd, int width, int height, uint32_t format,
 			   uint64_t modifier, struct igt_fb *fb)
 {
-	return igt_create_fb_with_bo_size(fd, width, height, format, modifier, fb,
-					  0, 0);
+	return igt_create_fb_with_bo_size(fd, width, height, format, modifier,
+					  IGT_COLOR_YCBCR_BT709,
+					  IGT_COLOR_YCBCR_LIMITED_RANGE,
+					  fb, 0, 0);
 }
 
 /**
@@ -1716,17 +1919,25 @@ static void free_linear_mapping(struct fb_blit_upload *blit)
 	struct igt_fb *fb = blit->fb;
 	struct fb_blit_linear *linear = &blit->linear;
 
-	gem_munmap(linear->map, linear->fb.size);
-	gem_set_domain(fd, linear->fb.gem_handle,
-		       I915_GEM_DOMAIN_GTT, 0);
+	if (igt_vc4_is_tiled(fb->modifier)) {
+		void *map = igt_vc4_mmap_bo(fd, fb->gem_handle, fb->size, PROT_WRITE);
 
-	if (blit->batch)
-		rendercopy(blit, fb, &linear->fb);
-	else
-		blitcopy(fb, &linear->fb);
+		vc4_fb_convert_plane_to_tiled(fb, map, &linear->fb, &linear->map);
 
-	gem_sync(fd, linear->fb.gem_handle);
-	gem_close(fd, linear->fb.gem_handle);
+		munmap(map, fb->size);
+	} else {
+		gem_munmap(linear->map, linear->fb.size);
+		gem_set_domain(fd, linear->fb.gem_handle,
+			I915_GEM_DOMAIN_GTT, 0);
+
+		if (blit->batch)
+			rendercopy(blit, fb, &linear->fb);
+		else
+			blitcopy(fb, &linear->fb);
+
+		gem_sync(fd, linear->fb.gem_handle);
+		gem_close(fd, linear->fb.gem_handle);
+	}
 
 	if (blit->batch) {
 		intel_batchbuffer_free(blit->batch);
@@ -1751,7 +1962,7 @@ static void setup_linear_mapping(struct fb_blit_upload *blit)
 	struct igt_fb *fb = blit->fb;
 	struct fb_blit_linear *linear = &blit->linear;
 
-	if (use_rendercopy(fb)) {
+	if (!igt_vc4_is_tiled(fb->modifier) && use_rendercopy(fb)) {
 		blit->bufmgr = drm_intel_bufmgr_gem_init(fd, 4096);
 		blit->batch = intel_batchbuffer_alloc(blit->bufmgr,
 						      intel_get_drm_devid(fd));
@@ -1771,23 +1982,35 @@ static void setup_linear_mapping(struct fb_blit_upload *blit)
 
 	igt_assert(linear->fb.gem_handle > 0);
 
-	/* Copy fb content to linear BO */
-	gem_set_domain(fd, linear->fb.gem_handle,
-			I915_GEM_DOMAIN_GTT, 0);
+	if (igt_vc4_is_tiled(fb->modifier)) {
+		void *map = igt_vc4_mmap_bo(fd, fb->gem_handle, fb->size, PROT_READ);
 
-	if (blit->batch)
-		rendercopy(blit, &linear->fb, fb);
-	else
-		blitcopy(&linear->fb, fb);
+		linear->map = igt_vc4_mmap_bo(fd, linear->fb.gem_handle,
+					      linear->fb.size,
+					      PROT_READ | PROT_WRITE);
 
-	gem_sync(fd, linear->fb.gem_handle);
+		vc4_fb_convert_plane_from_tiled(&linear->fb, &linear->map, fb, map);
 
-	gem_set_domain(fd, linear->fb.gem_handle,
-		       I915_GEM_DOMAIN_CPU, I915_GEM_DOMAIN_CPU);
+		munmap(map, fb->size);
+	} else {
+		/* Copy fb content to linear BO */
+		gem_set_domain(fd, linear->fb.gem_handle,
+				I915_GEM_DOMAIN_GTT, 0);
 
-	/* Setup cairo context */
-	linear->map = gem_mmap__cpu(fd, linear->fb.gem_handle,
-				    0, linear->fb.size, PROT_READ | PROT_WRITE);
+		if (blit->batch)
+			rendercopy(blit, &linear->fb, fb);
+		else
+			blitcopy(&linear->fb, fb);
+
+		gem_sync(fd, linear->fb.gem_handle);
+
+		gem_set_domain(fd, linear->fb.gem_handle,
+			I915_GEM_DOMAIN_CPU, I915_GEM_DOMAIN_CPU);
+
+		/* Setup cairo context */
+		linear->map = gem_mmap__cpu(fd, linear->fb.gem_handle,
+					0, linear->fb.size, PROT_READ | PROT_WRITE);
+	}
 }
 
 static void create_cairo_surface__gpu(int fd, struct igt_fb *fb)
@@ -2902,7 +3125,7 @@ static void create_cairo_surface__convert(int fd, struct igt_fb *fb)
 							     &blit->shadow_fb);
 	igt_assert(blit->shadow_ptr);
 
-	if (use_rendercopy(fb) || use_blitter(fb)) {
+	if (use_rendercopy(fb) || use_blitter(fb) || igt_vc4_is_tiled(fb->modifier)) {
 		setup_linear_mapping(&blit->base);
 	} else {
 		blit->base.linear.fb = *fb;
@@ -2983,7 +3206,7 @@ cairo_surface_t *igt_get_cairo_surface(int fd, struct igt_fb *fb)
 		    ((f->cairo_id == CAIRO_FORMAT_INVALID) &&
 		     (f->pixman_id != PIXMAN_invalid)))
 			create_cairo_surface__convert(fd, fb);
-		else if (use_blitter(fb) || use_rendercopy(fb))
+		else if (use_blitter(fb) || use_rendercopy(fb) || igt_vc4_is_tiled(fb->modifier))
 			create_cairo_surface__gpu(fd, fb);
 		else
 			create_cairo_surface__gtt(fd, fb);
@@ -3102,58 +3325,26 @@ unsigned int igt_fb_convert_with_stride(struct igt_fb *dst, struct igt_fb *src,
 					uint64_t dst_modifier,
 					unsigned int dst_stride)
 {
-	struct fb_convert cvt = { };
-	struct igt_fb linear;
-	void *dst_ptr, *src_ptr;
-	uint64_t base_modifier;
+	/* Use the cairo api to convert */
+	cairo_surface_t *surf = igt_get_cairo_surface(src->fd, src);
+	cairo_t *cr;
 	int fb_id;
 
-	if (is_vc4_device(src->fd))
-		base_modifier = fourcc_mod_broadcom_mod(dst_modifier);
-	else
-		base_modifier = dst_modifier;
-
-	fb_id = igt_create_fb_with_bo_size(src->fd, src->width, src->height,
-					   dst_fourcc,
-					   LOCAL_DRM_FORMAT_MOD_NONE, &linear,
-					   0, dst_stride);
+	fb_id = igt_create_fb_with_bo_size(src->fd, src->width,
+					   src->height, dst_fourcc,
+					   dst_modifier,
+					   IGT_COLOR_YCBCR_BT709,
+					   IGT_COLOR_YCBCR_LIMITED_RANGE,
+					   dst, 0,
+					   dst_stride);
 	igt_assert(fb_id > 0);
 
-	src_ptr = igt_fb_map_buffer(src->fd, src);
-	igt_assert(src_ptr);
+	cr = igt_get_cairo_ctx(dst->fd, dst);
+	cairo_set_source_surface(cr, surf, 0, 0);
+	cairo_paint(cr);
+	igt_put_cairo_ctx(dst->fd, dst, cr);
 
-	dst_ptr = igt_fb_map_buffer(linear.fd, &linear);
-	igt_assert(dst_ptr);
-
-	cvt.dst.ptr = dst_ptr;
-	cvt.dst.fb = &linear;
-	cvt.src.ptr = src_ptr;
-	cvt.src.fb = src;
-	fb_convert(&cvt);
-
-	igt_fb_unmap_buffer(dst, dst_ptr);
-	igt_fb_unmap_buffer(src, src_ptr);
-
-	switch (base_modifier) {
-	case DRM_FORMAT_MOD_BROADCOM_VC4_T_TILED:
-		fb_id = igt_vc4_fb_t_tiled_convert(dst, &linear);
-		break;
-	case DRM_FORMAT_MOD_BROADCOM_SAND32:
-	case DRM_FORMAT_MOD_BROADCOM_SAND64:
-	case DRM_FORMAT_MOD_BROADCOM_SAND128:
-	case DRM_FORMAT_MOD_BROADCOM_SAND256:
-		fb_id = vc4_fb_sand_tiled_convert(dst, &linear, dst_modifier);
-		break;
-	default:
-		igt_assert(dst_modifier == LOCAL_DRM_FORMAT_MOD_NONE);
-	}
-
-	igt_assert(fb_id > 0);
-
-	if (dst_modifier == LOCAL_DRM_FORMAT_MOD_NONE)
-		*dst = linear;
-	else
-		igt_remove_fb(linear.fd, &linear);
+	cairo_surface_destroy(surf);
 
 	return fb_id;
 }
@@ -3247,6 +3438,15 @@ const char *igt_format_str(uint32_t drm_format)
 bool igt_fb_supported_format(uint32_t drm_format)
 {
 	const struct format_desc_struct *f;
+
+	/*
+	 * C8 needs a LUT which (at least for the time being)
+	 * is the responsibility of each test. Not all tests
+	 * have the required code so let's keep C8 hidden from
+	 * most eyes.
+	 */
+	if (drm_format == DRM_FORMAT_C8)
+		return false;
 
 	for_each_format(f)
 		if (f->drm_id == drm_format)

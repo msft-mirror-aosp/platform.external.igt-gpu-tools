@@ -30,6 +30,13 @@
 #include <stdio.h>
 #include <string.h>
 
+/*
+ * Throw away enough lsbs in pixel formats tests
+ * to get a match despite some differences between
+ * the software and hardware YCbCr<->RGB conversion
+ * routines.
+ */
+#define LUT_MASK 0xf800
 
 typedef struct {
 	float red;
@@ -389,32 +396,74 @@ static void set_legacy_lut(data_t *data, enum pipe pipe,
 	free(lut);
 }
 
+static bool set_c8_legacy_lut(data_t *data, enum pipe pipe,
+			      uint16_t mask)
+{
+	igt_pipe_t *pipe_obj = &data->display.pipes[pipe];
+	drmModeCrtc *crtc;
+	uint16_t *r, *g, *b;
+	int i, lut_size;
+
+	crtc = drmModeGetCrtc(data->drm_fd, pipe_obj->crtc_id);
+	lut_size = crtc->gamma_size;
+	drmModeFreeCrtc(crtc);
+
+	if (lut_size != 256)
+		return false;
+
+	r = malloc(sizeof(uint16_t) * 3 * lut_size);
+	g = r + lut_size;
+	b = g + lut_size;
+
+	/* igt_fb uses RGB332 for C8 */
+	for (i = 0; i < lut_size; i++) {
+		r[i] = (((i & 0xe0) >> 5) * 0xffff / 0x7) & mask;
+		g[i] = (((i & 0x1c) >> 2) * 0xffff / 0x7) & mask;
+		b[i] = (((i & 0x03) >> 0) * 0xffff / 0x3) & mask;
+	}
+
+	igt_assert_eq(drmModeCrtcSetGamma(data->drm_fd, pipe_obj->crtc_id,
+					  lut_size, r, g, b), 0);
+
+	free(r);
+
+	return true;
+}
 
 static void test_format_plane_color(data_t *data, enum pipe pipe,
 				    igt_plane_t *plane,
 				    uint32_t format, uint64_t modifier,
 				    int width, int height,
+				    enum igt_color_encoding color_encoding,
+				    enum igt_color_range color_range,
 				    int color, igt_crc_t *crc, struct igt_fb *fb)
 {
 	const color_t *c = &colors[color];
 	struct igt_fb old_fb = *fb;
+	cairo_t *cr;
 
 	if (data->crop == 0 || format == DRM_FORMAT_XRGB8888) {
-		igt_create_color_fb(data->drm_fd, width, height,
-				    format, modifier,
-				    c->red, c->green, c->blue, fb);
+		igt_create_fb_with_bo_size(data->drm_fd, width, height,
+					   format, modifier, color_encoding,
+					   color_range, fb, 0, 0);
+
+		cr = igt_get_cairo_ctx(data->drm_fd, fb);
+
+		igt_paint_color(cr, 0, 0, width, height,
+				c->red, c->green, c->blue);
+
+		igt_put_cairo_ctx(data->drm_fd, fb, cr);
 	} else {
+		igt_create_fb_with_bo_size(data->drm_fd,
+					   width + data->crop * 2,
+					   height + data->crop * 2,
+					   format, modifier, color_encoding,
+					   color_range, fb, 0, 0);
+
 		/*
 		 * paint border in inverted color, then visible area in middle
 		 * with correct color for clamping test
 		 */
-		cairo_t *cr;
-
-		igt_create_fb(data->drm_fd,
-			      width + data->crop * 2,
-			      height + data->crop * 2,
-			      format, modifier, fb);
-
 		cr = igt_get_cairo_ctx(data->drm_fd, fb);
 
 		igt_paint_color(cr, 0, 0,
@@ -446,6 +495,123 @@ static void test_format_plane_color(data_t *data, enum pipe pipe,
 	igt_pipe_crc_get_current(data->display.drm_fd, data->pipe_crc, crc);
 
 	igt_remove_fb(data->drm_fd, &old_fb);
+}
+
+static int num_unique_crcs(const igt_crc_t crc[], int num_crc)
+{
+	int num_unique_crc = 0;
+
+	for (int i = 0; i < num_crc; i++) {
+		int j;
+
+		for (j = i + 1; j < num_crc; j++) {
+			if (igt_check_crc_equal(&crc[i], &crc[j]))
+				break;
+		}
+
+		if (j == num_crc)
+			num_unique_crc++;
+	}
+
+	return num_unique_crc;
+}
+
+static bool test_format_plane_colors(data_t *data, enum pipe pipe,
+				     igt_plane_t *plane,
+				     uint32_t format, uint64_t modifier,
+				     int width, int height,
+				     enum igt_color_encoding encoding,
+				     enum igt_color_range range,
+				     igt_crc_t ref_crc[ARRAY_SIZE(colors)],
+				     struct igt_fb *fb)
+{
+	int crc_mismatch_count = 0;
+	unsigned int crc_mismatch_mask = 0;
+	bool result = true;
+
+	for (int i = 0; i < ARRAY_SIZE(colors); i++) {
+		igt_crc_t crc;
+
+		test_format_plane_color(data, pipe, plane,
+					format, modifier,
+					width, height,
+					encoding, range,
+					i, &crc, fb);
+
+		if (!igt_check_crc_equal(&crc, &ref_crc[i])) {
+			crc_mismatch_count++;
+			crc_mismatch_mask |= (1 << i);
+			result = false;
+		}
+	}
+
+	if (crc_mismatch_count)
+		igt_warn("CRC mismatches with format " IGT_FORMAT_FMT " on %s.%u with %d/%d solid colors tested (0x%X)\n",
+			 IGT_FORMAT_ARGS(format), kmstest_pipe_name(pipe),
+			 plane->index, crc_mismatch_count, (int)ARRAY_SIZE(colors), crc_mismatch_mask);
+
+	return result;
+}
+
+static bool test_format_plane_rgb(data_t *data, enum pipe pipe,
+				  igt_plane_t *plane,
+				  uint32_t format, uint64_t modifier,
+				  int width, int height,
+				  igt_crc_t ref_crc[ARRAY_SIZE(colors)],
+				  struct igt_fb *fb)
+{
+	igt_info("Testing format " IGT_FORMAT_FMT " / modifier 0x%" PRIx64 " on %s.%u\n",
+		 IGT_FORMAT_ARGS(format), modifier,
+		 kmstest_pipe_name(pipe), plane->index);
+
+	return test_format_plane_colors(data, pipe, plane,
+					format, modifier,
+					width, height,
+					IGT_COLOR_YCBCR_BT601,
+					IGT_COLOR_YCBCR_LIMITED_RANGE,
+					ref_crc, fb);
+}
+
+static bool test_format_plane_yuv(data_t *data, enum pipe pipe,
+				  igt_plane_t *plane,
+				  uint32_t format, uint64_t modifier,
+				  int width, int height,
+				  igt_crc_t ref_crc[ARRAY_SIZE(colors)],
+				  struct igt_fb *fb)
+{
+	bool result = true;
+
+	if (!igt_plane_has_prop(plane, IGT_PLANE_COLOR_ENCODING))
+		return true;
+	if (!igt_plane_has_prop(plane, IGT_PLANE_COLOR_RANGE))
+		return true;
+
+	for (enum igt_color_encoding e = 0; e < IGT_NUM_COLOR_ENCODINGS; e++) {
+		if (!igt_plane_try_prop_enum(plane,
+					     IGT_PLANE_COLOR_ENCODING,
+					     igt_color_encoding_to_str(e)))
+			continue;
+
+		for (enum igt_color_range r = 0; r < IGT_NUM_COLOR_RANGES; r++) {
+			if (!igt_plane_try_prop_enum(plane,
+						     IGT_PLANE_COLOR_RANGE,
+						     igt_color_range_to_str(r)))
+				continue;
+
+			igt_info("Testing format " IGT_FORMAT_FMT " / modifier 0x%" PRIx64 " (%s, %s) on %s.%u\n",
+				 IGT_FORMAT_ARGS(format), modifier,
+				 igt_color_encoding_to_str(e),
+				 igt_color_range_to_str(r),
+				 kmstest_pipe_name(pipe), plane->index);
+
+			result &= test_format_plane_colors(data, pipe, plane,
+							   format, modifier,
+							   width, height,
+							   e, r, ref_crc, fb);
+		}
+	}
+
+	return result;
 }
 
 static bool test_format_plane(data_t *data, enum pipe pipe,
@@ -517,14 +683,19 @@ static bool test_format_plane(data_t *data, enum pipe pipe,
 		test_format_plane_color(data, pipe, plane,
 					format, modifier,
 					width, height,
+					IGT_COLOR_YCBCR_BT709,
+					IGT_COLOR_YCBCR_LIMITED_RANGE,
 					i, &ref_crc[i], &fb);
 	}
 
-	for (int i = 0; i < plane->format_mod_count; i++) {
-		int crc_mismatch_count = 0;
-		int crc_mismatch_mask = 0;
-		igt_crc_t crc;
+	/*
+	 * Make sure we have some difference between the colors. This
+	 * at least avoids claiming success when everything is just
+	 * black all the time (eg. if the plane is never even on).
+	 */
+	igt_require(num_unique_crcs(ref_crc, ARRAY_SIZE(colors)) > 1);
 
+	for (int i = 0; i < plane->format_mod_count; i++) {
 		format = plane->formats[i];
 		modifier = plane->modifiers[i];
 
@@ -532,30 +703,27 @@ static bool test_format_plane(data_t *data, enum pipe pipe,
 		    modifier == ref_modifier)
 			continue;
 
-		if (!igt_fb_supported_format(format))
-			continue;
-
-		igt_info("Testing format " IGT_FORMAT_FMT " / modifier 0x%" PRIx64 " on %s.%u\n",
-			 IGT_FORMAT_ARGS(format), modifier,
-			 kmstest_pipe_name(pipe), plane->index);
-
-		for (int j = 0; j < ARRAY_SIZE(colors); j++) {
-			test_format_plane_color(data, pipe, plane,
-						format, modifier,
-						width, height,
-						j, &crc, &fb);
-
-			if (!igt_check_crc_equal(&crc, &ref_crc[j])) {
-				crc_mismatch_count++;
-				crc_mismatch_mask |= (1 << j);
-				result = false;
-			}
+		if (format == DRM_FORMAT_C8) {
+			if (!set_c8_legacy_lut(data, pipe, LUT_MASK))
+				continue;
+		} else {
+			if (!igt_fb_supported_format(format))
+				continue;
 		}
 
-		if (crc_mismatch_count)
-			igt_warn("CRC mismatches with format " IGT_FORMAT_FMT " on %s.%u with %d/%d solid colors tested (0x%X)\n",
-				 IGT_FORMAT_ARGS(format), kmstest_pipe_name(pipe),
-				 plane->index, crc_mismatch_count, (int)ARRAY_SIZE(colors), crc_mismatch_mask);
+		if (igt_format_is_yuv(format))
+			result &= test_format_plane_yuv(data, pipe, plane,
+							format, modifier,
+							width, height,
+							ref_crc, &fb);
+		else
+			result &= test_format_plane_rgb(data, pipe, plane,
+							format, modifier,
+							width, height,
+							ref_crc, &fb);
+
+		if (format == DRM_FORMAT_C8)
+			set_legacy_lut(data, pipe, LUT_MASK);
 	}
 
 	igt_pipe_crc_stop(data->pipe_crc);
@@ -590,7 +758,7 @@ test_pixel_formats(data_t *data, enum pipe pipe)
 
 	igt_display_commit2(&data->display, data->display.is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY);
 
-	set_legacy_lut(data, pipe, 0xfc00);
+	set_legacy_lut(data, pipe, LUT_MASK);
 
 	test_init(data, pipe);
 
