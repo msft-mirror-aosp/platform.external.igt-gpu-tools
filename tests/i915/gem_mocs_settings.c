@@ -63,6 +63,7 @@ static const char * const test_modes[] = {
 #define GEN9_MFX1_MOCS_0	(0xcA00)	/* Media 1 MOCS base register*/
 #define GEN9_VEBOX_MOCS_0	(0xcB00)	/* Video MOCS base register*/
 #define GEN9_BLT_MOCS_0		(0xcc00)	/* Blitter MOCS base register*/
+#define GEN12_GLOBAL_MOCS	(0x4000)
 #define ICELAKE_MOCS_PTE	{0x00000004, 0x0030, 0x1}
 #define MOCS_PTE		{0x00000038, 0x0030, 0x1}
 
@@ -78,6 +79,40 @@ struct mocs_table {
 };
 
 /* The first entries in the MOCS tables are defined by uABI */
+
+static const struct mocs_entry tigerlake_mocs_table[GEN11_NUM_MOCS_ENTRIES] = {
+	[2]  = { 0x00000037, 0x0030, 0x1},
+	[3]  = { 0x00000005, 0x0010, 0x1},
+	[4]  = { 0x00000005, 0x0030, 0x1},
+	[5]  = { 0x00000037, 0x0010, 0x1},
+	[6]  = { 0x00000017, 0x0010, 0x1},
+	[7]  = { 0x00000017, 0x0030, 0x1},
+	[8]  = { 0x00000027, 0x0010, 0x1},
+	[9]  = { 0x00000027, 0x0030, 0x1},
+	[10] = { 0x00000077, 0x0010, 0x1},
+	[11] = { 0x00000077, 0x0030, 0x1},
+	[12] = { 0x00000057, 0x0010, 0x1},
+	[13] = { 0x00000057, 0x0030, 0x1},
+	[14] = { 0x00000067, 0x0010, 0x1},
+	[15] = { 0x00000067, 0x0030, 0x1},
+	[16] = { 0x00004005, 0x0010, 0x1},
+	[17] = { 0x00004005, 0x0030, 0x1},
+	[18] = { 0x00060037, 0x0030, 0x1},
+	[19] = { 0x00000737, 0x0030, 0x1},
+	[20] = { 0x00000337, 0x0030, 0x1},
+	[21] = { 0x00000137, 0x0030, 0x1},
+	[22] = { 0x000003b7, 0x0030, 0x1},
+	[23] = { 0x000007b7, 0x0030, 0x1},
+	[48] = { 0x00000037, 0x0030, 0x1},
+	[49] = { 0x00000005, 0x0030, 0x1},
+	[50] = { 0x00000037, 0x0010, 0x1},
+	[51] = { 0x00000005, 0x0010, 0x1},
+	[60] = { 0x00000037, 0x0010, 0x1},
+	[61] = { 0x00004005, 0x0030, 0x1},
+	[62] = { 0x00000037, 0x0010, 0x1},
+	[63] = { 0x00000037, 0x0010, 0x1},
+};
+
 static const struct mocs_entry icelake_mocs_table[GEN11_NUM_MOCS_ENTRIES] = {
 	[0]  = { 0x00000005, 0x0010, 0x1},
 	[1]  = ICELAKE_MOCS_PTE,
@@ -101,7 +136,6 @@ static const struct mocs_entry icelake_mocs_table[GEN11_NUM_MOCS_ENTRIES] = {
 	[21] = { 0x00000137, 0x0030, 0x1},
 	[22] = { 0x000003b7, 0x0030, 0x1},
 	[23] = { 0x000007b7, 0x0030, 0x1},
-	[24 ... 61] = ICELAKE_MOCS_PTE,
 	[62] = { 0x00000037, 0x0010, 0x1},
 	[63] = { 0x00000037, 0x0010, 0x1},
 };
@@ -132,12 +166,17 @@ static const uint32_t write_values[GEN9_NUM_MOCS_ENTRIES] = {
 	[0 ... GEN9_NUM_MOCS_ENTRIES - 1] = 0xFFFFFFFF,
 };
 
+static bool has_global_mocs(int fd)
+{
+	return intel_gen(intel_get_drm_devid(fd)) >= 12;
+}
+
 static bool get_mocs_settings(int fd, struct mocs_table *table, bool dirty)
 {
 	uint32_t devid = intel_get_drm_devid(fd);
 	bool result = false;
 
-	if (IS_SKYLAKE(devid) || IS_KABYLAKE(devid)) {
+	if (IS_SKYLAKE(devid) || IS_KABYLAKE(devid) || IS_COMETLAKE(devid)) {
 		if (dirty) {
 			table->size  = ARRAY_SIZE(dirty_skylake_mocs_table);
 			table->table = dirty_skylake_mocs_table;
@@ -159,6 +198,10 @@ static bool get_mocs_settings(int fd, struct mocs_table *table, bool dirty)
 		table->size  = ARRAY_SIZE(icelake_mocs_table);
 		table->table = icelake_mocs_table;
 		result = true;
+	} else if (IS_TIGERLAKE(devid)) {
+		table->size  = ARRAY_SIZE(tigerlake_mocs_table);
+		table->table = tigerlake_mocs_table;
+		result = true;
 	}
 
 	return result;
@@ -167,8 +210,11 @@ static bool get_mocs_settings(int fd, struct mocs_table *table, bool dirty)
 #define LOCAL_I915_EXEC_BSD1 (I915_EXEC_BSD | (1<<13))
 #define LOCAL_I915_EXEC_BSD2 (I915_EXEC_BSD | (2<<13))
 
-static uint32_t get_engine_base(uint32_t engine)
+static uint32_t get_engine_base(int fd, uint32_t engine)
 {
+	if (has_global_mocs(fd))
+		return GEN12_GLOBAL_MOCS;
+
 	switch (engine) {
 	case LOCAL_I915_EXEC_BSD1:	return GEN9_MFX0_MOCS_0;
 	case LOCAL_I915_EXEC_BSD2:	return GEN9_MFX1_MOCS_0;
@@ -302,7 +348,7 @@ static void check_control_registers(int fd,
 				    uint32_t ctx_id,
 				    bool dirty)
 {
-	const uint32_t reg_base = get_engine_base(engine);
+	const uint32_t reg_base = get_engine_base(fd, engine);
 	uint32_t dst_handle = gem_create(fd, 4096);
 	uint32_t *read_regs;
 	struct mocs_table table;
@@ -320,10 +366,16 @@ static void check_control_registers(int fd,
 
 	gem_set_domain(fd, dst_handle, I915_GEM_DOMAIN_CPU, 0);
 	for (int index = 0; index < table.size; index++) {
+		uint32_t val, read_val;
+
 		if (!table.table[index].used)
 			continue;
-		igt_assert_eq_u32(read_regs[index],
-				  table.table[index].control_value);
+
+		read_val = read_regs[index];
+		val = table.table[index].control_value;
+		igt_assert_f(read_val == val,
+			     "engine=%u index=%u read_value=0x%08x value=0x%08x\n",
+			     engine, index, read_val, val);
 	}
 
 	munmap(read_regs, 4096);
@@ -428,7 +480,7 @@ static void write_dirty_mocs(int fd,
 	else
 		num_of_mocs_entries = GEN9_NUM_MOCS_ENTRIES;
 
-	write_registers(fd, ctx_id, get_engine_base(engine),
+	write_registers(fd, ctx_id, get_engine_base(fd, engine),
 			write_values, num_of_mocs_entries,
 			engine, privileged);
 
@@ -454,7 +506,7 @@ static void run_test(int fd, unsigned engine, unsigned flags, unsigned mode)
 	gem_require_ring(fd, engine);
 
 	/* Skip if we don't know where the registers are for this engine */
-	igt_require(get_engine_base(engine));
+	igt_require(get_engine_base(fd, engine));
 
 	if (flags & MOCS_NON_DEFAULT_CTX)
 		ctx_id = gem_context_create(fd);

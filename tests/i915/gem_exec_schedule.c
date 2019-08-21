@@ -164,8 +164,13 @@ static uint32_t create_highest_priority(int fd)
 static void unplug_show_queue(int fd, struct igt_cork *c, unsigned int engine)
 {
 	igt_spin_t *spin[MAX_ELSP_QLEN];
+	int max = MAX_ELSP_QLEN;
 
-	for (int n = 0; n < ARRAY_SIZE(spin); n++) {
+	/* If no scheduler, all batches are emitted in submission order */
+	if (!gem_scheduler_enabled(fd))
+		max = 1;
+
+	for (int n = 0; n < max; n++) {
 		const struct igt_spin_factory opts = {
 			.ctx = create_highest_priority(fd),
 			.engine = engine,
@@ -177,7 +182,7 @@ static void unplug_show_queue(int fd, struct igt_cork *c, unsigned int engine)
 	igt_cork_unplug(c); /* batches will now be queued on the engine */
 	igt_debugfs_dump(fd, "i915_engine_info");
 
-	for (int n = 0; n < ARRAY_SIZE(spin); n++)
+	for (int n = 0; n < max; n++)
 		igt_spin_free(fd, spin[n]);
 
 }
@@ -282,9 +287,11 @@ static void smoketest(int fd, unsigned ring, unsigned timeout)
 	nengine = 0;
 	if (ring == ALL_ENGINES) {
 		for_each_physical_engine(fd, engine)
-			engines[nengine++] = engine;
+			if (gem_can_store_dword(fd, engine))
+				engines[nengine++] = engine;
 	} else {
-		engines[nengine++] = ring;
+		if (gem_can_store_dword(fd, ring))
+			engines[nengine++] = ring;
 	}
 	igt_require(nengine);
 
@@ -1774,9 +1781,6 @@ igt_main
 		igt_fixture {
 			igt_require(gem_scheduler_enabled(fd));
 			igt_require(gem_scheduler_has_ctx_priority(fd));
-
-			/* need separate rings */
-			igt_require(gem_has_execlists(fd));
 		}
 
 		for (e = intel_execution_engines; e->name; e++) {

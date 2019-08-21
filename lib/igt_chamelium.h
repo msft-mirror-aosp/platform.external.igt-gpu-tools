@@ -34,6 +34,7 @@
 #include "igt_debugfs.h"
 
 struct igt_fb;
+struct edid;
 
 struct chamelium;
 struct chamelium_port;
@@ -63,6 +64,19 @@ struct chamelium_audio_file {
 	char *path;
 	int rate; /* Hz */
 	int channels;
+};
+
+enum chamelium_infoframe_type {
+	CHAMELIUM_INFOFRAME_AVI,
+	CHAMELIUM_INFOFRAME_AUDIO,
+	CHAMELIUM_INFOFRAME_MPEG,
+	CHAMELIUM_INFOFRAME_VENDOR,
+};
+
+struct chamelium_infoframe {
+	int version;
+	size_t payload_size;
+	uint8_t *payload;
 };
 
 struct chamelium_edid;
@@ -98,6 +112,7 @@ drmModeConnector *chamelium_port_get_connector(struct chamelium *chamelium,
 					       bool reprobe);
 const char *chamelium_port_get_name(struct chamelium_port *port);
 
+void chamelium_wait_reachable(struct chamelium *chamelium, int timeout);
 void chamelium_plug(struct chamelium *chamelium, struct chamelium_port *port);
 void chamelium_unplug(struct chamelium *chamelium, struct chamelium_port *port);
 bool chamelium_is_plugged(struct chamelium *chamelium,
@@ -114,7 +129,7 @@ void chamelium_schedule_hpd_toggle(struct chamelium *chamelium,
 				   struct chamelium_port *port, int delay_ms,
 				   bool rising_edge);
 struct chamelium_edid *chamelium_new_edid(struct chamelium *chamelium,
-					  const unsigned char *edid);
+					  const struct edid *edid);
 const struct edid *chamelium_edid_get_raw(struct chamelium_edid *edid,
 					  struct chamelium_port *port);
 void chamelium_port_set_edid(struct chamelium *chamelium,
@@ -141,6 +156,14 @@ void chamelium_start_capture(struct chamelium *chamelium,
 void chamelium_stop_capture(struct chamelium *chamelium, int frame_count);
 void chamelium_capture(struct chamelium *chamelium, struct chamelium_port *port,
 		       int x, int y, int w, int h, int frame_count);
+bool chamelium_supports_get_last_infoframe(struct chamelium *chamelium);
+struct chamelium_infoframe *
+chamelium_get_last_infoframe(struct chamelium *chamelium,
+			     struct chamelium_port *port,
+			     enum chamelium_infoframe_type type);
+bool chamelium_supports_trigger_link_failure(struct chamelium *chamelium);
+void chamelium_trigger_link_failure(struct chamelium *chamelium,
+				    struct chamelium_port *port);
 bool chamelium_has_audio_support(struct chamelium *chamelium,
 				 struct chamelium_port *port);
 void chamelium_get_audio_channel_mapping(struct chamelium *chamelium,
@@ -185,5 +208,6 @@ void chamelium_crop_analog_frame(struct chamelium_frame_dump *dump, int width,
 				 int height);
 void chamelium_destroy_frame_dump(struct chamelium_frame_dump *dump);
 void chamelium_destroy_audio_file(struct chamelium_audio_file *audio_file);
+void chamelium_infoframe_destroy(struct chamelium_infoframe *infoframe);
 
 #endif /* IGT_CHAMELIUM_H */

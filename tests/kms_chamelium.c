@@ -29,6 +29,7 @@
 #include "igt_vc4.h"
 #include "igt_edid.h"
 #include "igt_eld.h"
+#include "igt_infoframe.h"
 
 #include <fcntl.h>
 #include <pthread.h>
@@ -40,8 +41,9 @@ enum test_edid {
 	TEST_EDID_ALT,
 	TEST_EDID_HDMI_AUDIO,
 	TEST_EDID_DP_AUDIO,
+	TEST_EDID_ASPECT_RATIO,
 };
-#define TEST_EDID_COUNT 4
+#define TEST_EDID_COUNT 5
 
 typedef struct {
 	struct chamelium *chamelium;
@@ -55,6 +57,7 @@ typedef struct {
 } data_t;
 
 #define HOTPLUG_TIMEOUT 20 /* seconds */
+#define ONLINE_TIMEOUT 20 /* seconds */
 
 #define HPD_STORM_PULSE_INTERVAL_DP 100 /* ms */
 #define HPD_STORM_PULSE_INTERVAL_HDMI 200 /* ms */
@@ -118,15 +121,25 @@ reprobe_connector(data_t *data, struct chamelium_port *port)
 	return status;
 }
 
+static const char *connection_str(drmModeConnection c)
+{
+	switch (c) {
+	case DRM_MODE_CONNECTED:
+		return "connected";
+	case DRM_MODE_DISCONNECTED:
+		return "disconnected";
+	case DRM_MODE_UNKNOWNCONNECTION:
+		return "unknown";
+	}
+	assert(0); /* unreachable */
+}
+
 static void
 wait_for_connector(data_t *data, struct chamelium_port *port,
 		   drmModeConnection status)
 {
-	bool finished = false;
-
-	igt_debug("Waiting for %s to %sconnect...\n",
-		  chamelium_port_get_name(port),
-		  status == DRM_MODE_DISCONNECTED ? "dis" : "");
+	igt_debug("Waiting for %s to get %s...\n",
+		  chamelium_port_get_name(port), connection_str(status));
 
 	/*
 	 * Rely on simple reprobing so we don't fail tests that don't require
@@ -134,14 +147,14 @@ wait_for_connector(data_t *data, struct chamelium_port *port,
 	 */
 	igt_until_timeout(HOTPLUG_TIMEOUT) {
 		if (reprobe_connector(data, port) == status) {
-			finished = true;
 			return;
 		}
 
 		usleep(50000);
 	}
 
-	igt_assert(finished);
+	igt_assert_f(false, "Timed out waiting for %s to get %s\n",
+		  chamelium_port_get_name(port), connection_str(status));
 }
 
 static int chamelium_vga_modes[][2] = {
@@ -234,6 +247,7 @@ test_basic_hotplug(data_t *data, struct chamelium_port *port, int toggle_count)
 {
 	struct udev_monitor *mon = igt_watch_hotplug();
 	int i;
+	drmModeConnection status;
 
 	reset_state(data, NULL);
 	igt_hpd_storm_set_threshold(data->drm_fd, 0);
@@ -243,24 +257,31 @@ test_basic_hotplug(data_t *data, struct chamelium_port *port, int toggle_count)
 
 		/* Check if we get a sysfs hotplug event */
 		chamelium_plug(data->chamelium, port);
-		igt_assert(igt_hotplug_detected(mon, HOTPLUG_TIMEOUT));
-		igt_assert_eq(reprobe_connector(data, port),
-			      DRM_MODE_CONNECTED);
+		igt_assert_f(igt_hotplug_detected(mon, HOTPLUG_TIMEOUT),
+			     "Timed out waiting for hotplug uevent\n");
+		status = reprobe_connector(data, port);
+		igt_assert_f(status == DRM_MODE_CONNECTED,
+			     "Invalid connector status after hotplug: "
+			     "got %s, expected connected\n",
+			     connection_str(status));
 
 		igt_flush_hotplugs(mon);
 
 		/* Now check if we get a hotplug from disconnection */
 		chamelium_unplug(data->chamelium, port);
-		igt_assert(igt_hotplug_detected(mon, HOTPLUG_TIMEOUT));
-		igt_assert_eq(reprobe_connector(data, port),
-			      DRM_MODE_DISCONNECTED);
+		igt_assert_f(igt_hotplug_detected(mon, HOTPLUG_TIMEOUT),
+			     "Timed out waiting for unplug uevent\n");
+		igt_assert_f(status == DRM_MODE_DISCONNECTED,
+			     "Invalid connector status after hotplug: "
+			     "got %s, expected disconnected\n",
+			     connection_str(status));
 	}
 
 	igt_cleanup_hotplug(mon);
 	igt_hpd_storm_reset(data->drm_fd);
 }
 
-static const unsigned char *get_edid(enum test_edid edid);
+static const struct edid *get_edid(enum test_edid edid);
 
 static void set_edid(data_t *data, struct chamelium_port *port,
 		     enum test_edid edid)
@@ -289,6 +310,7 @@ test_edid_read(data_t *data, struct chamelium_port *port, enum test_edid edid)
 	igt_assert(kmstest_get_property(data->drm_fd, connector->connector_id,
 					DRM_MODE_OBJECT_CONNECTOR, "EDID", NULL,
 					&edid_blob_id, NULL));
+	igt_assert(edid_blob_id != 0);
 	igt_assert(edid_blob = drmModeGetPropertyBlob(data->drm_fd,
 						      edid_blob_id));
 
@@ -348,6 +370,7 @@ try_suspend_resume_hpd(data_t *data, struct chamelium_port *port,
 
 	igt_system_suspend_autoresume(state, test);
 	igt_assert(wait_for_hotplug(mon, &timeout));
+	chamelium_wait_reachable(data->chamelium, ONLINE_TIMEOUT);
 
 	if (port) {
 		igt_assert_eq(reprobe_connector(data, port), target_state);
@@ -453,8 +476,8 @@ test_suspend_resume_edid_change(data_t *data, struct chamelium_port *port,
 	igt_flush_hotplugs(mon);
 
 	igt_system_suspend_autoresume(state, test);
-
 	igt_assert(igt_hotplug_detected(mon, HOTPLUG_TIMEOUT));
+	chamelium_wait_reachable(data->chamelium, ONLINE_TIMEOUT);
 
 	get_connectors_link_status_failed(data, link_status_failed[1]);
 
@@ -536,6 +559,145 @@ enable_output(data_t *data,
 	if (chamelium_port_get_type(port) == DRM_MODE_CONNECTOR_VGA)
 		usleep(250000);
 
+	drmModeFreeConnector(connector);
+}
+
+static bool find_mode(const drmModeModeInfo *list, size_t list_len,
+		      const drmModeModeInfo *mode)
+{
+	size_t i;
+
+	for (i = 0; i < list_len; i++) {
+		if (memcmp(&list[i], mode, sizeof(*mode)) == 0) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static void check_modes_subset(const drmModeModeInfo *prev, size_t prev_len,
+			       const drmModeModeInfo *cur, size_t cur_len)
+{
+	size_t i;
+
+	for (i = 0; i < cur_len; i++) {
+		igt_assert_f(find_mode(prev, prev_len, &cur[i]),
+			     "Got new mode %s after link status failure\n",
+			     cur[i].name);
+	}
+
+	igt_assert(cur_len <= prev_len); /* safety net */
+	igt_debug("New mode list contains %zu less modes\n",
+		  prev_len - cur_len);
+}
+
+static bool are_fallback_modes(const drmModeModeInfo *modes, size_t modes_len)
+{
+	igt_assert(modes_len > 0);
+
+	return modes[0].hdisplay <= 1024 && modes[0].vdisplay <= 768;
+}
+
+static void
+test_link_status(data_t *data, struct chamelium_port *port)
+{
+	drmModeConnector *connector;
+	igt_output_t *output;
+	igt_plane_t *primary;
+	drmModeModeInfo *prev_modes;
+	size_t prev_modes_len;
+	drmModeModeInfo mode = {0};
+	uint32_t link_status_id;
+	uint64_t link_status;
+	bool has_prop;
+	unsigned int fb_id = 0;
+	struct igt_fb fb;
+	struct udev_monitor *mon;
+
+	igt_require(chamelium_supports_trigger_link_failure(data->chamelium));
+
+	reset_state(data, port);
+
+	output = prepare_output(data, port, TEST_EDID_BASE);
+	connector = chamelium_port_get_connector(data->chamelium, port, false);
+	primary = igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY);
+	igt_assert(primary);
+
+	has_prop = kmstest_get_property(data->drm_fd, connector->connector_id,
+					DRM_MODE_OBJECT_CONNECTOR,
+					"link-status", &link_status_id,
+					&link_status, NULL);
+	igt_require(has_prop);
+	igt_assert_f(link_status == DRM_MODE_LINK_STATUS_GOOD,
+		     "Expected link status to be %d initially, got %"PRIu64"\n",
+		     DRM_MODE_LINK_STATUS_GOOD, link_status);
+
+	igt_debug("Connector has %d modes\n", connector->count_modes);
+	prev_modes_len = connector->count_modes;
+	prev_modes = malloc(prev_modes_len * sizeof(drmModeModeInfo));
+	memcpy(prev_modes, connector->modes,
+	       prev_modes_len * sizeof(drmModeModeInfo));
+
+	mon = igt_watch_hotplug();
+
+	while (1) {
+		if (link_status == DRM_MODE_LINK_STATUS_BAD) {
+			igt_output_set_prop_value(output,
+						  IGT_CONNECTOR_LINK_STATUS,
+						  DRM_MODE_LINK_STATUS_GOOD);
+		}
+
+		if (memcmp(&connector->modes[0], &mode, sizeof(mode)) != 0) {
+			igt_assert(connector->count_modes > 0);
+			mode = connector->modes[0];
+			igt_debug("Modesetting with %s\n", mode.name);
+			if (fb_id > 0)
+				igt_remove_fb(data->drm_fd, &fb);
+			fb_id = igt_create_color_pattern_fb(data->drm_fd,
+							    mode.hdisplay,
+							    mode.vdisplay,
+							    DRM_FORMAT_XRGB8888,
+							    LOCAL_DRM_FORMAT_MOD_NONE,
+							    0, 0, 0, &fb);
+			igt_assert(fb_id > 0);
+			enable_output(data, port, output, &mode, &fb);
+		} else {
+			igt_display_commit2(&data->display, COMMIT_ATOMIC);
+		}
+
+		igt_debug("Triggering link failure\n");
+		chamelium_trigger_link_failure(data->chamelium, port);
+
+		igt_assert(igt_hotplug_detected(mon, HOTPLUG_TIMEOUT));
+		igt_assert_eq(reprobe_connector(data, port),
+			      DRM_MODE_CONNECTED);
+
+		igt_flush_hotplugs(mon);
+
+		drmModeFreeConnector(connector);
+		connector = chamelium_port_get_connector(data->chamelium, port,
+							 false);
+		link_status = igt_output_get_prop(output, IGT_CONNECTOR_LINK_STATUS);
+		igt_assert_f(link_status == DRM_MODE_LINK_STATUS_BAD,
+			     "Expected link status to be %d after link failure, "
+			     "got %"PRIu64"\n",
+			     DRM_MODE_LINK_STATUS_BAD, link_status);
+		check_modes_subset(prev_modes, prev_modes_len,
+				   connector->modes, connector->count_modes);
+		prev_modes_len = connector->count_modes;
+		memcpy(prev_modes, connector->modes,
+		       connector->count_modes * sizeof(drmModeModeInfo));
+
+		if (are_fallback_modes(connector->modes, connector->count_modes)) {
+			igt_debug("Reached fallback modes\n");
+			break;
+		}
+	}
+
+	igt_cleanup_hotplug(mon);
+	igt_remove_fb(data->drm_fd, &fb);
+	free(prev_modes);
 	drmModeFreeConnector(connector);
 }
 
@@ -861,6 +1023,169 @@ static void test_mode_timings(data_t *data, struct chamelium_port *port)
 	drmModeFreeConnector(connector);
 }
 
+/* Set of Video Identification Codes advertised in the EDID */
+static const uint8_t edid_ar_svds[] = {
+	16, /* 1080p @ 60Hz, 16:9 */
+};
+
+struct vic_mode {
+	int hactive, vactive;
+	int vrefresh; /* Hz */
+	uint32_t picture_ar;
+};
+
+/* Maps Video Identification Codes to a mode */
+static const struct vic_mode vic_modes[] = {
+	[16] = {
+		.hactive = 1920,
+		.vactive = 1080,
+		.vrefresh = 60,
+		.picture_ar = DRM_MODE_PICTURE_ASPECT_16_9,
+	},
+};
+
+/* Maps aspect ratios to their mode flag */
+static const uint32_t mode_ar_flags[] = {
+	[DRM_MODE_PICTURE_ASPECT_16_9] = DRM_MODE_FLAG_PIC_AR_16_9,
+};
+
+static enum infoframe_avi_picture_aspect_ratio
+get_infoframe_avi_picture_ar(uint32_t aspect_ratio)
+{
+	/* The AVI picture aspect ratio field only supports 4:3 and 16:9 */
+	switch (aspect_ratio) {
+	case DRM_MODE_PICTURE_ASPECT_4_3:
+		return INFOFRAME_AVI_PIC_AR_4_3;
+	case DRM_MODE_PICTURE_ASPECT_16_9:
+		return INFOFRAME_AVI_PIC_AR_16_9;
+	default:
+		return INFOFRAME_AVI_PIC_AR_UNSPECIFIED;
+	}
+}
+
+static bool vic_mode_matches_drm(const struct vic_mode *vic_mode,
+				 drmModeModeInfo *drm_mode)
+{
+	uint32_t ar_flag = mode_ar_flags[vic_mode->picture_ar];
+
+	return vic_mode->hactive == drm_mode->hdisplay &&
+	       vic_mode->vactive == drm_mode->vdisplay &&
+	       vic_mode->vrefresh == drm_mode->vrefresh &&
+	       ar_flag == (drm_mode->flags & DRM_MODE_FLAG_PIC_AR_MASK);
+}
+
+static const struct edid *get_aspect_ratio_edid(void)
+{
+	static unsigned char raw_edid[2 * EDID_BLOCK_SIZE] = {0};
+	struct edid *edid;
+	struct edid_ext *edid_ext;
+	struct edid_cea *edid_cea;
+	char *cea_data;
+	struct edid_cea_data_block *block;
+	size_t cea_data_size = 0, vsdb_size;
+	const struct cea_vsdb *vsdb;
+
+	edid = (struct edid *) raw_edid;
+	memcpy(edid, igt_kms_get_base_edid(), sizeof(struct edid));
+	edid->extensions_len = 1;
+	edid_ext = &edid->extensions[0];
+	edid_cea = &edid_ext->data.cea;
+	cea_data = edid_cea->data;
+
+	/* The HDMI VSDB advertises support for InfoFrames */
+	block = (struct edid_cea_data_block *) &cea_data[cea_data_size];
+	vsdb = cea_vsdb_get_hdmi_default(&vsdb_size);
+	cea_data_size += edid_cea_data_block_set_vsdb(block, vsdb,
+						      vsdb_size);
+
+	/* Short Video Descriptor */
+	block = (struct edid_cea_data_block *) &cea_data[cea_data_size];
+	cea_data_size += edid_cea_data_block_set_svd(block, edid_ar_svds,
+						     sizeof(edid_ar_svds));
+
+	assert(cea_data_size <= sizeof(edid_cea->data));
+
+	edid_ext_set_cea(edid_ext, cea_data_size, 0, 0);
+
+	edid_update_checksum(edid);
+
+	return edid;
+}
+
+static void test_display_aspect_ratio(data_t *data, struct chamelium_port *port)
+{
+	igt_output_t *output;
+	igt_plane_t *primary;
+	drmModeConnector *connector;
+	drmModeModeInfo *mode;
+	int fb_id, i;
+	struct igt_fb fb;
+	bool found, ok;
+	struct chamelium_infoframe *infoframe;
+	struct infoframe_avi infoframe_avi;
+	uint8_t vic = 16; /* TODO: test more VICs */
+	const struct vic_mode *vic_mode;
+	uint32_t aspect_ratio;
+	enum infoframe_avi_picture_aspect_ratio frame_ar;
+
+	igt_require(chamelium_supports_get_last_infoframe(data->chamelium));
+
+	reset_state(data, port);
+
+	output = prepare_output(data, port, TEST_EDID_ASPECT_RATIO);
+	connector = chamelium_port_get_connector(data->chamelium, port, false);
+	primary = igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY);
+	igt_assert(primary);
+
+	vic_mode = &vic_modes[vic];
+	aspect_ratio = vic_mode->picture_ar;
+
+	found = false;
+	igt_assert(connector->count_modes > 0);
+	for (i = 0; i < connector->count_modes; i++) {
+		mode = &connector->modes[i];
+
+		if (vic_mode_matches_drm(vic_mode, mode)) {
+			found = true;
+			break;
+		}
+	}
+	igt_assert_f(found,
+		     "Failed to find mode with the correct aspect ratio\n");
+
+	fb_id = igt_create_color_pattern_fb(data->drm_fd,
+					    mode->hdisplay, mode->vdisplay,
+					    DRM_FORMAT_XRGB8888,
+					    LOCAL_DRM_FORMAT_MOD_NONE,
+					    0, 0, 0, &fb);
+	igt_assert(fb_id > 0);
+
+	enable_output(data, port, output, mode, &fb);
+
+	infoframe = chamelium_get_last_infoframe(data->chamelium, port,
+						 CHAMELIUM_INFOFRAME_AVI);
+	igt_assert_f(infoframe, "AVI InfoFrame not received\n");
+
+	ok = infoframe_avi_parse(&infoframe_avi, infoframe->version,
+				 infoframe->payload, infoframe->payload_size);
+	igt_assert_f(ok, "Failed to parse AVI InfoFrame\n");
+
+	frame_ar = get_infoframe_avi_picture_ar(aspect_ratio);
+
+	igt_debug("Checking AVI InfoFrame\n");
+	igt_debug("Picture aspect ratio: got %d, expected %d\n",
+		  infoframe_avi.picture_aspect_ratio, frame_ar);
+	igt_debug("Video Identification Code (VIC): got %d, expected %d\n",
+		  infoframe_avi.vic, vic);
+
+	igt_assert(infoframe_avi.picture_aspect_ratio == frame_ar);
+	igt_assert(infoframe_avi.vic == vic);
+
+	chamelium_infoframe_destroy(infoframe);
+	igt_remove_fb(data->drm_fd, &fb);
+	drmModeFreeConnector(connector);
+}
+
 
 /* Playback parameters control the audio signal we synthesize and send */
 #define PLAYBACK_CHANNELS 2
@@ -1121,6 +1446,59 @@ static void audio_state_stop(struct audio_state *state, bool success)
 		  success ? "ALL GREEN" : "FAILED");
 }
 
+static void check_audio_infoframe(struct audio_state *state)
+{
+	struct chamelium_infoframe *infoframe;
+	struct infoframe_audio infoframe_audio;
+	struct infoframe_audio expected = {0};
+	bool ok;
+
+	if (!chamelium_supports_get_last_infoframe(state->chamelium)) {
+		igt_debug("Skipping audio InfoFrame check: "
+			  "Chamelium board doesn't support GetLastInfoFrame\n");
+		return;
+	}
+
+	expected.coding_type = INFOFRAME_AUDIO_CT_PCM;
+	expected.channel_count = state->playback.channels;
+	expected.sampling_freq = state->playback.rate;
+	expected.sample_size = snd_pcm_format_width(state->playback.format);
+
+	infoframe = chamelium_get_last_infoframe(state->chamelium, state->port,
+						 CHAMELIUM_INFOFRAME_AUDIO);
+	if (infoframe == NULL && state->playback.channels <= 2) {
+		/* Audio InfoFrames are optional for mono and stereo audio */
+		igt_debug("Skipping audio InfoFrame check: "
+			  "no InfoFrame received\n");
+		return;
+	}
+	igt_assert_f(infoframe != NULL, "no audio InfoFrame received\n");
+
+	ok = infoframe_audio_parse(&infoframe_audio, infoframe->version,
+				   infoframe->payload, infoframe->payload_size);
+	chamelium_infoframe_destroy(infoframe);
+	igt_assert_f(ok, "failed to parse audio InfoFrame\n");
+
+	igt_debug("Checking audio InfoFrame:\n");
+	igt_debug("coding_type: got %d, expected %d\n",
+		  infoframe_audio.coding_type, expected.coding_type);
+	igt_debug("channel_count: got %d, expected %d\n",
+		  infoframe_audio.channel_count, expected.channel_count);
+	igt_debug("sampling_freq: got %d, expected %d\n",
+		  infoframe_audio.sampling_freq, expected.sampling_freq);
+	igt_debug("sample_size: got %d, expected %d\n",
+		  infoframe_audio.sample_size, expected.sample_size);
+
+	if (infoframe_audio.coding_type != INFOFRAME_AUDIO_CT_UNSPECIFIED)
+		igt_assert(infoframe_audio.coding_type == expected.coding_type);
+	if (infoframe_audio.channel_count >= 0)
+		igt_assert(infoframe_audio.channel_count == expected.channel_count);
+	if (infoframe_audio.sampling_freq >= 0)
+		igt_assert(infoframe_audio.sampling_freq == expected.sampling_freq);
+	if (infoframe_audio.sample_size >= 0)
+		igt_assert(infoframe_audio.sample_size == expected.sample_size);
+}
+
 static int
 audio_output_frequencies_callback(void *data, void *buffer, int samples)
 {
@@ -1245,6 +1623,8 @@ static bool test_audio_frequencies(struct audio_state *state)
 	free(buf);
 	free(channel);
 	audio_signal_fini(state->signal);
+
+	check_audio_infoframe(state);
 
 	return success;
 }
@@ -2141,7 +2521,7 @@ test_hpd_storm_disable(data_t *data, struct chamelium_port *port, int width)
 	igt_hpd_storm_reset(data->drm_fd);
 }
 
-static const unsigned char *get_edid(enum test_edid edid)
+static const struct edid *get_edid(enum test_edid edid)
 {
 	switch (edid) {
 	case TEST_EDID_BASE:
@@ -2152,6 +2532,8 @@ static const unsigned char *get_edid(enum test_edid edid)
 		return igt_kms_get_hdmi_audio_edid();
 	case TEST_EDID_DP_AUDIO:
 		return igt_kms_get_dp_audio_edid();
+	case TEST_EDID_ASPECT_RATIO:
+		return get_aspect_ratio_edid();
 	}
 	assert(0); /* unreachable */
 }
@@ -2233,6 +2615,9 @@ igt_main
 		connector_subtest("dp-hpd-storm-disable", DisplayPort)
 			test_hpd_storm_disable(&data, port,
 					       HPD_STORM_PULSE_INTERVAL_DP);
+
+		connector_subtest("dp-link-status", DisplayPort)
+			test_link_status(&data, port);
 
 		connector_subtest("dp-edid-change-during-suspend", DisplayPort)
 			test_suspend_resume_edid_change(&data, port,
@@ -2431,6 +2816,9 @@ igt_main
 		connector_subtest("hdmi-audio-edid", HDMIA)
 			test_display_audio_edid(&data, port,
 						TEST_EDID_HDMI_AUDIO);
+
+		connector_subtest("hdmi-aspect-ratio", HDMIA)
+			test_display_aspect_ratio(&data, port);
 	}
 
 	igt_subtest_group {

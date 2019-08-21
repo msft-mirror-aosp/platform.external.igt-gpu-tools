@@ -351,6 +351,32 @@ static xmlrpc_value *chamelium_rpc(struct chamelium *chamelium,
 	return res;
 }
 
+static bool __chamelium_is_reachable(struct chamelium *chamelium)
+{
+	xmlrpc_value *res;
+
+	/* GetSupportedInputs does not require a port and is harmless */
+	res = __chamelium_rpc(chamelium, NULL, "GetSupportedInputs", "()");
+
+	if (res != NULL)
+		xmlrpc_DECREF(res);
+
+	if (chamelium->env.fault_occurred)
+		igt_debug("Chamelium RPC call failed: %s\n",
+			  chamelium->env.fault_string);
+
+	return !chamelium->env.fault_occurred;
+}
+
+void chamelium_wait_reachable(struct chamelium *chamelium, int timeout)
+{
+	bool chamelium_online = igt_wait(__chamelium_is_reachable(chamelium),
+					 timeout * 1000, 100);
+
+	igt_assert_f(chamelium_online,
+		     "Couldn't connect to Chamelium for %ds", timeout);
+}
+
 /**
  * chamelium_plug:
  * @chamelium: The Chamelium instance to use
@@ -562,10 +588,9 @@ static void chamelium_destroy_edid(struct chamelium *chamelium, int edid_id)
  * Returns: An opaque pointer to the Chamelium EDID
  */
 struct chamelium_edid *chamelium_new_edid(struct chamelium *chamelium,
-					  const unsigned char *raw_edid)
+					  const struct edid *edid)
 {
 	struct chamelium_edid *chamelium_edid;
-	const struct edid *edid = (struct edid *) raw_edid;
 	size_t edid_size = edid_get_size(edid);
 
 	chamelium_edid = calloc(1, sizeof(struct chamelium_edid));
@@ -1122,6 +1147,78 @@ int chamelium_get_captured_frame_count(struct chamelium *chamelium)
 
 	xmlrpc_DECREF(res);
 	return ret;
+}
+
+bool chamelium_supports_get_last_infoframe(struct chamelium *chamelium)
+{
+	return chamelium_supports_method(chamelium, "GetLastInfoFrame");
+}
+
+static const char *
+chamelium_infoframe_type_str(enum chamelium_infoframe_type type)
+{
+	switch (type) {
+	case CHAMELIUM_INFOFRAME_AVI:
+		return "avi";
+	case CHAMELIUM_INFOFRAME_AUDIO:
+		return "audio";
+	case CHAMELIUM_INFOFRAME_MPEG:
+		return "mpeg";
+	case CHAMELIUM_INFOFRAME_VENDOR:
+		return "vendor";
+	}
+	assert(0); /* unreachable */
+}
+
+struct chamelium_infoframe *
+chamelium_get_last_infoframe(struct chamelium *chamelium,
+			     struct chamelium_port *port,
+			     enum chamelium_infoframe_type type)
+{
+	xmlrpc_value *res, *res_version, *res_payload;
+	struct chamelium_infoframe *infoframe;
+	const unsigned char *payload;
+
+	res = chamelium_rpc(chamelium, NULL, "GetLastInfoFrame", "(is)",
+			    port->id, chamelium_infoframe_type_str(type));
+	xmlrpc_struct_find_value(&chamelium->env, res, "version", &res_version);
+	xmlrpc_struct_find_value(&chamelium->env, res, "payload", &res_payload);
+	infoframe = calloc(1, sizeof(*infoframe));
+	xmlrpc_read_int(&chamelium->env, res_version, &infoframe->version);
+	xmlrpc_read_base64(&chamelium->env, res_payload,
+			   &infoframe->payload_size, &payload);
+	/* xmlrpc-c's docs say payload is actually not constant */
+	infoframe->payload = (uint8_t *) payload;
+	xmlrpc_DECREF(res_version);
+	xmlrpc_DECREF(res_payload);
+	xmlrpc_DECREF(res);
+
+	if (infoframe->payload_size == 0) {
+		chamelium_infoframe_destroy(infoframe);
+		return NULL;
+	}
+	return infoframe;
+}
+
+void chamelium_infoframe_destroy(struct chamelium_infoframe *infoframe)
+{
+	free(infoframe->payload);
+	free(infoframe);
+}
+
+bool chamelium_supports_trigger_link_failure(struct chamelium *chamelium)
+{
+	return chamelium_supports_method(chamelium, "TriggerLinkFailure");
+}
+
+/**
+ * chamelium_trigger_link_failure: trigger a link failure on the provided port.
+ */
+void chamelium_trigger_link_failure(struct chamelium *chamelium,
+				    struct chamelium_port *port)
+{
+	xmlrpc_DECREF(chamelium_rpc(chamelium, port, "TriggerLinkFailure",
+				    "(i)", port->id));
 }
 
 bool chamelium_has_audio_support(struct chamelium *chamelium,
