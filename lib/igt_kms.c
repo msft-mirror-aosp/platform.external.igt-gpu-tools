@@ -100,7 +100,7 @@ static int forced_connectors_device[MAX_CONNECTORS + 1];
  *
  * Returns: a basic edid block
  */
-const unsigned char *igt_kms_get_base_edid(void)
+const struct edid *igt_kms_get_base_edid(void)
 {
 	static struct edid edid;
 	drmModeModeInfo mode = {};
@@ -119,7 +119,7 @@ const unsigned char *igt_kms_get_base_edid(void)
 	edid_init_with_mode(&edid, &mode);
 	edid_update_checksum(&edid);
 
-	return (unsigned char *) &edid;
+	return &edid;
 }
 
 /**
@@ -136,7 +136,7 @@ const unsigned char *igt_kms_get_base_edid(void)
  *
  * Returns: an alternate edid block
  */
-const unsigned char *igt_kms_get_alt_edid(void)
+const struct edid *igt_kms_get_alt_edid(void)
 {
 	static struct edid edid;
 	drmModeModeInfo mode = {};
@@ -155,13 +155,13 @@ const unsigned char *igt_kms_get_alt_edid(void)
 	edid_init_with_mode(&edid, &mode);
 	edid_update_checksum(&edid);
 
-	return (unsigned char *) &edid;
+	return &edid;
 }
 
-#define AUDIO_EDID_LENGTH (2 * EDID_LENGTH)
+#define AUDIO_EDID_SIZE (2 * EDID_BLOCK_SIZE)
 
-static void
-generate_audio_edid(unsigned char raw_edid[static AUDIO_EDID_LENGTH],
+static const struct edid *
+generate_audio_edid(unsigned char raw_edid[static AUDIO_EDID_SIZE],
 		    bool with_vsdb, struct cea_sad *sad,
 		    struct cea_speaker_alloc *speaker_alloc)
 {
@@ -205,14 +205,15 @@ generate_audio_edid(unsigned char raw_edid[static AUDIO_EDID_LENGTH],
 	edid_ext_set_cea(edid_ext, cea_data_size, 0, EDID_CEA_BASIC_AUDIO);
 
 	edid_update_checksum(edid);
-	edid_ext_update_cea_checksum(edid_ext);
+
+	return edid;
 }
 
-const unsigned char *igt_kms_get_hdmi_audio_edid(void)
+const struct edid *igt_kms_get_hdmi_audio_edid(void)
 {
 	int channels;
 	uint8_t sampling_rates, sample_sizes;
-	static unsigned char raw_edid[AUDIO_EDID_LENGTH] = {0};
+	static unsigned char raw_edid[AUDIO_EDID_SIZE] = {0};
 	struct cea_sad sad = {0};
 	struct cea_speaker_alloc speaker_alloc = {0};
 
@@ -229,16 +230,14 @@ const unsigned char *igt_kms_get_hdmi_audio_edid(void)
 	/* Initialize the Speaker Allocation Data */
 	speaker_alloc.speakers = CEA_SPEAKER_FRONT_LEFT_RIGHT_CENTER;
 
-	generate_audio_edid(raw_edid, true, &sad, &speaker_alloc);
-
-	return raw_edid;
+	return generate_audio_edid(raw_edid, true, &sad, &speaker_alloc);
 }
 
-const unsigned char *igt_kms_get_dp_audio_edid(void)
+const struct edid *igt_kms_get_dp_audio_edid(void)
 {
 	int channels;
 	uint8_t sampling_rates, sample_sizes;
-	static unsigned char raw_edid[AUDIO_EDID_LENGTH] = {0};
+	static unsigned char raw_edid[AUDIO_EDID_SIZE] = {0};
 	struct cea_sad sad = {0};
 	struct cea_speaker_alloc speaker_alloc = {0};
 
@@ -255,9 +254,7 @@ const unsigned char *igt_kms_get_dp_audio_edid(void)
 	/* Initialize the Speaker Allocation Data */
 	speaker_alloc.speakers = CEA_SPEAKER_FRONT_LEFT_RIGHT_CENTER;
 
-	generate_audio_edid(raw_edid, false, &sad, &speaker_alloc);
-
-	return raw_edid;
+	return generate_audio_edid(raw_edid, false, &sad, &speaker_alloc);
 }
 
 static const uint8_t edid_4k_svds[] = {
@@ -268,7 +265,7 @@ static const uint8_t edid_4k_svds[] = {
 	19,                  /* 720p @ 50Hz */
 };
 
-const unsigned char *igt_kms_get_4k_edid(void)
+const struct edid *igt_kms_get_4k_edid(void)
 {
 	static unsigned char raw_edid[256] = {0};
 	struct edid *edid;
@@ -316,11 +313,11 @@ const unsigned char *igt_kms_get_4k_edid(void)
 	edid_ext_set_cea(edid_ext, cea_data_size, 0, 0);
 
 	edid_update_checksum(edid);
-	edid_ext_update_cea_checksum(edid_ext);
-	return raw_edid;
+
+	return edid;
 }
 
-const unsigned char *igt_kms_get_3d_edid(void)
+const struct edid *igt_kms_get_3d_edid(void)
 {
 	static unsigned char raw_edid[256] = {0};
 	struct edid *edid;
@@ -367,8 +364,8 @@ const unsigned char *igt_kms_get_3d_edid(void)
 	edid_ext_set_cea(edid_ext, cea_data_size, 0, 0);
 
 	edid_update_checksum(edid);
-	edid_ext_update_cea_checksum(edid_ext);
-	return raw_edid;
+
+	return edid;
 }
 
 const char * const igt_plane_prop_names[IGT_NUM_PLANE_PROPS] = {
@@ -413,6 +410,8 @@ const char * const igt_connector_prop_names[IGT_NUM_CONNECTOR_PROPS] = {
 	[IGT_CONNECTOR_BROADCAST_RGB] = "Broadcast RGB",
 	[IGT_CONNECTOR_CONTENT_PROTECTION] = "Content Protection",
 	[IGT_CONNECTOR_VRR_CAPABLE] = "vrr_capable",
+	[IGT_CONNECTOR_HDCP_CONTENT_TYPE] = "HDCP Content Type",
+	[IGT_CONNECTOR_LINK_STATUS] = "link-status",
 };
 
 /*
@@ -1084,7 +1083,7 @@ bool kmstest_force_connector(int drm_fd, drmModeConnector *connector,
  * If @edid is NULL, the forced EDID will be removed.
  */
 void kmstest_force_edid(int drm_fd, drmModeConnector *connector,
-			const unsigned char *edid)
+			const struct edid *edid)
 {
 	char *path;
 	int debugfs_fd, ret;
@@ -1101,7 +1100,7 @@ void kmstest_force_edid(int drm_fd, drmModeConnector *connector,
 		ret = write(debugfs_fd, "reset", 5);
 	else
 		ret = write(debugfs_fd, edid,
-			    edid_get_size((struct edid *) edid));
+			    edid_get_size(edid));
 	close(debugfs_fd);
 
 	/* To allow callers to always use GetConnectorCurrent we need to force a
@@ -1858,6 +1857,10 @@ static void igt_output_reset(igt_output_t *output)
 	if (igt_output_has_prop(output, IGT_CONNECTOR_BROADCAST_RGB))
 		igt_output_set_prop_value(output, IGT_CONNECTOR_BROADCAST_RGB,
 					  BROADCAST_RGB_FULL);
+
+	if (igt_output_has_prop(output, IGT_CONNECTOR_CONTENT_PROTECTION))
+		igt_output_set_prop_enum(output, IGT_CONNECTOR_CONTENT_PROTECTION,
+					 "Undesired");
 }
 
 /**
@@ -1870,6 +1873,7 @@ static void igt_output_reset(igt_output_t *output)
  * For outputs:
  * - %IGT_CONNECTOR_CRTC_ID
  * - %IGT_CONNECTOR_BROADCAST_RGB (if applicable)
+ *   %IGT_CONNECTOR_CONTENT_PROTECTION (if applicable)
  * - igt_output_override_mode() to default.
  *
  * For pipes:

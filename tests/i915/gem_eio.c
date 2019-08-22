@@ -559,6 +559,7 @@ static void test_inflight_contexts(int fd, unsigned int wait)
 		const uint32_t bbe = MI_BATCH_BUFFER_END;
 		struct drm_i915_gem_exec_object2 obj[2];
 		struct drm_i915_gem_execbuffer2 execbuf;
+		unsigned int count;
 		igt_spin_t *hang;
 		uint32_t ctx[64];
 		int fence[64];
@@ -587,16 +588,19 @@ static void test_inflight_contexts(int fd, unsigned int wait)
 		execbuf.buffer_count = 2;
 		execbuf.flags = engine | I915_EXEC_FENCE_OUT;
 
+		count = 0;
 		for (unsigned int n = 0; n < ARRAY_SIZE(fence); n++) {
 			execbuf.rsvd1 = ctx[n];
-			gem_execbuf_wr(fd, &execbuf);
+			if (__gem_execbuf_wr(fd, &execbuf))
+				break; /* small shared ring */
 			fence[n] = execbuf.rsvd2 >> 32;
 			igt_assert(fence[n] != -1);
+			count++;
 		}
 
 		check_wait(fd, obj[1].handle, wait, NULL);
 
-		for (unsigned int n = 0; n < ARRAY_SIZE(fence); n++) {
+		for (unsigned int n = 0; n < count; n++) {
 			igt_assert_eq(sync_fence_status(fence[n]), -EIO);
 			close(fence[n]);
 		}
@@ -730,6 +734,11 @@ static void reset_stress(int fd, uint32_t ctx0,
 		.flags = engine,
 	};
 	igt_stats_t stats;
+	int max;
+
+	max = gem_measure_ring_inflight(fd, engine, 0);
+	max = max / 2 - 1; /* assume !execlists and a shared ring */
+	igt_require(max > 0);
 
 	gem_write(fd, obj.handle, 0, &bbe, sizeof(bbe));
 
@@ -751,11 +760,11 @@ static void reset_stress(int fd, uint32_t ctx0,
 		hang = spin_sync(fd, ctx0, engine);
 
 		execbuf.rsvd1 = ctx;
-		for (i = 0; i < 10; i++)
+		for (i = 0; i < max; i++)
 			gem_execbuf(fd, &execbuf);
 
 		execbuf.rsvd1 = ctx0;
-		for (i = 0; i < 10; i++)
+		for (i = 0; i < max; i++)
 			gem_execbuf(fd, &execbuf);
 
 		/* Wedge after a small delay. */
@@ -773,11 +782,11 @@ static void reset_stress(int fd, uint32_t ctx0,
 		 * both contexts.
 		 */
 		execbuf.rsvd1 = ctx;
-		for (i = 0; i < 5; i++)
+		for (i = 0; i < max; i++)
 			gem_execbuf(fd, &execbuf);
 
 		execbuf.rsvd1 = ctx0;
-		for (i = 0; i < 5; i++)
+		for (i = 0; i < max; i++)
 			gem_execbuf(fd, &execbuf);
 
 		gem_sync(fd, obj.handle);

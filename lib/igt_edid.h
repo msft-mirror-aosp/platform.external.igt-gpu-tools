@@ -32,6 +32,8 @@
 
 #include <xf86drmMode.h>
 
+#define EDID_BLOCK_SIZE 128
+
 /**
  * est_timings: set of established timings
  */
@@ -236,7 +238,7 @@ struct hdmi_vsdb {
 	uint8_t flags1; /* enum hdmi_vsdb_flags1 */
 	uint8_t max_tdms_clock; /* multiply by 5MHz */
 	uint8_t flags2; /* enum hdmi_vsdb_flags2 */
-	char data[]; /* latency, misc, VIC, 3D */
+	uint8_t data[]; /* latency, misc, VIC, 3D */
 } __attribute__((packed));
 
 #define HDMI_VSDB_MIN_SIZE 2 /* just the source physical address */
@@ -366,7 +368,6 @@ void detailed_timing_set_string(struct detailed_timing *dt,
 
 void cea_sad_init_pcm(struct cea_sad *sad, int channels,
 		      uint8_t sampling_rates, uint8_t sample_sizes);
-void edid_ext_update_cea_checksum(struct edid_ext *ext);
 const struct cea_vsdb *cea_vsdb_get_hdmi_default(size_t *size);
 size_t edid_cea_data_block_set_sad(struct edid_cea_data_block *block,
 				   const struct cea_sad *sads, size_t sads_len);
