@@ -31,7 +31,7 @@ igt_simple_main
 	int drm_fd;
 	drmModeRes *res;
 	drmModeConnector *connector;
-	const unsigned char *edid;
+	const struct edid *edid;
 	int mode_count, connector_id;
 
 	drm_fd = drm_open_driver_master(DRIVER_INTEL);
@@ -46,8 +46,7 @@ igt_simple_main
 
 		connector = drmModeGetConnectorCurrent(drm_fd, res->connectors[i]);
 
-		if (connector->connector_type == DRM_MODE_CONNECTOR_HDMIA &&
-		    connector->connection == DRM_MODE_DISCONNECTED)
+		if (connector->connector_type == DRM_MODE_CONNECTOR_HDMIA)
 			break;
 
 		drmModeFreeConnector(connector);
@@ -55,6 +54,8 @@ igt_simple_main
 		connector = NULL;
 	}
 	igt_require(connector);
+
+	kmstest_unset_all_crtcs(drm_fd, res);
 
 	edid = igt_kms_get_3d_edid();
 
