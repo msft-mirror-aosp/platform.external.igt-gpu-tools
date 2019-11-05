@@ -51,8 +51,10 @@
 #include <assert.h>
 #include <grp.h>
 
+#ifndef ANDROID
 #include <proc/readproc.h>
 #include <libudev.h>
+#endif
 
 #include "drmtest.h"
 #include "i915_drm.h"
@@ -428,6 +430,8 @@ void igt_stop_shrink_helper(void)
 	igt_stop_helper(&shrink_helper);
 }
 
+#ifndef ANDROID
+
 static void show_kernel_stack(pid_t pid)
 {
 	char buf[80], *str;
@@ -526,6 +530,7 @@ void igt_stop_hang_detector(void)
 {
 	igt_stop_helper(&hang_detector);
 }
+#endif
 
 /**
  * igt_check_boolean_env_var:
@@ -1262,6 +1267,8 @@ void igt_set_module_param_int(const char *name, int val)
 	igt_set_module_param(name, str);
 }
 
+#ifndef ANDROID
+
 /**
  * igt_is_process_running:
  * @comm: Name of process in the form found in /proc/pid/comm (limited to 15
@@ -1387,7 +1394,6 @@ __igt_show_stat(struct pinfo *info)
 	igt_info("%30.30s", fn);
 	igt_info("\n");
 }
-
 
 static void
 igt_show_stat_header(void)
@@ -1545,6 +1551,7 @@ igt_lsof(const char *dpath)
 
 	free(sanitized);
 }
+#endif
 
 static struct igt_siglatency {
 	timer_t timer;
