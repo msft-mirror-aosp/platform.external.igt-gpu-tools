@@ -1,0 +1,33 @@
+cc_test {
+    name: "gem_blt",
+    srcs: [
+        "benchmarks/gem_blt.c",
+        "lib/drmtest.c",
+        "lib/igt_aux.c",
+        "lib/igt_core.c",
+        "lib/igt_debugfs.c",
+        "lib/igt_dummyload.c",
+        "lib/igt_kmod.c",
+        "lib/igt_sysfs.c",
+        "lib/ioctl_wrappers.c",
+        "lib/i915/gem_mman.c",
+    ],
+    cflags: [
+        "-Wall",
+        "-Werror",
+        "-Wno-missing-field-initializers",
+        "-Wno-unused-parameter",
+        "-Wno-unused-variable",
+        "-DHAVE_GETTID",
+        "-DHAVE_LIBGEN_H",
+        "-DHAVE_MEMFD_CREATE",
+    ],
+    local_include_dirs: [
+        "lib",
+        "lib/stubs/drm",
+        "prebuilt-intermediates",
+    ],
+    static_libs: ["libelf", "libkmod"],
+    shared_libs: ["libdrm", "libunwind"],
+    stl: "none",
+}

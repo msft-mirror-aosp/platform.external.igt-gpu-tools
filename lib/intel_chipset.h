@@ -34,7 +34,6 @@
 #define BIT(x) (1ul <<(x))
 
 struct pci_device *intel_get_pci_device(void);
-uint32_t intel_get_drm_devid(int fd);
 
 struct intel_device_info {
 	unsigned gen;
@@ -77,7 +76,14 @@ struct intel_device_info {
 
 const struct intel_device_info *intel_get_device_info(uint16_t devid) __attribute__((pure));
 
+#ifdef ANDROID
+static inline uint32_t intel_get_drm_devid(int __attribute__((unused)) fd) { return 0U; }
+static inline unsigned intel_gen(uint16_t __attribute__((unused)) devid) { return false; }
+#else
+uint32_t intel_get_drm_devid(int fd);
 unsigned intel_gen(uint16_t devid) __attribute__((pure));
+#endif
+
 unsigned intel_gt(uint16_t devid) __attribute__((pure));
 
 extern enum pch_type intel_pch;
