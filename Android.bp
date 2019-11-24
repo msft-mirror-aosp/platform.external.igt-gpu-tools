@@ -1,17 +1,5 @@
-cc_test {
-    name: "gem_blt",
-    srcs: [
-        "benchmarks/gem_blt.c",
-        "lib/drmtest.c",
-        "lib/igt_aux.c",
-        "lib/igt_core.c",
-        "lib/igt_debugfs.c",
-        "lib/igt_dummyload.c",
-        "lib/igt_kmod.c",
-        "lib/igt_sysfs.c",
-        "lib/ioctl_wrappers.c",
-        "lib/i915/gem_mman.c",
-    ],
+cc_defaults {
+    name: "igt-gpu-tools-defaults",
     cflags: [
         "-Wall",
         "-Werror",
@@ -22,12 +10,39 @@ cc_test {
         "-DHAVE_LIBGEN_H",
         "-DHAVE_MEMFD_CREATE",
     ],
-    local_include_dirs: [
+    static_libs: ["libelf", "libkmod"],
+    shared_libs: ["libdrm", "libunwind"],
+}
+
+cc_library_static {
+    name: "igt-gpu-tools",
+    defaults: ["igt-gpu-tools-defaults"],
+    srcs: [
+        "lib/drmtest.c",
+        "lib/igt_aux.c",
+        "lib/igt_core.c",
+        "lib/igt_debugfs.c",
+        "lib/igt_dummyload.c",
+        "lib/igt_kmod.c",
+        "lib/igt_sysfs.c",
+        "lib/ioctl_wrappers.c",
+        "lib/i915/gem_mman.c",
+    ],
+    export_include_dirs: [
         "lib",
         "lib/stubs/drm",
         "prebuilt-intermediates",
     ],
-    static_libs: ["libelf", "libkmod"],
-    shared_libs: ["libdrm", "libunwind"],
-    stl: "none",
+}
+
+cc_defaults {
+    name: "igt-gpu-tools-test-defaults",
+    defaults: ["igt-gpu-tools-defaults"],
+    static_libs: ["igt-gpu-tools"],
+}
+
+cc_test {
+    name: "gem_blt",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["benchmarks/gem_blt.c"],
 }
