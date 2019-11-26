@@ -72,8 +72,11 @@
 #include "igt_rc.h"
 #include "igt_list.h"
 
+#ifndef ANDROID
 #define UNW_LOCAL_ONLY
 #include <libunwind.h>
+#endif
+
 #include <elfutils/libdwfl.h>
 
 #ifdef HAVE_LIBGEN_H
