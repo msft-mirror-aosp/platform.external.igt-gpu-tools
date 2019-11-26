@@ -11,7 +11,7 @@ cc_defaults {
         "-DHAVE_MEMFD_CREATE",
     ],
     static_libs: ["libelf", "libkmod"],
-    shared_libs: ["libdrm", "libunwind"],
+    shared_libs: ["libdrm"],
 }
 
 cc_library_static {
