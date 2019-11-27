@@ -22,11 +22,16 @@ cc_library_static {
         "lib/igt_aux.c",
         "lib/igt_core.c",
         "lib/igt_debugfs.c",
+        "lib/igt_device.c",
         "lib/igt_dummyload.c",
+        "lib/igt_fb.c",
         "lib/igt_kmod.c",
+        "lib/igt_kms.c",
+        "lib/igt_stats.c",
         "lib/igt_sysfs.c",
         "lib/ioctl_wrappers.c",
         "lib/i915/gem_mman.c",
+	"lib/uwildmat/uwildmat.c"
     ],
     export_include_dirs: [
         "lib",
@@ -46,3 +51,10 @@ cc_test {
     defaults: ["igt-gpu-tools-test-defaults"],
     srcs: ["benchmarks/gem_blt.c"],
 }
+
+cc_test {
+    name: "kms_flip",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_flip.c"],
+}
+
