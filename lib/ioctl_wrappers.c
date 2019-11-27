@@ -1098,6 +1098,7 @@ uint64_t gem_aperture_size(int fd)
  */
 uint64_t gem_mappable_aperture_size(void)
 {
+#if defined(USE_INTEL)
 	struct pci_device *pci_dev = intel_get_pci_device();
 	int bar;
 
@@ -1107,6 +1108,9 @@ uint64_t gem_mappable_aperture_size(void)
 		bar = 2;
 
 	return pci_dev->regions[bar].size;
+#else
+	return 0;
+#endif
 }
 
 /**

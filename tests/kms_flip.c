@@ -25,7 +25,9 @@
 
 #include "igt.h"
 
+#if defined(USE_CAIRO_PIXMAN)
 #include <cairo.h>
+#endif
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
@@ -604,12 +606,19 @@ static void recreate_fb(struct test_output *o)
 
 static igt_hang_t hang_gpu(int fd)
 {
+#if defined(USE_INTEL)
 	return igt_hang_ring(fd, I915_EXEC_DEFAULT);
+#else
+	igt_hang_t ret = {};
+	return ret;
+#endif
 }
 
 static void unhang_gpu(int fd, igt_hang_t hang)
 {
+#if defined(USE_INTEL)
 	igt_post_hang_ring(fd, hang);
+#endif
 }
 
 static bool is_wedged(int fd)
@@ -944,6 +953,8 @@ found:
 
 static void paint_flip_mode(struct igt_fb *fb, bool odd_frame)
 {
+	/* TODO (b/145293089) resolve Cairo/Pixman dependencies */
+#if defined(USE_CAIRO_PIXMAN)
 	cairo_t *cr = igt_get_cairo_ctx(drm_fd, fb);
 	int width = fb->width;
 	int height = fb->height;
@@ -959,6 +970,7 @@ static void paint_flip_mode(struct igt_fb *fb, bool odd_frame)
 	cairo_fill(cr);
 
 	igt_put_cairo_ctx(drm_fd, fb, cr);
+#endif
 }
 
 static bool fb_is_bound(struct test_output *o, int fb)
@@ -1565,6 +1577,7 @@ igt_main
 		igt_install_exit_handler(kms_flip_exit_handler);
 		get_timestamp_format();
 
+#if defined(USE_INTEL)
 		if (is_i915_device(drm_fd)) {
 			bufmgr = drm_intel_bufmgr_gem_init(drm_fd, 4096);
 			if (bufmgr) {
@@ -1572,6 +1585,7 @@ igt_main
 				batch = intel_batchbuffer_alloc(bufmgr, devid);
 			}
 		}
+#endif
 	}
 
 	igt_subtest("nonblocking-read")
