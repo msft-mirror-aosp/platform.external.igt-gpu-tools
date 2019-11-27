@@ -29,7 +29,10 @@
 #include <math.h>
 #include <wchar.h>
 #include <inttypes.h>
+
+#if defined(USE_CAIRO_PIXMAN)
 #include <pixman.h>
+#endif
 
 #include "drmtest.h"
 #include "igt_aux.h"
@@ -38,7 +41,9 @@
 #include "igt_halffloat.h"
 #include "igt_kms.h"
 #include "igt_matrix.h"
+#if defined(USE_VC4)
 #include "igt_vc4.h"
+#endif
 #include "igt_amd.h"
 #include "igt_x86.h"
 #include "ioctl_wrappers.h"
@@ -64,6 +69,7 @@
  * functions to work with these pixel format codes.
  */
 
+#if defined(USE_CAIRO_PIXMAN)
 #define PIXMAN_invalid	0
 
 #if CAIRO_VERSION < CAIRO_VERSION_ENCODE(1, 17, 2)
@@ -79,13 +85,16 @@
 #define CAIRO_FORMAT_RGBA128F (7)
 #define cairo_format_t int
 #endif
+#endif /*defined(USE_CAIRO_PIXMAN)*/
 
 /* drm fourcc/cairo format maps */
 static const struct format_desc_struct {
 	const char *name;
 	uint32_t drm_id;
+#if defined(USE_CAIRO_PIXMAN)
 	cairo_format_t cairo_id;
 	pixman_format_code_t pixman_id;
+#endif
 	int depth;
 	int num_planes;
 	int plane_bpp[4];
@@ -93,220 +102,304 @@ static const struct format_desc_struct {
 	uint8_t vsub;
 } format_desc[] = {
 	{ .name = "ARGB1555", .depth = -1, .drm_id = DRM_FORMAT_ARGB1555,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_INVALID,
 	  .pixman_id = PIXMAN_a1r5g5b5,
+#endif
 	  .num_planes = 1, .plane_bpp = { 16, },
 	  .hsub = 1, .vsub = 1,
 	},
 	{ .name = "C8", .depth = -1, .drm_id = DRM_FORMAT_C8,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_INVALID,
 	  .pixman_id = PIXMAN_r3g3b2,
+#endif
 	  .num_planes = 1, .plane_bpp = { 8, },
 	  .hsub = 1, .vsub = 1,
 	},
 	{ .name = "XRGB1555", .depth = -1, .drm_id = DRM_FORMAT_XRGB1555,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_INVALID,
 	  .pixman_id = PIXMAN_x1r5g5b5,
+#endif
 	  .num_planes = 1, .plane_bpp = { 16, },
 	  .hsub = 1, .vsub = 1,
 	},
 	{ .name = "RGB565", .depth = 16, .drm_id = DRM_FORMAT_RGB565,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGB16_565,
 	  .pixman_id = PIXMAN_r5g6b5,
+#endif
 	  .num_planes = 1, .plane_bpp = { 16, },
 	  .hsub = 1, .vsub = 1,
 	},
 	{ .name = "BGR565", .depth = -1, .drm_id = DRM_FORMAT_BGR565,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_INVALID,
 	  .pixman_id = PIXMAN_b5g6r5,
+#endif
 	  .num_planes = 1, .plane_bpp = { 16, },
 	  .hsub = 1, .vsub = 1,
 	},
 	{ .name = "BGR888", .depth = -1, .drm_id = DRM_FORMAT_BGR888,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_INVALID,
 	  .pixman_id = PIXMAN_b8g8r8,
+#endif
 	  .num_planes = 1, .plane_bpp = { 24, },
 	  .hsub = 1, .vsub = 1,
 	},
 	{ .name = "RGB888", .depth = -1, .drm_id = DRM_FORMAT_RGB888,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_INVALID,
 	  .pixman_id = PIXMAN_r8g8b8,
+#endif
 	  .num_planes = 1, .plane_bpp = { 24, },
 	  .hsub = 1, .vsub = 1,
 	},
 	{ .name = "XYUV8888", .depth = -1, .drm_id = DRM_FORMAT_XYUV8888,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGB24,
 	  .num_planes = 1, .plane_bpp = { 32, },
+#endif
 	  .hsub = 1, .vsub = 1,
 	},
 	{ .name = "XRGB8888", .depth = 24, .drm_id = DRM_FORMAT_XRGB8888,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGB24,
 	  .pixman_id = PIXMAN_x8r8g8b8,
+#endif
 	  .num_planes = 1, .plane_bpp = { 32, },
 	  .hsub = 1, .vsub = 1,
 	},
 	{ .name = "XBGR8888", .depth = -1, .drm_id = DRM_FORMAT_XBGR8888,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_INVALID,
 	  .pixman_id = PIXMAN_x8b8g8r8,
+#endif
 	  .num_planes = 1, .plane_bpp = { 32, },
 	  .hsub = 1, .vsub = 1,
 	},
 	{ .name = "XRGB2101010", .depth = 30, .drm_id = DRM_FORMAT_XRGB2101010,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGB30,
 	  .pixman_id = PIXMAN_x2r10g10b10,
+#endif
 	  .num_planes = 1, .plane_bpp = { 32, },
 	  .hsub = 1, .vsub = 1,
 	},
 	{ .name = "ARGB8888", .depth = 32, .drm_id = DRM_FORMAT_ARGB8888,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_ARGB32,
 	  .pixman_id = PIXMAN_a8r8g8b8,
+#endif
 	  .num_planes = 1, .plane_bpp = { 32, },
 	  .hsub = 1, .vsub = 1,
 	},
 	{ .name = "ABGR8888", .depth = -1, .drm_id = DRM_FORMAT_ABGR8888,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_INVALID,
 	  .pixman_id = PIXMAN_a8b8g8r8,
+#endif
 	  .num_planes = 1, .plane_bpp = { 32, },
 	  .hsub = 1, .vsub = 1,
 	},
 	{ .name = "XRGB16161616F", .depth = -1, .drm_id = DRM_FORMAT_XRGB16161616F,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGBA128F,
+#endif
 	  .num_planes = 1, .plane_bpp = { 64, },
 	},
 	{ .name = "ARGB16161616F", .depth = -1, .drm_id = DRM_FORMAT_ARGB16161616F,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGBA128F,
+#endif
 	  .num_planes = 1, .plane_bpp = { 64, },
 	},
 	{ .name = "XBGR16161616F", .depth = -1, .drm_id = DRM_FORMAT_XBGR16161616F,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGBA128F,
+#endif
 	  .num_planes = 1, .plane_bpp = { 64, },
 	},
 	{ .name = "ABGR16161616F", .depth = -1, .drm_id = DRM_FORMAT_ABGR16161616F,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGBA128F,
+#endif
 	  .num_planes = 1, .plane_bpp = { 64, },
 	},
 	{ .name = "NV12", .depth = -1, .drm_id = DRM_FORMAT_NV12,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGB24,
+#endif
 	  .num_planes = 2, .plane_bpp = { 8, 16, },
 	  .hsub = 2, .vsub = 2,
 	},
 	{ .name = "NV16", .depth = -1, .drm_id = DRM_FORMAT_NV16,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGB24,
+#endif
 	  .num_planes = 2, .plane_bpp = { 8, 16, },
 	  .hsub = 2, .vsub = 1,
 	},
 	{ .name = "NV21", .depth = -1, .drm_id = DRM_FORMAT_NV21,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGB24,
+#endif
 	  .num_planes = 2, .plane_bpp = { 8, 16, },
 	  .hsub = 2, .vsub = 2,
 	},
 	{ .name = "NV61", .depth = -1, .drm_id = DRM_FORMAT_NV61,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGB24,
+#endif
 	  .num_planes = 2, .plane_bpp = { 8, 16, },
 	  .hsub = 2, .vsub = 1,
 	},
 	{ .name = "YUYV", .depth = -1, .drm_id = DRM_FORMAT_YUYV,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGB24,
+#endif
 	  .num_planes = 1, .plane_bpp = { 16, },
 	  .hsub = 2, .vsub = 1,
 	},
 	{ .name = "YVYU", .depth = -1, .drm_id = DRM_FORMAT_YVYU,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGB24,
+#endif
 	  .num_planes = 1, .plane_bpp = { 16, },
 	  .hsub = 2, .vsub = 1,
 	},
 	{ .name = "UYVY", .depth = -1, .drm_id = DRM_FORMAT_UYVY,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGB24,
+#endif
 	  .num_planes = 1, .plane_bpp = { 16, },
 	  .hsub = 2, .vsub = 1,
 	},
 	{ .name = "VYUY", .depth = -1, .drm_id = DRM_FORMAT_VYUY,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGB24,
+#endif
 	  .num_planes = 1, .plane_bpp = { 16, },
 	  .hsub = 2, .vsub = 1,
 	},
 	{ .name = "YU12", .depth = -1, .drm_id = DRM_FORMAT_YUV420,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGB24,
+#endif
 	  .num_planes = 3, .plane_bpp = { 8, 8, 8, },
 	  .hsub = 2, .vsub = 2,
 	},
 	{ .name = "YU16", .depth = -1, .drm_id = DRM_FORMAT_YUV422,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGB24,
+#endif
 	  .num_planes = 3, .plane_bpp = { 8, 8, 8, },
 	  .hsub = 2, .vsub = 1,
 	},
 	{ .name = "YV12", .depth = -1, .drm_id = DRM_FORMAT_YVU420,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGB24,
+#endif
 	  .num_planes = 3, .plane_bpp = { 8, 8, 8, },
 	  .hsub = 2, .vsub = 2,
 	},
 	{ .name = "YV16", .depth = -1, .drm_id = DRM_FORMAT_YVU422,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGB24,
+#endif
 	  .num_planes = 3, .plane_bpp = { 8, 8, 8, },
 	  .hsub = 2, .vsub = 1,
 	},
 	{ .name = "Y410", .depth = -1, .drm_id = DRM_FORMAT_Y410,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGBA128F,
+#endif
 	  .num_planes = 1, .plane_bpp = { 32, },
 	  .hsub = 1, .vsub = 1,
 	},
 	{ .name = "Y412", .depth = -1, .drm_id = DRM_FORMAT_Y412,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGBA128F,
+#endif
 	  .num_planes = 1, .plane_bpp = { 64, },
 	  .hsub = 1, .vsub = 1,
 	},
 	{ .name = "Y416", .depth = -1, .drm_id = DRM_FORMAT_Y416,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGBA128F,
+#endif
 	  .num_planes = 1, .plane_bpp = { 64, },
 	  .hsub = 1, .vsub = 1,
 	},
 	{ .name = "XV30", .depth = -1, .drm_id = DRM_FORMAT_XVYU2101010,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGB96F,
+#endif
 	  .num_planes = 1, .plane_bpp = { 32, },
 	  .hsub = 1, .vsub = 1,
 	},
 	{ .name = "XV36", .depth = -1, .drm_id = DRM_FORMAT_XVYU12_16161616,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGB96F,
+#endif
 	  .num_planes = 1, .plane_bpp = { 64, },
 	  .hsub = 1, .vsub = 1,
 	},
 	{ .name = "XV48", .depth = -1, .drm_id = DRM_FORMAT_XVYU16161616,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGB96F,
+#endif
 	  .num_planes = 1, .plane_bpp = { 64, },
 	  .hsub = 1, .vsub = 1,
 	},
 	{ .name = "P010", .depth = -1, .drm_id = DRM_FORMAT_P010,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGB96F,
+#endif
 	  .num_planes = 2, .plane_bpp = { 16, 32 },
 	  .vsub = 2, .hsub = 2,
 	},
 	{ .name = "P012", .depth = -1, .drm_id = DRM_FORMAT_P012,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGB96F,
+#endif
 	  .num_planes = 2, .plane_bpp = { 16, 32 },
 	  .vsub = 2, .hsub = 2,
 	},
 	{ .name = "P016", .depth = -1, .drm_id = DRM_FORMAT_P016,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGB96F,
+#endif
 	  .num_planes = 2, .plane_bpp = { 16, 32 },
 	  .vsub = 2, .hsub = 2,
 	},
 	{ .name = "Y210", .depth = -1, .drm_id = DRM_FORMAT_Y210,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGB96F,
+#endif
 	  .num_planes = 1, .plane_bpp = { 32, },
 	  .hsub = 2, .vsub = 1,
 	},
 	{ .name = "Y212", .depth = -1, .drm_id = DRM_FORMAT_Y212,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGB96F,
+#endif
 	  .num_planes = 1, .plane_bpp = { 32, },
 	  .hsub = 2, .vsub = 1,
 	},
 	{ .name = "Y216", .depth = -1, .drm_id = DRM_FORMAT_Y216,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_RGB96F,
+#endif
 	  .num_planes = 1, .plane_bpp = { 32, },
 	  .hsub = 2, .vsub = 1,
 	},
 	{ .name = "IGT-FLOAT", .depth = -1, .drm_id = IGT_FORMAT_FLOAT,
+#if defined(USE_CAIRO_PIXMAN)
 	  .cairo_id = CAIRO_FORMAT_INVALID,
+#endif
 	  .num_planes = 1, .plane_bpp = { 128 },
 	},
 };
@@ -357,6 +450,7 @@ void igt_get_fb_tile_size(int fd, uint64_t modifier, int fb_bpp,
 
 		*height_ret = 1;
 		break;
+#if defined(USE_INTEL)
 	case LOCAL_I915_FORMAT_MOD_X_TILED:
 		igt_require_intel(fd);
 		if (intel_gen(intel_get_drm_devid(fd)) == 2) {
@@ -403,6 +497,8 @@ void igt_get_fb_tile_size(int fd, uint64_t modifier, int fb_bpp,
 			igt_assert(false);
 		}
 		break;
+#endif
+#if defined(USE_VC4)
 	case DRM_FORMAT_MOD_BROADCOM_VC4_T_TILED:
 		igt_require_vc4(fd);
 		*width_ret = 128;
@@ -428,6 +524,7 @@ void igt_get_fb_tile_size(int fd, uint64_t modifier, int fb_bpp,
 		*width_ret = 256;
 		*height_ret = vc4_modifier_param;
 		break;
+#endif
 	default:
 		igt_assert(false);
 	}
@@ -699,7 +796,7 @@ static void memset64(uint64_t *s, uint64_t c, size_t n)
 static void clear_yuv_buffer(struct igt_fb *fb)
 {
 	bool full_range = fb->color_range == IGT_COLOR_YCBCR_FULL_RANGE;
-	void *ptr;
+	uint8_t *ptr;
 
 	igt_assert(igt_format_is_yuv(fb->drm_format));
 
@@ -717,40 +814,40 @@ static void clear_yuv_buffer(struct igt_fb *fb)
 		       fb->strides[1] * fb->plane_height[1]);
 		break;
 	case DRM_FORMAT_XYUV8888:
-		wmemset(ptr + fb->offsets[0], full_range ? 0x00008080 : 0x00108080,
+		wmemset((wchar_t*)(ptr + fb->offsets[0]), full_range ? 0x00008080 : 0x00108080,
 			fb->strides[0] * fb->plane_height[0] / sizeof(wchar_t));
 		break;
 	case DRM_FORMAT_YUYV:
 	case DRM_FORMAT_YVYU:
-		wmemset(ptr + fb->offsets[0],
+		wmemset((wchar_t*)(ptr + fb->offsets[0]),
 			full_range ? 0x80008000 : 0x80108010,
 			fb->strides[0] * fb->plane_height[0] / sizeof(wchar_t));
 		break;
 	case DRM_FORMAT_UYVY:
 	case DRM_FORMAT_VYUY:
-		wmemset(ptr + fb->offsets[0],
+		wmemset((wchar_t*)(ptr + fb->offsets[0]),
 			full_range ? 0x00800080 : 0x10801080,
 			fb->strides[0] * fb->plane_height[0] / sizeof(wchar_t));
 		break;
 	case DRM_FORMAT_P010:
 	case DRM_FORMAT_P012:
 	case DRM_FORMAT_P016:
-		wmemset(ptr, full_range ? 0 : 0x10001000,
+		wmemset((wchar_t*)ptr, full_range ? 0 : 0x10001000,
 			fb->offsets[1] / sizeof(wchar_t));
-		wmemset(ptr + fb->offsets[1], 0x80008000,
+		wmemset((wchar_t*)(ptr + fb->offsets[1]), 0x80008000,
 			fb->strides[1] * fb->plane_height[1] / sizeof(wchar_t));
 		break;
 	case DRM_FORMAT_Y210:
 	case DRM_FORMAT_Y212:
 	case DRM_FORMAT_Y216:
-		wmemset(ptr + fb->offsets[0],
+		wmemset((wchar_t*)(ptr + fb->offsets[0]),
 			full_range ? 0x80000000 : 0x80001000,
 			fb->strides[0] * fb->plane_height[0] / sizeof(wchar_t));
 		break;
 
 	case DRM_FORMAT_XVYU2101010:
 	case DRM_FORMAT_Y410:
-		wmemset(ptr + fb->offsets[0],
+		wmemset((wchar_t*)(ptr + fb->offsets[0]),
 			full_range ? 0x20000200 : 0x20010200,
 		fb->strides[0] * fb->plane_height[0] / sizeof(wchar_t));
 		break;
@@ -759,7 +856,7 @@ static void clear_yuv_buffer(struct igt_fb *fb)
 	case DRM_FORMAT_XVYU16161616:
 	case DRM_FORMAT_Y412:
 	case DRM_FORMAT_Y416:
-		memset64(ptr + fb->offsets[0],
+		memset64((uint64_t*)(ptr + fb->offsets[0]),
 			 full_range ? 0x800000008000ULL : 0x800010008000ULL,
 			 fb->strides[0] * fb->plane_height[0] / sizeof(uint64_t));
 		break;
@@ -805,14 +902,18 @@ static int create_bo_for_fb(struct igt_fb *fb)
 			gem_set_tiling(fd, fb->gem_handle,
 				       igt_fb_mod_to_tiling(fb->modifier),
 				       fb->strides[0]);
+#if defined(USE_VC4)
 		} else if (is_vc4_device(fd)) {
 			fb->gem_handle = igt_vc4_create_bo(fd, fb->size);
 
 			if (fb->modifier == DRM_FORMAT_MOD_BROADCOM_VC4_T_TILED)
 				igt_vc4_set_tiling(fd, fb->gem_handle,
 						   fb->modifier);
+#endif
+#if defined(USE_AMD)
 		} else if (is_amdgpu_device(fd)) {
 			fb->gem_handle = igt_amd_create_bo(fd, fb->size);
+#endif
 		} else {
 			igt_assert(false);
 		}
@@ -1050,7 +1151,7 @@ static uint16_t update_crc16_dp(uint16_t crc_old, uint16_t d)
 void igt_fb_calc_crc(struct igt_fb *fb, igt_crc_t *crc)
 {
 	int x, y, i;
-	void *ptr;
+	uint8_t *ptr;
 	uint8_t *data;
 	uint16_t din;
 
@@ -1095,6 +1196,7 @@ void igt_fb_calc_crc(struct igt_fb *fb, igt_crc_t *crc)
 	igt_fb_unmap_buffer(fb, ptr);
 }
 
+#if defined(USE_CAIRO_PIXMAN)
 /**
  * igt_paint_color:
  * @cr: cairo drawing context
@@ -1405,6 +1507,7 @@ void igt_paint_image(cairo_t *cr, const char *filename,
 
 	cairo_restore(cr);
 }
+#endif /*defined(USE_CAIRO_PIXMAN)*/
 
 /**
  * igt_create_fb_with_bo_size:
@@ -1619,6 +1722,7 @@ unsigned int igt_create_color_pattern_fb(int fd, int width, int height,
 	return fb_id;
 }
 
+#if defined(USE_CAIRO_PIXMAN)
 /**
  * igt_create_image_fb:
  * @drm_fd: open i915 drm file descriptor
@@ -1661,6 +1765,7 @@ unsigned int igt_create_image_fb(int fd, int width, int height,
 
 	return fb_id;
 }
+#endif
 
 struct box {
 	int x, y, width, height;
@@ -1762,6 +1867,7 @@ unsigned int igt_create_stereo_fb(int drm_fd, drmModeModeInfo *mode,
 	return fb_id;
 }
 
+#if defined(USE_CAIRO_PIXMAN)
 static pixman_format_code_t drm_format_to_pixman(uint32_t drm_format)
 {
 	const struct format_desc_struct *f;
@@ -1785,6 +1891,7 @@ static cairo_format_t drm_format_to_cairo(uint32_t drm_format)
 	igt_assert_f(0, "can't find a cairo format for %08x (%s)\n",
 		     drm_format, igt_format_str(drm_format));
 }
+#endif
 
 struct fb_blit_linear {
 	struct igt_fb fb;
@@ -1799,6 +1906,7 @@ struct fb_blit_upload {
 	struct intel_batchbuffer *batch;
 };
 
+#if defined(USE_CAIRO_PIXMAN)
 static bool blitter_ok(const struct igt_fb *fb)
 {
 	for (int i = 0; i < fb->num_planes; i++) {
@@ -2035,6 +2143,7 @@ static void create_cairo_surface__gpu(int fd, struct igt_fb *fb)
 				    (cairo_user_data_key_t *)create_cairo_surface__gpu,
 				    blit, destroy_cairo_surface__gpu);
 }
+#endif /*defined(USE_CAIRO_PIXMAN)*/
 
 /**
  * igt_dirty_fb:
@@ -2058,6 +2167,7 @@ static void unmap_bo(struct igt_fb *fb, void *ptr)
 		igt_dirty_fb(fb->fd, fb);
 }
 
+#if defined(USE_CAIRO_PIXMAN)
 static void destroy_cairo_surface__gtt(void *arg)
 {
 	struct igt_fb *fb = arg;
@@ -2065,6 +2175,7 @@ static void destroy_cairo_surface__gtt(void *arg)
 	unmap_bo(fb, cairo_image_surface_get_data(fb->cairo_surface));
 	fb->cairo_surface = NULL;
 }
+#endif
 
 static void *map_bo(int fd, struct igt_fb *fb)
 {
@@ -2080,18 +2191,23 @@ static void *map_bo(int fd, struct igt_fb *fb)
 	else if (is_i915_device(fd))
 		ptr = gem_mmap__gtt(fd, fb->gem_handle, fb->size,
 				    PROT_READ | PROT_WRITE);
+#if defined(USE_VC4)
 	else if (is_vc4_device(fd))
 		ptr = igt_vc4_mmap_bo(fd, fb->gem_handle, fb->size,
 				      PROT_READ | PROT_WRITE);
+#endif
+#if defined(USE_AMD)
 	else if (is_amdgpu_device(fd))
 		ptr = igt_amd_mmap_bo(fd, fb->gem_handle, fb->size,
 				      PROT_READ | PROT_WRITE);
+#endif
 	else
 		igt_assert(false);
 
 	return ptr;
 }
 
+#if defined(USE_CAIRO_PIXMAN)
 static void create_cairo_surface__gtt(int fd, struct igt_fb *fb)
 {
 	void *ptr = map_bo(fd, fb);
@@ -2110,6 +2226,7 @@ static void create_cairo_surface__gtt(int fd, struct igt_fb *fb)
 				    (cairo_user_data_key_t *)create_cairo_surface__gtt,
 				    fb, destroy_cairo_surface__gtt);
 }
+#endif
 
 struct fb_convert_blit_upload {
 	struct fb_blit_upload base;
@@ -2118,6 +2235,7 @@ struct fb_convert_blit_upload {
 	uint8_t *shadow_ptr;
 };
 
+#if defined(USE_CAIRO_PIXMAN)
 static void *igt_fb_create_cairo_shadow_buffer(int fd,
 					       unsigned drm_format,
 					       unsigned int width,
@@ -2465,9 +2583,9 @@ static void convert_rgb24_to_yuv(struct fb_convert *cvt)
 		   igt_format_is_yuv(cvt->dst.fb->drm_format));
 
 	get_yuv_parameters(cvt->dst.fb, &params);
-	y = cvt->dst.ptr + params.y_offset;
-	u = cvt->dst.ptr + params.u_offset;
-	v = cvt->dst.ptr + params.v_offset;
+	y = (uint8_t*)cvt->dst.ptr + params.y_offset;
+	u = (uint8_t*)cvt->dst.ptr + params.u_offset;
+	v = (uint8_t*)cvt->dst.ptr + params.v_offset;
 
 	for (i = 0; i < cvt->dst.fb->height; i++) {
 		const uint8_t *rgb_tmp = rgb24;
@@ -2647,10 +2765,10 @@ static void convert_float_to_yuv16(struct fb_convert *cvt, bool alpha)
 		   !(params.u_offset % sizeof(*u)) &&
 		   !(params.v_offset % sizeof(*v)));
 
-	a = cvt->dst.ptr + params.a_offset;
-	y = cvt->dst.ptr + params.y_offset;
-	u = cvt->dst.ptr + params.u_offset;
-	v = cvt->dst.ptr + params.v_offset;
+	a = (uint16_t*)((uint8_t*)cvt->dst.ptr + params.a_offset);
+	y = (uint16_t*)((uint8_t*)cvt->dst.ptr + params.y_offset);
+	u = (uint16_t*)((uint8_t*)cvt->dst.ptr + params.u_offset);
+	v = (uint16_t*)((uint8_t*)cvt->dst.ptr + params.v_offset);
 
 	for (i = 0; i < cvt->dst.fb->height; i++) {
 		const float *rgb_tmp = ptr;
@@ -2873,7 +2991,7 @@ static void convert_fp16_to_float(struct fb_convert *cvt)
 static void convert_float_to_fp16(struct fb_convert *cvt)
 {
 	int i, j;
-	uint16_t *fp16 = cvt->dst.ptr + cvt->dst.fb->offsets[0];
+	uint16_t *fp16 = (uint16_t*)((uint8_t*)cvt->dst.ptr + cvt->dst.fb->offsets[0]);
 	const float *ptr = cvt->src.ptr;
 	unsigned float_stride = cvt->src.fb->strides[0] / sizeof(*ptr);
 	unsigned fp16_stride = cvt->dst.fb->strides[0] / sizeof(*fp16);
@@ -3151,6 +3269,7 @@ static void create_cairo_surface__convert(int fd, struct igt_fb *fb)
 				    (cairo_user_data_key_t *)create_cairo_surface__convert,
 				    blit, destroy_cairo_surface__convert);
 }
+#endif /*defined(USE_CAIRO_PIXMAN)*/
 
 
 /**
@@ -3183,6 +3302,7 @@ void igt_fb_unmap_buffer(struct igt_fb *fb, void *buffer)
 	return unmap_bo(fb, buffer);
 }
 
+#if defined(USE_CAIRO_PIXMAN)
 /**
  * igt_get_cairo_surface:
  * @fd: open drm file descriptor
@@ -3276,6 +3396,7 @@ void igt_put_cairo_ctx(int fd, struct igt_fb *fb, cairo_t *cr)
 
 	cairo_destroy(cr);
 }
+#endif /*defined(USE_CAIRO_PIXMAN)*/
 
 /**
  * igt_remove_fb:
@@ -3291,7 +3412,9 @@ void igt_remove_fb(int fd, struct igt_fb *fb)
 	if (!fb || !fb->fb_id)
 		return;
 
+#if defined(USE_CAIRO_PIXMAN)
 	cairo_surface_destroy(fb->cairo_surface);
+#endif
 	do_or_die(drmModeRmFB(fd, fb->fb_id));
 	if (fb->is_dumb)
 		kmstest_dumb_destroy(fd, fb->gem_handle);
@@ -3300,6 +3423,7 @@ void igt_remove_fb(int fd, struct igt_fb *fb)
 	fb->fb_id = 0;
 }
 
+#if defined(USE_CAIRO_PIXMAN)
 /**
  * igt_fb_convert_with_stride:
  * @dst: pointer to the #igt_fb structure that will store the conversion result
@@ -3370,6 +3494,7 @@ unsigned int igt_fb_convert(struct igt_fb *dst, struct igt_fb *src,
 	return igt_fb_convert_with_stride(dst, src, dst_fourcc, dst_modifier,
 					  0);
 }
+#endif /*defined(USE_CAIRO_PIXMAN)*/
 
 /**
  * igt_bpp_depth_to_drm_format:
@@ -3435,6 +3560,7 @@ const char *igt_format_str(uint32_t drm_format)
  */
 bool igt_fb_supported_format(uint32_t drm_format)
 {
+#if defined (USE_CAIRO_PIXMAN)
 	const struct format_desc_struct *f;
 
 	/*
@@ -3450,7 +3576,7 @@ bool igt_fb_supported_format(uint32_t drm_format)
 		if (f->drm_id == drm_format)
 			return (f->cairo_id != CAIRO_FORMAT_INVALID) ||
 				(f->pixman_id != PIXMAN_invalid);
-
+#endif
 	return false;
 }
 
