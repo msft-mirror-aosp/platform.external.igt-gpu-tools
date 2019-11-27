@@ -39,6 +39,12 @@
 #include "igt_color_encoding.h"
 #include "igt_debugfs.h"
 
+#if !defined(ANDROID)
+#define USE_AMD
+#define USE_INTEL
+#define USE_VC4
+#endif
+
 /*
  * Internal format to denote a buffer compatible with pixman's
  * floating point format. Range [0-1].
