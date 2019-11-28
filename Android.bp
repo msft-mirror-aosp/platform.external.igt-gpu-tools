@@ -10,7 +10,7 @@ cc_defaults {
         "-DHAVE_LIBGEN_H",
         "-DHAVE_MEMFD_CREATE",
     ],
-    static_libs: ["libelf", "libkmod"],
+    static_libs: ["libelf", "libkmod", "libion", "liblog"],
     shared_libs: ["libdrm"],
 }
 
@@ -19,6 +19,8 @@ cc_library_static {
     defaults: ["igt-gpu-tools-defaults"],
     srcs: [
         "lib/drmtest.c",
+        "lib/gem.c",
+        "lib/gem_msm.c",
         "lib/igt_aux.c",
         "lib/igt_core.c",
         "lib/igt_debugfs.c",
@@ -29,11 +31,13 @@ cc_library_static {
         "lib/igt_kms.c",
         "lib/igt_stats.c",
         "lib/igt_sysfs.c",
+        "lib/ion.c",
         "lib/ioctl_wrappers.c",
         "lib/i915/gem_mman.c",
-	"lib/uwildmat/uwildmat.c"
+        "lib/uwildmat/uwildmat.c",
     ],
     export_include_dirs: [
+        "include",
         "lib",
         "lib/stubs/drm",
         "prebuilt-intermediates",
@@ -58,3 +62,8 @@ cc_test {
     srcs: ["tests/kms_flip.c"],
 }
 
+cc_test {
+    name: "ion_fb",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/ion_fb.c"],
+}
