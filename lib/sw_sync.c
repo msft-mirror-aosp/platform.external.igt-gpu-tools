@@ -33,7 +33,7 @@
 #include <stdint.h>
 #include <sys/ioctl.h>
 
-#include "sync_file.h"
+#include <linux/sync_file.h>
 
 #include "igt_debugfs.h"
 #include "igt_kmod.h"
