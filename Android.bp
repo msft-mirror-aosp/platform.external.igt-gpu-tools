@@ -22,6 +22,7 @@ cc_library_static {
         "lib/gem.c",
         "lib/gem_msm.c",
         "lib/igt_aux.c",
+        "lib/igt_color_encoding.c",
         "lib/igt_core.c",
         "lib/igt_debugfs.c",
         "lib/igt_device.c",
@@ -33,6 +34,7 @@ cc_library_static {
         "lib/igt_sysfs.c",
         "lib/ion.c",
         "lib/ioctl_wrappers.c",
+        "lib/sw_sync.c",
         "lib/i915/gem_mman.c",
         "lib/uwildmat/uwildmat.c",
     ],
@@ -60,6 +62,12 @@ cc_test {
     name: "kms_flip",
     defaults: ["igt-gpu-tools-test-defaults"],
     srcs: ["tests/kms_flip.c"],
+}
+
+cc_test {
+    name: "kms_atomic",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_atomic.c"],
 }
 
 cc_test {

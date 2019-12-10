@@ -1635,9 +1635,11 @@ unsigned int igt_create_color_fb(int fd, int width, int height,
 	fb_id = igt_create_fb(fd, width, height, format, modifier, fb);
 	igt_assert(fb_id);
 
+#if defined(USE_CAIRO_PIXMAN)
 	cr = igt_get_cairo_ctx(fd, fb);
 	igt_paint_color(cr, 0, 0, width, height, r, g, b);
 	igt_put_cairo_ctx(fd, fb, cr);
+#endif
 
 	return fb_id;
 }
@@ -1672,9 +1674,11 @@ unsigned int igt_create_pattern_fb(int fd, int width, int height,
 	fb_id = igt_create_fb(fd, width, height, format, modifier, fb);
 	igt_assert(fb_id);
 
+#if defined(USE_CAIRO_PIXMAN)
 	cr = igt_get_cairo_ctx(fd, fb);
 	igt_paint_test_pattern(cr, width, height);
 	igt_put_cairo_ctx(fd, fb, cr);
+#endif
 
 	return fb_id;
 }
@@ -1714,10 +1718,12 @@ unsigned int igt_create_color_pattern_fb(int fd, int width, int height,
 	fb_id = igt_create_fb(fd, width, height, format, modifier, fb);
 	igt_assert(fb_id);
 
+#if defined(USE_CAIRO_PIXMAN)
 	cr = igt_get_cairo_ctx(fd, fb);
 	igt_paint_color(cr, 0, 0, width, height, r, g, b);
 	igt_paint_test_pattern(cr, width, height);
 	igt_put_cairo_ctx(fd, fb, cr);
+#endif
 
 	return fb_id;
 }
@@ -3576,8 +3582,12 @@ bool igt_fb_supported_format(uint32_t drm_format)
 		if (f->drm_id == drm_format)
 			return (f->cairo_id != CAIRO_FORMAT_INVALID) ||
 				(f->pixman_id != PIXMAN_invalid);
-#endif
+
 	return false;
+#else
+	/* If we don't use Cairo/Pixman, all formats are equally good */
+	return true;
+#endif
 }
 
 /**
