@@ -302,6 +302,7 @@ plane_primary_overlay_zpos(igt_pipe_t *pipe, igt_output_t *output,
 				    format_overlay, I915_TILING_NONE,
 				    0.2, 0.2, 0.2, &fb_overlay);
 
+#if defined(USE_CAIRO_PIXMAN)
 	/* Draw a hole in the overlay */
 	cr = igt_get_cairo_ctx(pipe->display->drm_fd, &fb_overlay);
 	cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
@@ -310,6 +311,7 @@ plane_primary_overlay_zpos(igt_pipe_t *pipe, igt_output_t *output,
 			      0.0, 0.0, 0.0, 0.0);
 	cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 	igt_put_cairo_ctx(pipe->display->drm_fd, &fb_overlay, cr);
+#endif
 
 	igt_plane_set_fb(primary, &fb_primary);
 	igt_plane_set_fb(overlay, &fb_overlay);
@@ -337,6 +339,7 @@ plane_primary_overlay_zpos(igt_pipe_t *pipe, igt_output_t *output,
 	igt_assert_eq_u64(igt_plane_get_prop(overlay, IGT_PLANE_ZPOS), 0);
 
 	/* Draw a hole in the primary exactly on top of the overlay plane */
+#if defined(USE_CAIRO_PIXMAN)
 	cr = igt_get_cairo_ctx(pipe->display->drm_fd, &fb_primary);
 	cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
 	igt_paint_color_alpha(cr, w_overlay / 2, h_overlay / 2,
@@ -344,6 +347,7 @@ plane_primary_overlay_zpos(igt_pipe_t *pipe, igt_output_t *output,
 			      0.0, 0.0, 0.0, 0.5);
 	cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 	igt_put_cairo_ctx(pipe->display->drm_fd, &fb_primary, cr);
+#endif
 
 	igt_info("Committing with a hole in the primary through "\
 		  "which the underlay should be seen\n");
@@ -683,7 +687,8 @@ static void crtc_invalid_params_fence(igt_pipe_t *pipe,
 {
 	int timeline, fence_fd;
 	void *map;
-	const ptrdiff_t PAGE_SIZE = sysconf(_SC_PAGE_SIZE);
+	const ptrdiff_t page_size = sysconf(_SC_PAGE_SIZE);
+
 	uint64_t old_mode_id = pipe->values[IGT_CRTC_MODE_ID];
 
 	igt_require_sw_sync();
@@ -691,28 +696,28 @@ static void crtc_invalid_params_fence(igt_pipe_t *pipe,
 	timeline = sw_sync_timeline_create();
 
 	/* invalid out_fence_ptr */
-	map = mmap(NULL, PAGE_SIZE, PROT_READ, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+	map = mmap(NULL, page_size, PROT_READ, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
 	igt_assert(map != MAP_FAILED);
 
 	igt_pipe_obj_set_prop_value(pipe, IGT_CRTC_OUT_FENCE_PTR, (ptrdiff_t)map);
 	crtc_commit_atomic_err(pipe, plane, ATOMIC_RELAX_NONE, EFAULT);
-	munmap(map, PAGE_SIZE);
+	munmap(map, page_size);
 
 	/* invalid out_fence_ptr */
-	map = mmap(NULL, PAGE_SIZE, PROT_EXEC, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+	map = mmap(NULL, page_size, PROT_EXEC, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
 	igt_assert(map != MAP_FAILED);
 
 	igt_pipe_obj_set_prop_value(pipe, IGT_CRTC_OUT_FENCE_PTR, (ptrdiff_t)map);
 	crtc_commit_atomic_err(pipe, plane, ATOMIC_RELAX_NONE, EFAULT);
-	munmap(map, PAGE_SIZE);
+	munmap(map, page_size);
 
 	/* invalid out_fence_ptr */
-	map = mmap(NULL, PAGE_SIZE, PROT_NONE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+	map = mmap(NULL, page_size, PROT_NONE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
 	igt_assert(map != MAP_FAILED);
 
 	igt_pipe_obj_set_prop_value(pipe, IGT_CRTC_OUT_FENCE_PTR, (ptrdiff_t)map);
 	crtc_commit_atomic_err(pipe, plane, ATOMIC_RELAX_NONE, EFAULT);
-	munmap(map, PAGE_SIZE);
+	munmap(map, page_size);
 
 	/* valid in fence but not allowed prop on crtc */
 	fence_fd = sw_sync_timeline_create_fence(timeline, 1);
