@@ -35,6 +35,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <string.h>
+#include <strings.h>
 #include <stdlib.h>
 #ifdef HAVE_LINUX_KD_H
 #include <linux/kd.h>
@@ -42,7 +43,10 @@
 #include <sys/kd.h>
 #endif
 
+#if !defined(ANDROID)
 #include <libudev.h>
+#endif
+
 #include <poll.h>
 #include <errno.h>
 #include <time.h>
@@ -876,6 +880,7 @@ void kmstest_dumb_destroy(int fd, uint32_t handle)
 	igt_assert_eq(__kmstest_dumb_destroy(fd, handle), 0);
 }
 
+#if !defined(ANDROID)
 /*
  * Returns: the previous mode, or KD_GRAPHICS if no /dev/tty0 was
  * found and nothing was done.
@@ -913,6 +918,7 @@ err:
 
 	return -errno;
 }
+#endif
 
 static unsigned long orig_vt_mode = -1UL;
 
@@ -923,6 +929,7 @@ static unsigned long orig_vt_mode = -1UL;
  */
 void kmstest_restore_vt_mode(void)
 {
+#if !defined(ANDROID)
 	long ret;
 
 	if (orig_vt_mode != -1UL) {
@@ -932,6 +939,7 @@ void kmstest_restore_vt_mode(void)
 		igt_debug("VT: original mode 0x%lx restored\n", orig_vt_mode);
 		orig_vt_mode = -1UL;
 	}
+#endif
 }
 
 /**
@@ -946,6 +954,7 @@ void kmstest_restore_vt_mode(void)
  */
 void kmstest_set_vt_graphics_mode(void)
 {
+#if !defined(ANDROID)
 	long ret;
 
 	igt_install_exit_handler((igt_exit_handler_t) kmstest_restore_vt_mode);
@@ -956,6 +965,7 @@ void kmstest_set_vt_graphics_mode(void)
 	orig_vt_mode = ret;
 
 	igt_debug("VT: graphics mode set (mode was 0x%lx)\n", ret);
+#endif
 }
 
 
@@ -983,6 +993,7 @@ bool kmstest_force_connector(int drm_fd, drmModeConnector *connector,
 	uint32_t devid;
 	int len, dir, idx;
 
+#if defined(USE_INTEL)
 	if (is_i915_device(drm_fd)) {
 		devid = intel_get_drm_devid(drm_fd);
 
@@ -997,6 +1008,7 @@ bool kmstest_force_connector(int drm_fd, drmModeConnector *connector,
 		    && (IS_HASWELL(devid) || IS_BROADWELL(devid)))
 			return false;
 	}
+#endif
 
 	switch (state) {
 	case FORCE_CONNECTOR_ON:
@@ -1820,7 +1832,24 @@ static void igt_plane_reset(igt_plane_t *plane)
 		igt_plane_set_prop_enum(plane, IGT_PLANE_PIXEL_BLEND_MODE, "Pre-multiplied");
 
 	if (igt_plane_has_prop(plane, IGT_PLANE_ALPHA))
-		igt_plane_set_prop_value(plane, IGT_PLANE_ALPHA, 0xffff);
+	{
+		uint64_t max_alpha = 0xffff;
+		drmModePropertyPtr alpha_prop = drmModeGetProperty(
+			plane->pipe->display->drm_fd,
+			plane->props[IGT_PLANE_ALPHA]);
+
+		if (alpha_prop)
+		{
+			if (alpha_prop->flags & DRM_MODE_PROP_RANGE)
+			{
+				max_alpha = alpha_prop->values[1];
+			}
+
+			drmModeFreeProperty(alpha_prop);
+		}
+
+		igt_plane_set_prop_value(plane, IGT_PLANE_ALPHA, max_alpha);
+	}
 
 
 	igt_plane_clear_prop_changed(plane, IGT_PLANE_IN_FENCE_FD);
@@ -4187,6 +4216,7 @@ void igt_reset_connectors(void)
 			      "detect");
 }
 
+#if !defined(ANDROID)
 /**
  * igt_watch_hotplug:
  *
@@ -4311,6 +4341,7 @@ void igt_cleanup_hotplug(struct udev_monitor *mon)
 	mon = NULL;
 	udev_unref(udev);
 }
+#endif /*!defined(ANDROID)*/
 
 /**
  * kmstest_get_vbl_flag:

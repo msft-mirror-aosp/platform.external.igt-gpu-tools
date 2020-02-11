@@ -72,8 +72,11 @@
 #include "igt_rc.h"
 #include "igt_list.h"
 
+#ifndef ANDROID
 #define UNW_LOCAL_ONLY
 #include <libunwind.h>
+#endif
+
 #include <elfutils/libdwfl.h>
 
 #ifdef HAVE_LIBGEN_H
@@ -1414,6 +1417,8 @@ static void write_stderr(const char *str)
 	__write_stderr(str, strlen(str));
 }
 
+#ifndef ANDROID
+
 static void print_backtrace(void)
 {
 	unw_cursor_t cursor;
@@ -1648,6 +1653,8 @@ static void print_backtrace_sig_safe(void)
 	}
 }
 
+#endif
+
 void __igt_fail_assert(const char *domain, const char *file, const int line,
 		       const char *func, const char *assertion,
 		       const char *f, ...)
@@ -1669,7 +1676,9 @@ void __igt_fail_assert(const char *domain, const char *file, const int line,
 		va_end(args);
 	}
 
+#ifndef ANDROID
 	print_backtrace();
+#endif
 
 	if (running_under_gdb())
 		abort();
@@ -2164,7 +2173,9 @@ static void fatal_sig_handler(int sig)
 				       handled_signals[i].name_len);
 			write_stderr(".\n");
 
+#ifndef ANDROID
 			print_backtrace_sig_safe();
+#endif
 		}
 
 		if (crash_signal(sig)) {
