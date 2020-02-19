@@ -26,10 +26,12 @@ cc_library_static {
         "lib/igt_core.c",
         "lib/igt_debugfs.c",
         "lib/igt_device.c",
+        "lib/igt_dummy.c",
         "lib/igt_dummyload.c",
         "lib/igt_fb.c",
         "lib/igt_kmod.c",
         "lib/igt_kms.c",
+        "lib/igt_pm.c",
         "lib/igt_stats.c",
         "lib/igt_sysfs.c",
         "lib/ion.c",
@@ -74,4 +76,10 @@ cc_test {
     name: "ion_fb",
     defaults: ["igt-gpu-tools-test-defaults"],
     srcs: ["tests/ion_fb.c"],
+}
+
+cc_test {
+    name: "kms_vblank",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_vblank.c"],
 }
