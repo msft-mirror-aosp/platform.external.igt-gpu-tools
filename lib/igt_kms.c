@@ -1832,7 +1832,24 @@ static void igt_plane_reset(igt_plane_t *plane)
 		igt_plane_set_prop_enum(plane, IGT_PLANE_PIXEL_BLEND_MODE, "Pre-multiplied");
 
 	if (igt_plane_has_prop(plane, IGT_PLANE_ALPHA))
-		igt_plane_set_prop_value(plane, IGT_PLANE_ALPHA, 0xffff);
+	{
+		uint64_t max_alpha = 0xffff;
+		drmModePropertyPtr alpha_prop = drmModeGetProperty(
+			plane->pipe->display->drm_fd,
+			plane->props[IGT_PLANE_ALPHA]);
+
+		if (alpha_prop)
+		{
+			if (alpha_prop->flags & DRM_MODE_PROP_RANGE)
+			{
+				max_alpha = alpha_prop->values[1];
+			}
+
+			drmModeFreeProperty(alpha_prop);
+		}
+
+		igt_plane_set_prop_value(plane, IGT_PLANE_ALPHA, max_alpha);
+	}
 
 
 	igt_plane_clear_prop_changed(plane, IGT_PLANE_IN_FENCE_FD);
