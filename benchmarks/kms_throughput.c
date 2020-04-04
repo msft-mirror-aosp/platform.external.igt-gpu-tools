@@ -147,16 +147,25 @@ static void histogram_cleanup(struct histogram *h)
 	free(h->buckets);
 }
 
+struct tuning
+{
+	size_t num_iterations;
+	size_t num_fb_sets;
+	size_t num_fbs;
+	size_t fb_height;
+	size_t fb_width;
+};
+
 static void flip_overlays(igt_pipe_t *p, struct igt_fb **fb_sets,
-			  size_t num_fb_sets, size_t num_fbs,
+			  const struct tuning *tuning,
 			  size_t iter)
 {
-	size_t fb_set = iter % num_fb_sets;
+	size_t fb_set = iter % tuning->num_fb_sets;
 	struct igt_fb *fbs = fb_sets[fb_set];
 
 	igt_debug("About to configure fbs\n");
 
-	for (size_t i = 0; i < num_fbs; ++i)
+	for (size_t i = 0; i < tuning->num_fbs; ++i)
 	{
 		igt_plane_t *plane = plane_for_index(p, i);
 		igt_plane_set_prop_value(plane, IGT_PLANE_ZPOS, i);
@@ -171,23 +180,21 @@ static void flip_overlays(igt_pipe_t *p, struct igt_fb **fb_sets,
 }
 
 static void repeat_flip(igt_pipe_t *p, struct igt_fb **fb_sets,
-			size_t num_iterations, size_t num_fb_sets,
-			size_t num_fbs)
+			const struct tuning *tuning)
 {
 	struct histogram h;
 	histogram_init(&h);
 
-	for (size_t iter = 0; iter < num_iterations; ++iter)
+	for (size_t iter = 0; iter < tuning->num_iterations; ++iter)
 	{
 		igt_debug("Iteration %zu\n", iter);
-		flip_overlays(p, fb_sets, num_fb_sets, num_fbs,
-			      iter);
+		flip_overlays(p, fb_sets, tuning, iter);
 		histogram_update(&h);
 	}
 
 	igt_debug("About to clear fbs\n");
 
-	for (size_t i = 0; i < num_fbs; ++i)
+	for (size_t i = 0; i < tuning->num_fbs; ++i)
 	{
 		igt_plane_t *plane = plane_for_index(p, i);
 		igt_plane_set_fb(plane, NULL);
@@ -207,12 +214,12 @@ static void repeat_flip(igt_pipe_t *p, struct igt_fb **fb_sets,
 	histogram_cleanup(&h);
 }
 
-static void create_dumb_fb(igt_display_t *display, igt_output_t *output,
+static void create_dumb_fb(igt_display_t *display,
+			   const struct tuning *tuning,
 			   struct igt_fb *fb)
 {
-	drmModeModeInfo *mode = igt_output_get_mode(output);
 	igt_create_fb(display->drm_fd,
-		      mode->hdisplay, mode->vdisplay,
+		      tuning->fb_width, tuning->fb_height,
 		      DRM_FORMAT_ARGB8888, LOCAL_DRM_FORMAT_MOD_NONE, fb);
 }
 
@@ -277,6 +284,28 @@ size_t get_num_fbs(igt_display_t *display, igt_pipe_t *p)
 	}
 }
 
+void get_tuning(struct tuning *tuning,
+		igt_display_t *display, igt_pipe_t *p,
+		igt_output_t *output)
+{
+	tuning->num_iterations = 1000;
+	tuning->num_fb_sets = 2;
+
+	tuning->num_fbs = get_num_fbs(display, p);
+
+	drmModeModeInfo *mode = igt_output_get_mode(output);
+	const char *FB_HEIGHT = getenv("FB_HEIGHT");
+	const char *FB_WIDTH = getenv("FB_WIDTH");
+
+	tuning->fb_height = FB_HEIGHT ?
+		(size_t)atoi(FB_HEIGHT) :
+		mode->vdisplay;
+
+	tuning->fb_width = FB_WIDTH ?
+		(size_t)atoi(FB_WIDTH) :
+		mode->hdisplay;
+}
+
 int main(int argc, char **argv)
 {
 	igt_display_t display = {};
@@ -298,32 +327,33 @@ int main(int argc, char **argv)
 
 	igt_pipe_refresh(&display, p->pipe, true);
 
-	const size_t num_iterations = 1000;
-	const size_t num_fb_sets = 2;
-	const size_t num_fbs = get_num_fbs(&display, p);
 
-	igt_info("Using %zu planes\n", num_fbs);
+	struct tuning tuning;
+	get_tuning(&tuning, &display, p, output);
+
+	igt_info("Using %zu %zux%zu planes\n",
+		 tuning.num_fbs, tuning.fb_width, tuning.fb_height);
 
 	{
-		struct igt_fb ** fb_sets = malloc(sizeof(struct igt_fb*[num_fb_sets]));
-		for (size_t i = 0; i < num_fb_sets; ++i)
+		struct igt_fb ** fb_sets = malloc(sizeof(struct igt_fb*[tuning.num_fb_sets]));
+		for (size_t i = 0; i < tuning.num_fb_sets; ++i)
 		{
-			fb_sets[i] = malloc(sizeof(struct igt_fb[num_fbs]));
+			fb_sets[i] = malloc(sizeof(struct igt_fb[tuning.num_fbs]));
 			struct igt_fb *fbs = fb_sets[i];
-			for (size_t j = 0; j < num_fbs; ++j)
+			for (size_t j = 0; j < tuning.num_fbs; ++j)
 			{
-				create_dumb_fb(&display, output, &fbs[j]);
+				create_dumb_fb(&display, &tuning, &fbs[j]);
 			};
 		}
 
 		prepare(&display, p, output);
 
-		repeat_flip(p, fb_sets, num_iterations, num_fb_sets, num_fbs);
+		repeat_flip(p, fb_sets, &tuning);
 
-		for (size_t i = 0; i < num_fb_sets; ++i)
+		for (size_t i = 0; i < tuning.num_fb_sets; ++i)
 		{
 			struct igt_fb *fbs = fb_sets[i];
-			for (size_t j = 0; j < num_fbs; ++j)
+			for (size_t j = 0; j < tuning.num_fbs; ++j)
 			{
 				igt_remove_fb(display.drm_fd, &fbs[j]);
 			};
