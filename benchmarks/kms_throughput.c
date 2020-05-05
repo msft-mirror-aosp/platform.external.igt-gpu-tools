@@ -156,14 +156,19 @@ struct tuning
 	size_t fb_width;
 };
 
+static void info_timestamp(const char *text)
+{
+	struct timeval ts;
+	gettimeofday(&ts, NULL);
+	igt_debug("%ld: %s\n", ts.tv_usec, text);
+}
+
 static void flip_overlays(igt_pipe_t *p, struct igt_fb **fb_sets,
 			  const struct tuning *tuning,
 			  size_t iter)
 {
 	size_t fb_set = iter % tuning->num_fb_sets;
 	struct igt_fb *fbs = fb_sets[fb_set];
-
-	igt_debug("About to configure fbs\n");
 
 	for (size_t i = 0; i < tuning->num_fbs; ++i)
 	{
@@ -172,11 +177,11 @@ static void flip_overlays(igt_pipe_t *p, struct igt_fb **fb_sets,
 		igt_plane_set_fb(plane, &fbs[i]);
 	}
 
-	igt_debug("About to flip with all fbs\n");
-
 	igt_pipe_obj_set_prop_value(p, IGT_CRTC_ACTIVE, 1);
+
+	info_timestamp("start commit");
 	igt_display_commit2(p->display, COMMIT_ATOMIC);
-	igt_wait_for_vblank(p->display->drm_fd, p->pipe);
+	info_timestamp("end commit");
 }
 
 static void repeat_flip(igt_pipe_t *p, struct igt_fb **fb_sets,
@@ -184,6 +189,7 @@ static void repeat_flip(igt_pipe_t *p, struct igt_fb **fb_sets,
 {
 	struct histogram h;
 	histogram_init(&h);
+
 
 	for (size_t iter = 0; iter < tuning->num_iterations; ++iter)
 	{
@@ -306,7 +312,7 @@ void get_tuning(struct tuning *tuning,
 		mode->hdisplay;
 }
 
-int main(int argc, char **argv)
+igt_main
 {
 	igt_display_t display = {};
 	make_display(&display);
