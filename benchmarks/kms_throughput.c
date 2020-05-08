@@ -147,13 +147,17 @@ static void histogram_cleanup(struct histogram *h)
 	free(h->buckets);
 }
 
+static const size_t max_num_fbs = 32;
+
 struct tuning
 {
 	size_t num_iterations;
 	size_t num_fb_sets;
 	size_t num_fbs;
-	size_t fb_height;
-	size_t fb_width;
+	struct fbgeom {
+		size_t width;
+		size_t height;
+	} fb_geom[max_num_fbs];
 };
 
 static void info_timestamp(const char *text)
@@ -190,7 +194,6 @@ static void repeat_flip(igt_pipe_t *p, struct igt_fb **fb_sets,
 	struct histogram h;
 	histogram_init(&h);
 
-
 	for (size_t iter = 0; iter < tuning->num_iterations; ++iter)
 	{
 		igt_debug("Iteration %zu\n", iter);
@@ -221,13 +224,14 @@ static void repeat_flip(igt_pipe_t *p, struct igt_fb **fb_sets,
 }
 
 static void create_dumb_fb(igt_display_t *display,
-			   const struct tuning *tuning,
+			   size_t width, size_t height,
 			   struct igt_fb *fb)
 {
 	igt_create_fb(display->drm_fd,
-		      tuning->fb_width, tuning->fb_height,
+		      width, height,
 		      DRM_FORMAT_ARGB8888, LOCAL_DRM_FORMAT_MOD_NONE, fb);
 }
+
 
 static int get_num_planes(igt_display_t *display)
 {
@@ -298,18 +302,54 @@ void get_tuning(struct tuning *tuning,
 	tuning->num_fb_sets = 2;
 
 	tuning->num_fbs = get_num_fbs(display, p);
+	igt_require(tuning->num_fbs <= max_num_fbs);
 
 	drmModeModeInfo *mode = igt_output_get_mode(output);
-	const char *FB_HEIGHT = getenv("FB_HEIGHT");
 	const char *FB_WIDTH = getenv("FB_WIDTH");
+	const char *FB_HEIGHT = getenv("FB_HEIGHT");
 
-	tuning->fb_height = FB_HEIGHT ?
+	const size_t requested_fb_width = FB_WIDTH ?
+		(size_t)atoi(FB_WIDTH) :
+		mode->hdisplay;
+
+	const size_t requested_fb_height = FB_HEIGHT ?
 		(size_t)atoi(FB_HEIGHT) :
 		mode->vdisplay;
 
-	tuning->fb_width = FB_WIDTH ?
-		(size_t)atoi(FB_WIDTH) :
-		mode->hdisplay;
+	igt_display_commit2(p->display, COMMIT_ATOMIC);
+
+	struct igt_fb fb;
+	create_dumb_fb(p->display, requested_fb_width, requested_fb_height, &fb);
+
+	for (size_t i = 0; i < tuning->num_fbs; ++i)
+	{
+		igt_plane_t *const plane = plane_for_index(p, i);
+		igt_plane_set_prop_value(plane, IGT_PLANE_ZPOS, i);
+		igt_plane_set_fb(plane, &fb);
+
+		int ret = igt_display_try_commit_atomic(p->display,
+							DRM_MODE_ATOMIC_TEST_ONLY,
+							NULL);
+
+		if (ret)
+		{
+			tuning->fb_geom[i].width = mode->hdisplay;
+			tuning->fb_geom[i].height = mode->vdisplay;
+		}
+		else
+		{
+			tuning->fb_geom[i].width = requested_fb_width;
+			tuning->fb_geom[i].height = requested_fb_height;
+		}
+
+		igt_info("Plane %zu is %zux%zu\n", i,
+			 tuning->fb_geom[i].width,
+			 tuning->fb_geom[i].height);
+
+		igt_plane_set_fb(plane, NULL);
+	}
+
+	igt_remove_fb(p->display->drm_fd, &fb);
 }
 
 igt_main
@@ -333,26 +373,28 @@ igt_main
 
 	igt_pipe_refresh(&display, p->pipe, true);
 
+	prepare(&display, p, output);
 
 	struct tuning tuning;
 	get_tuning(&tuning, &display, p, output);
 
-	igt_info("Using %zu %zux%zu planes\n",
-		 tuning.num_fbs, tuning.fb_width, tuning.fb_height);
-
 	{
-		struct igt_fb ** fb_sets = malloc(sizeof(struct igt_fb*[tuning.num_fb_sets]));
+		struct igt_fb **fb_sets =
+				malloc(sizeof(struct igt_fb*[tuning.num_fb_sets]));
+
 		for (size_t i = 0; i < tuning.num_fb_sets; ++i)
 		{
 			fb_sets[i] = malloc(sizeof(struct igt_fb[tuning.num_fbs]));
 			struct igt_fb *fbs = fb_sets[i];
 			for (size_t j = 0; j < tuning.num_fbs; ++j)
 			{
-				create_dumb_fb(&display, &tuning, &fbs[j]);
+				create_dumb_fb(&display,
+					       tuning.fb_geom[j].width,
+					       tuning.fb_geom[j].height,
+					       &fbs[j]);
 			};
 		}
 
-		prepare(&display, p, output);
 
 		repeat_flip(p, fb_sets, &tuning);
 
