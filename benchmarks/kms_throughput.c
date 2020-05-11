@@ -151,6 +151,7 @@ static const size_t max_num_fbs = 32;
 
 struct tuning
 {
+	drmModeModeInfoPtr mode;
 	size_t num_iterations;
 	size_t num_fb_sets;
 	size_t num_fbs;
@@ -294,10 +295,46 @@ size_t get_num_fbs(igt_display_t *display, igt_pipe_t *p)
 	}
 }
 
+size_t calculate_complexity(const drmModeModeInfoPtr mode)
+{
+	return (size_t)mode->hdisplay * (size_t)mode->vdisplay * (size_t)mode->vrefresh;
+}
+
+drmModeModeInfoPtr get_peak_mode(igt_output_t *output)
+{
+	drmModeConnector *const connector = output->config.connector;
+	if (!connector || connector->count_modes == 0)
+	{
+		return NULL;
+	}
+
+	drmModeModeInfoPtr peak_mode = &connector->modes[0];
+	size_t peak_complexity = calculate_complexity(peak_mode);
+
+	for (drmModeModeInfoPtr mode = &connector->modes[0];
+	     mode < &connector->modes[connector->count_modes]; ++mode)
+	{
+		const size_t complexity = calculate_complexity(mode);
+		igt_debug("Mode %zu is %hux%hu@%u\n",
+			  (size_t)(mode - connector->modes),
+			  mode->hdisplay, mode->vdisplay, mode->vrefresh);
+		if (complexity > peak_complexity)
+		{
+			peak_mode = mode;
+			peak_complexity = complexity;
+		}
+	}
+
+	return peak_mode;
+}
+
 void get_tuning(struct tuning *tuning,
 		igt_display_t *display, igt_pipe_t *p,
 		igt_output_t *output)
 {
+	tuning->mode = get_peak_mode(output);
+	igt_require(tuning->mode);
+
 	tuning->num_iterations = 1000;
 	tuning->num_fb_sets = 2;
 
@@ -378,6 +415,16 @@ igt_main
 	struct tuning tuning;
 	get_tuning(&tuning, &display, p, output);
 
+	drmModeModeInfoPtr orig_mode = igt_output_get_mode(output);
+	if (orig_mode != tuning.mode)
+	{
+		igt_output_override_mode(output, tuning.mode);
+		igt_display_commit2(&display, COMMIT_ATOMIC);
+	}
+
+	igt_info("Chosen mode:\n");
+	kmstest_dump_mode(tuning.mode);
+
 	{
 		struct igt_fb **fb_sets =
 				malloc(sizeof(struct igt_fb*[tuning.num_fb_sets]));
@@ -408,6 +455,12 @@ igt_main
 			free(fbs);
 		}
 		free(fb_sets);
+	}
+
+	if (orig_mode != tuning.mode)
+	{
+		igt_output_override_mode(output, orig_mode);
+		igt_display_commit2(&display, COMMIT_ATOMIC);
 	}
 
 	igt_info("Success\n");
