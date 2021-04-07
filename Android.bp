@@ -146,6 +146,9 @@ python_test_host {
             enabled: true,
         },
     },
+    test_options: {
+        unit_test: false,
+    },
 }
 
 cc_test {
