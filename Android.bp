@@ -150,3 +150,9 @@ python_test_host {
         unit_test: false,
     },
 }
+
+cc_test {
+    name: "kms_throughput",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["benchmarks/kms_throughput.c"],
+}
