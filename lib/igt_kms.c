@@ -2804,7 +2804,8 @@ static int igt_primary_plane_commit_legacy(igt_plane_t *primary,
 
 	if (!igt_plane_is_prop_changed(primary, IGT_PLANE_FB_ID) &&
 	    !(primary->changed & IGT_PLANE_COORD_CHANGED_MASK) &&
-	    !igt_pipe_obj_is_prop_changed(primary->pipe, IGT_CRTC_MODE_ID))
+	    !(igt_pipe_obj_is_prop_changed(primary->pipe, IGT_CRTC_MODE_ID) &&
+		primary == igt_pipe_get_plane_type(primary->pipe, DRM_PLANE_TYPE_PRIMARY)))
 		return 0;
 
 	crtc_id = pipe->crtc_id;
