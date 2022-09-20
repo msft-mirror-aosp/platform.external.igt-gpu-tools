@@ -138,14 +138,6 @@ python_test_host {
     srcs: [ "scripts/test_igt_gpu_tools.py", ],
     data: [ "scripts/test_igt_gpu_tools.xml" ],
     test_config: "scripts/test_igt_gpu_tools.xml",
-    version: {
-        py2: {
-            enabled: false,
-        },
-        py3: {
-            enabled: true,
-        },
-    },
     test_options: {
         unit_test: false,
     },
