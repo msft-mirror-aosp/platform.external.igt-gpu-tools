@@ -2916,7 +2916,8 @@ static int igt_plane_commit(igt_plane_t *plane,
 
 	if (plane->type == DRM_PLANE_TYPE_CURSOR && s == COMMIT_LEGACY) {
 		return igt_cursor_commit_legacy(plane, pipe, fail_on_error);
-	} else if (plane->type == DRM_PLANE_TYPE_PRIMARY && s == COMMIT_LEGACY) {
+	} else if (plane->type == DRM_PLANE_TYPE_PRIMARY && s == COMMIT_LEGACY &&
+		plane == igt_pipe_get_plane_type(plane->pipe, DRM_PLANE_TYPE_PRIMARY)) {
 		return igt_primary_plane_commit_legacy(plane, pipe,
 						       fail_on_error);
 	} else {
