@@ -6,7 +6,7 @@
 class IonFBTests : public ::testing::Test {
     public:
     const char* testBinaryName = "ion_fb";
-    void SetUp() override { chdir("/data/nativetest64/unrestricted"); }
+    void SetUp() override { chdir(binary_path); }
     void TearDown() override { chdir("/"); }
 };
 

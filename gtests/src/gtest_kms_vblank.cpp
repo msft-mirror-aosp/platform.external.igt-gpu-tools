@@ -6,7 +6,7 @@
 class KmsVBlankTests : public ::testing::Test {
     public:
     const char* testBinaryName = "kms_vblank";
-    void SetUp() override { chdir("/data/nativetest64/unrestricted"); }
+    void SetUp() override { chdir(binary_path); }
     void TearDown() override { chdir("/"); }
 };
 
