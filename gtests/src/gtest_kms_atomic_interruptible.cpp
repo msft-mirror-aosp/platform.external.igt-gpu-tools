@@ -6,13 +6,9 @@
 class KmsAtomicInterruptible : public ::testing::Test {
     public:
     const char* testBinaryName = "kms_atomic_interruptible";
-    void SetUp() override { chdir("/data/nativetest64/unrestricted"); }
+    void SetUp() override { chdir(binary_path); }
     void TearDown() override { chdir("/"); }
 };
-
-TEST_F(KmsAtomicInterruptible, TestIstSubtests) {
-    runSubTest(testBinaryName, "ist-subtests");
-}
 
 TEST_F(KmsAtomicInterruptible, TestLegacySetmode) {
     runSubTest(testBinaryName, "legacy-setmode");

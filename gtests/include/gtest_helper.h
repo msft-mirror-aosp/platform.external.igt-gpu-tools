@@ -2,6 +2,8 @@
 #include <cstdlib>
 #include <string>
 
+static const char* binary_path = "/data/igt_tests";
+
 /**
  * @brief Run the testBinary for specific subtest and Pass/Fail/Skip depending on the log.
  *

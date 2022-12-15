@@ -6,7 +6,7 @@
 class CoreAuthTests : public ::testing::Test {
     public:
     const char* testBinaryName = "core_auth";
-    void SetUp() override { chdir("/data/nativetest64/unrestricted"); }
+    void SetUp() override { chdir(binary_path); }
     void TearDown() override { chdir("/"); }
 };
 
