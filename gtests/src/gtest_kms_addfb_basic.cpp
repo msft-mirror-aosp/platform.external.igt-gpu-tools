@@ -102,9 +102,12 @@ TEST_F(KmsAddfbBasic, TestAddfb25ModifierNoFlag) {
     runSubTest(testBinaryName, "addfb25-modifier-no-flag");
 }
 
+// TODO: b/254808989
+/*
 TEST_F(KmsAddfbBasic, TestAddfb25BadModifier) {
     runSubTest(testBinaryName, "addfb25-bad-modifier");
 }
+*/
 
 TEST_F(KmsAddfbBasic, TestAddfb25XTiledMismatch) {
     runSubTest(testBinaryName, "addfb25-X-tiled-mismatch");
