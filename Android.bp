@@ -231,3 +231,9 @@ cc_test {
     defaults: ["igt-gpu-tools-test-defaults"],
     srcs: ["tests/syncobj_wait.c"],
 }
+
+cc_test {
+    name: "kms_setmode",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_setmode.c"],
+}

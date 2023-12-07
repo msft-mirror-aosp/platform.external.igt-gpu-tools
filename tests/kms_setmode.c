@@ -23,7 +23,9 @@
 #include "config.h"
 
 #include "igt.h"
+#if defined(USE_CAIRO_PIXMAN)
 #include <cairo.h>
+#endif
 #include <errno.h>
 #include <stdint.h>
 #include <unistd.h>
@@ -134,6 +136,7 @@ static bool crtc_supports_mode(struct crtc_config *crtc, drmModeModeInfo *mode)
 	return true;
 }
 
+#if defined(USE_CAIRO_PIXMAN)
 static int paint_fb(struct igt_fb *fb, const char *test_name,
 		    const char **crtc_str, int crtc_count, int current_crtc_idx)
 {
@@ -165,6 +168,7 @@ static int paint_fb(struct igt_fb *fb, const char *test_name,
 
 	return 0;
 }
+#endif
 
 static void create_fb_for_crtc(struct crtc_config *crtc,
 			       struct igt_fb *fb_info)
@@ -569,7 +573,9 @@ static void test_crtc_config(const struct test_config *tconf,
 		igt_info("    %s\n", crtc_strs[i]);
 
 		create_fb_for_crtc(crtc, &crtc->fb_info);
+#if defined(USE_CAIRO_PIXMAN)
 		paint_fb(&crtc->fb_info, tconf->name, crtc_strs, crtc_count, i);
+#endif
 
 		ids = get_connector_ids(crtc);
 		if (tconf->flags & TEST_STEALING)
