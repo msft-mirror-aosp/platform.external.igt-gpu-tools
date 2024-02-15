@@ -43,6 +43,8 @@ cc_defaults {
         "-DHAVE_GETTID",
         "-DHAVE_LIBGEN_H",
         "-DHAVE_MEMFD_CREATE",
+        "-fcommon", //ld.lld: error: duplicate symbol igt_subtest_jmpbuf: external/igt-gpu-tools/lib/igt_core.h:146
+        //Fixed upstream so we enable -fcommon locally
     ],
     static_libs: ["libelf", "libkmod", "libion", "liblog"],
     shared_libs: ["libdrm"],
@@ -228,4 +230,10 @@ cc_test {
     name: "syncobj_wait",
     defaults: ["igt-gpu-tools-test-defaults"],
     srcs: ["tests/syncobj_wait.c"],
+}
+
+cc_test {
+    name: "kms_setmode",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_setmode.c"],
 }
