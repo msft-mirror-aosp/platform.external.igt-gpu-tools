@@ -335,6 +335,15 @@ void get_tuning(struct tuning *tuning,
 	tuning->mode = get_peak_mode(output);
 	igt_require(tuning->mode);
 
+	if (igt_output_get_mode(output) != tuning->mode)
+	{
+		igt_output_override_mode(output, tuning->mode);
+		igt_display_commit2(p->display, COMMIT_ATOMIC);
+	}
+
+	igt_info("Chosen mode:\n");
+	kmstest_dump_mode(tuning->mode);
+
 	tuning->num_iterations = 1000;
 	tuning->num_fb_sets = 2;
 
@@ -412,18 +421,10 @@ igt_main
 
 	prepare(&display, p, output);
 
+	drmModeModeInfoPtr orig_mode = igt_output_get_mode(output);
+
 	struct tuning tuning;
 	get_tuning(&tuning, &display, p, output);
-
-	drmModeModeInfoPtr orig_mode = igt_output_get_mode(output);
-	if (orig_mode != tuning.mode)
-	{
-		igt_output_override_mode(output, tuning.mode);
-		igt_display_commit2(&display, COMMIT_ATOMIC);
-	}
-
-	igt_info("Chosen mode:\n");
-	kmstest_dump_mode(tuning.mode);
 
 	{
 		struct igt_fb **fb_sets =
