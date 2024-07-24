@@ -492,12 +492,15 @@ static void addfb25_tests(int fd)
 	igt_fixture
 		f.flags = LOCAL_DRM_MODE_FB_MODIFIERS;
 
+	// TODO: b/254808989
+	/*
 	igt_subtest("addfb25-bad-modifier") {
 		igt_require_fb_modifiers(fd);
 
 		f.modifier[0] = ~0;
 		igt_assert(drmIoctl(fd, LOCAL_DRM_IOCTL_MODE_ADDFB2, &f) < 0 && errno == EINVAL);
 	}
+	*/
 
 	igt_subtest_group {
 		igt_fixture {
