@@ -86,14 +86,14 @@ unsigned intel_gen(uint16_t devid) __attribute__((pure));
 
 unsigned intel_gt(uint16_t devid) __attribute__((pure));
 
-extern enum pch_type intel_pch;
-
 enum pch_type {
 	PCH_NONE,
 	PCH_IBX,
 	PCH_CPT,
 	PCH_LPT,
 };
+
+extern enum pch_type intel_pch;
 
 void intel_check_pch(void);
 

@@ -264,7 +264,7 @@ void igt_unlock_mem(void);
 		uint64_t elapsed__ = igt_nsec_elapsed(&tv__) >> 20;	\
 									\
 		if (COND) {						\
-			igt_debug("%s took %"PRIu64"ms\n", #COND, elapsed__); \
+			igt_debug("%s took %" PRIu64 "ms\n", #COND, elapsed__); \
 			ret__ = true;					\
 			break;						\
 		}							\

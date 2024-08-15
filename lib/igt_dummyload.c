@@ -90,7 +90,7 @@ emit_recursive_batch(igt_spin_t *spin,
 
 		for_each_context_engine(fd, opts->ctx, engine) {
 			if (opts->flags & IGT_SPIN_POLL_RUN &&
-			    !gem_class_can_store_dword(fd, engine->class))
+			    !gem_class_can_store_dword(fd, engine->engine_class))
 				continue;
 
 			flags[nengine++] = engine->flags;
@@ -321,7 +321,7 @@ igt_spin_factory(int fd, const struct igt_spin_factory *opts)
 
 		if (!gem_context_lookup_engine(fd, opts->engine,
 					       opts->ctx, &e)) {
-			class = e.class;
+			class = e.engine_class;
 		} else {
 			gem_require_ring(fd, opts->engine);
 			class = gem_execbuf_flags_to_engine_class(opts->engine);

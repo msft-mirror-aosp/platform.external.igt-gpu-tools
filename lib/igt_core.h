@@ -1205,7 +1205,14 @@ void igt_kmsg(const char *format, ...);
 #define KMSG_INFO	"<6>[IGT] "
 #define KMSG_DEBUG	"<7>[IGT] "
 
+#ifdef __cplusplus
+extern "C++" {
+#include <type_traits>
+#define READ_ONCE(x) (*(volatile std::remove_reference<decltype(x)>::type *)(&(x)))
+}
+#else
 #define READ_ONCE(x) (*(volatile typeof(x) *)(&(x)))
+#endif
 
 #define MSEC_PER_SEC (1000)
 #define USEC_PER_SEC (1000*MSEC_PER_SEC)
