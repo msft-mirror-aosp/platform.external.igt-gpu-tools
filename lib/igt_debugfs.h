@@ -29,7 +29,11 @@
 #include <stdint.h>
 #include <stdio.h>
 
-enum pipe;
+enum pipe
+#ifdef __cplusplus
+: int
+#endif
+;
 
 const char *igt_debugfs_mount(void);
 char *igt_debugfs_path(int device, char *path, int pathlen);
