@@ -90,11 +90,11 @@ bool gem_ring_is_physical_engine(int fd, unsigned int ring);
 bool gem_ring_has_physical_engine(int fd, unsigned int ring);
 
 bool gem_can_store_dword(int fd, unsigned int engine);
-bool gem_class_can_store_dword(int fd, int class);
+bool gem_class_can_store_dword(int fd, int engine_class);
 
 extern const struct intel_execution_engine2 {
 	const char *name;
-	int class;
+	int engine_class;
 	int instance;
 	uint64_t flags;
 	bool is_virtual;
