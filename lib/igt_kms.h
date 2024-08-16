@@ -52,7 +52,11 @@
  * @PIPE_F: Sixth crtc.
  * @IGT_MAX_PIPES: Max number of pipes allowed.
  */
-enum pipe {
+enum pipe
+#ifdef __cplusplus
+: int
+#endif
+{
         PIPE_NONE = -1,
         PIPE_ANY = PIPE_NONE,
         PIPE_A = 0,
@@ -499,8 +503,13 @@ static inline bool igt_output_is_connected(igt_output_t *output)
  * depends upon runtime probing of the actual kms driver that is being tested.
  * Use #for_each_pipe_static instead.
  */
+#ifdef __cplusplus
+#define for_each_pipe(display, pipe_i)					\
+	for (pipe_i = (enum pipe)0; assert(igt_can_fail()), pipe_i < igt_display_get_n_pipes(display); pipe_i = (enum pipe)((int)pipe_i + 1))
+#else
 #define for_each_pipe(display, pipe)					\
 	for (pipe = 0; assert(igt_can_fail()), pipe < igt_display_get_n_pipes(display); pipe++)
+#endif
 
 /**
  * for_each_pipe_with_valid_output:
