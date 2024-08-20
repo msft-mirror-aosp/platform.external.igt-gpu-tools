@@ -45,6 +45,10 @@
 #define USE_VC4
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
  * Internal format to denote a buffer compatible with pixman's
  * floating point format. Range [0-1].
@@ -207,6 +211,10 @@ bool igt_format_is_fp16(uint32_t drm_format);
 int igt_format_plane_bpp(uint32_t drm_format, int plane);
 void igt_format_array_fill(uint32_t **formats_array, unsigned int *count,
 			   bool allow_yuv);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* __IGT_FB_H__ */
 

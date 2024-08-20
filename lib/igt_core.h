@@ -42,6 +42,10 @@
 #include <getopt.h>
 #include <unistd.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #ifndef IGT_LOG_DOMAIN
 #define IGT_LOG_DOMAIN (NULL)
 #endif
@@ -1217,5 +1221,9 @@ extern "C++" {
 #define MSEC_PER_SEC (1000)
 #define USEC_PER_SEC (1000*MSEC_PER_SEC)
 #define NSEC_PER_SEC (1000*USEC_PER_SEC)
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* IGT_CORE_H */
