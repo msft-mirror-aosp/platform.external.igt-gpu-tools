@@ -38,6 +38,10 @@
 #include "igt_fb.h"
 #include "ioctl_wrappers.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Low-level helpers with kmstest_ prefix */
 
 /**
@@ -842,5 +846,9 @@ static inline bool igt_vblank_before(uint32_t a, uint32_t b)
 {
 	return igt_vblank_after(b, a);
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* __IGT_KMS_H__ */
