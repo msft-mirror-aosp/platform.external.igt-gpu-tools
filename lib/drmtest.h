@@ -38,6 +38,10 @@
 
 #include "igt_core.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
  * NOTE: Theser are _only_ for testcases exercising driver specific rendering
  * ioctls and uapi (and a bunch of historical reasons). And KMS testcase should
@@ -131,5 +135,9 @@ bool is_vc4_device(int fd);
 	igt_assert_eq(errno, err); \
 	errno = 0; \
 } while (0)
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* DRMTEST_H */
