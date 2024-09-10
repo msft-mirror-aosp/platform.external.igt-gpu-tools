@@ -42,6 +42,10 @@
 #include <getopt.h>
 #include <unistd.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #ifndef IGT_LOG_DOMAIN
 #define IGT_LOG_DOMAIN (NULL)
 #endif
@@ -1205,10 +1209,21 @@ void igt_kmsg(const char *format, ...);
 #define KMSG_INFO	"<6>[IGT] "
 #define KMSG_DEBUG	"<7>[IGT] "
 
+#ifdef __cplusplus
+extern "C++" {
+#include <type_traits>
+#define READ_ONCE(x) (*(volatile std::remove_reference<decltype(x)>::type *)(&(x)))
+}
+#else
 #define READ_ONCE(x) (*(volatile typeof(x) *)(&(x)))
+#endif
 
 #define MSEC_PER_SEC (1000)
 #define USEC_PER_SEC (1000*MSEC_PER_SEC)
 #define NSEC_PER_SEC (1000*USEC_PER_SEC)
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* IGT_CORE_H */
