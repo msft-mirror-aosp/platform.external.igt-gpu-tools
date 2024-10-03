@@ -20,6 +20,7 @@ license {
     name: "external_igt-gpu-tools_license",
     visibility: [
         ":__subpackages__",
+        "//test/dts/tests/display:__subpackages__",
         "//vendor:__subpackages__",
     ],
     license_kinds: [
