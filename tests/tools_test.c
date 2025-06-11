@@ -28,7 +28,9 @@
 #include <fcntl.h>
 #include <libgen.h>
 #include <unistd.h>
+#ifdef __linux__
 #include <linux/limits.h>
+#endif
 
 #define TOOLS "../tools/"
 
@@ -63,28 +65,43 @@ static void assert_cmd_success(int exec_return)
 static bool chdir_to_tools_dir(void)
 {
 	char path[PATH_MAX];
+	char *cwd;
+
+	cwd = getcwd(NULL, 0);
+	igt_info("Current working directory: %s\n", cwd);
+	free(cwd);
 
 	/* Try TOOLS relative to cwd */
+	igt_info("Trying to cd to %s\n", TOOLS);
 	if (chdir(TOOLS) == 0)
 		return true;
 
+	igt_info("Failed to cd to %s\n", TOOLS);
+
 	/* Try TOOLS and install dir relative to test binary */
-	if (readlink("/proc/self/exe", path, sizeof(path)) > 0)
+	memset(path, 0, sizeof(path)); /* readlink() does not append NUL */
+	if (readlink("/proc/self/exe", path, sizeof(path)-1) > 0) {
+		igt_info("/proc/self/exe point to %s, going to dirname()\n", path);
 		chdir(dirname(path));
+	}
+
+	cwd = getcwd(NULL, 0);
+	igt_info("Current working directory: %s\n", cwd);
+	free(cwd);
+
+	igt_info("Trying to cd to %s or ../../bin\n", TOOLS);
 
 	return chdir(TOOLS) == 0 || chdir("../../bin") == 0;
 }
 
 igt_main
 {
-	igt_skip_on_simulation();
-
 	igt_fixture {
 		char *path;
 
 		igt_require_f(chdir_to_tools_dir(),
 			      "Unable to determine the tools directory, expecting them in $cwd/" TOOLS " or $path/" TOOLS "\n");
-		path = get_current_dir_name();
+		path = getcwd(NULL, 0);
 		igt_info("Using tools from %s\n", path);
 		free(path);
 	}

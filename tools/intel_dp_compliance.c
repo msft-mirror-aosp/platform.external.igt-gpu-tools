@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2020, The Linux Foundation. All rights reserved.
  * Copyright © 2017 Intel Corporation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -112,9 +113,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <strings.h>
+#include <poll.h>
 #include <unistd.h>
 #include <termios.h>
-#include <sys/poll.h>
 #include <sys/time.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
@@ -125,7 +126,7 @@
 #include <fcntl.h>
 #include <time.h>
 
-#include "intel_dp_compliance.h"
+#include "igt_dp_compliance.h"
 
 #include <stdlib.h>
 #include <signal.h>
@@ -171,12 +172,9 @@ uint16_t hdisplay;
 uint16_t vdisplay;
 uint8_t bitdepth;
 
-static int tio_fd;
-struct termios saved_tio;
-
 drmModeRes *resources;
 int drm_fd, modes, gen;
-uint64_t tiling = LOCAL_DRM_FORMAT_MOD_NONE;
+uint64_t modifier = DRM_FORMAT_MOD_LINEAR;
 uint32_t depth = 24, stride, bpp;
 int specified_mode_num = -1, specified_disp_id = -1;
 int width, height;
@@ -346,98 +344,10 @@ static int process_test_request(int test_type)
 	return -1;
 }
 
-static void dump_connectors_fd(int drmfd)
-{
-	int i, j;
-
-	drmModeRes *mode_resources = drmModeGetResources(drmfd);
-
-	if (!mode_resources) {
-		igt_warn("drmModeGetResources failed: %s\n", strerror(errno));
-		return;
-	}
-
-	igt_info("Connectors:\n");
-	igt_info("id\tencoder\tstatus\t\ttype\tsize (mm)\tmodes\n");
-	for (i = 0; i < mode_resources->count_connectors; i++) {
-		drmModeConnector *connector;
-
-		connector = drmModeGetConnectorCurrent(drmfd,
-						       mode_resources->connectors[i]);
-		if (!connector) {
-			igt_warn("Could not get connector %i: %s\n",
-				 mode_resources->connectors[i], strerror(errno));
-			continue;
-		}
-
-		igt_info("%d\t%d\t%s\t%s\t%dx%d\t\t%d\n",
-			 connector->connector_id,
-			 connector->encoder_id,
-			 kmstest_connector_status_str(connector->connection),
-			 kmstest_connector_type_str(connector->connector_type),
-			 connector->mmWidth,
-			 connector->mmHeight,
-			 connector->count_modes);
-
-		if (!connector->count_modes)
-			continue;
-
-		igt_info("  Modes:\n");
-		igt_info("  name refresh (Hz) hdisp hss hse htot vdisp ""vss vse vtot flags type clock\n");
-		for (j = 0; j < connector->count_modes; j++) {
-			igt_info("[%d]", j);
-			kmstest_dump_mode(&connector->modes[j]);
-		}
-
-		drmModeFreeConnector(connector);
-	}
-	igt_info("\n");
-
-	drmModeFreeResources(mode_resources);
-}
-
-static void dump_crtcs_fd(int drmfd)
-{
-	int i;
-	drmModeRes *mode_resources;
-
-	mode_resources = drmModeGetResources(drmfd);
-	if (!mode_resources) {
-		igt_warn("drmModeGetResources failed: %s\n", strerror(errno));
-		return;
-	}
-
-	igt_info("CRTCs:\n");
-	igt_info("id\tfb\tpos\tsize\n");
-	for (i = 0; i < mode_resources->count_crtcs; i++) {
-		drmModeCrtc *crtc;
-
-		crtc = drmModeGetCrtc(drmfd, mode_resources->crtcs[i]);
-		if (!crtc) {
-			igt_warn("Could not get crtc %i: %s\n", mode_resources->crtcs[i], strerror(errno));
-			continue;
-		}
-		igt_info("%d\t%d\t(%d,%d)\t(%dx%d)\n",
-			 crtc->crtc_id,
-			 crtc->buffer_id,
-			 crtc->x,
-			 crtc->y,
-			 crtc->width,
-			 crtc->height);
-
-		kmstest_dump_mode(&crtc->mode);
-
-		drmModeFreeCrtc(crtc);
-	}
-	igt_info("\n");
-
-	drmModeFreeResources(mode_resources);
-}
-
 static void dump_info(void)
 {
-	dump_connectors_fd(drm_fd);
-	dump_crtcs_fd(drm_fd);
+	igt_dump_connectors_fd(drm_fd);
+	igt_dump_crtcs_fd(drm_fd);
 }
 
 static int setup_framebuffers(struct connector *dp_conn)
@@ -446,14 +356,14 @@ static int setup_framebuffers(struct connector *dp_conn)
 	dp_conn->fb = igt_create_fb(drm_fd,
 				    dp_conn->fb_width, dp_conn->fb_height,
 				    DRM_FORMAT_XRGB8888,
-				    LOCAL_DRM_FORMAT_MOD_NONE,
+				    DRM_FORMAT_MOD_LINEAR,
 				    &dp_conn->fb_video_pattern);
 	igt_assert(dp_conn->fb);
 
 	/* Map the mapping of GEM object into the virtual address space */
-	dp_conn->pixmap = gem_mmap__gtt(drm_fd,
+	dp_conn->pixmap = gem_mmap__device_coherent(drm_fd,
 					dp_conn->fb_video_pattern.gem_handle,
-					dp_conn->fb_video_pattern.size,
+					0, dp_conn->fb_video_pattern.size,
 					PROT_READ | PROT_WRITE);
 	if (dp_conn->pixmap == NULL)
 		return -1;
@@ -476,14 +386,14 @@ static int setup_failsafe_framebuffer(struct connector *dp_conn)
 					     dp_conn->failsafe_width,
 					     dp_conn->failsafe_height,
 					     DRM_FORMAT_XRGB8888,
-					     LOCAL_DRM_FORMAT_MOD_NONE,
+					     DRM_FORMAT_MOD_LINEAR,
 					     &dp_conn->fb_failsafe_pattern);
 	igt_assert(dp_conn->failsafe_fb);
 
 	/* Map the mapping of GEM object into the virtual address space */
-	dp_conn->failsafe_pixmap = gem_mmap__gtt(drm_fd,
+	dp_conn->failsafe_pixmap = gem_mmap__device_coherent(drm_fd,
 						 dp_conn->fb_failsafe_pattern.gem_handle,
-						 dp_conn->fb_failsafe_pattern.size,
+						 0, dp_conn->fb_failsafe_pattern.size,
 						 PROT_READ | PROT_WRITE);
 	if (dp_conn->failsafe_pixmap == NULL)
 		return -1;
@@ -513,14 +423,14 @@ static int setup_video_pattern_framebuffer(struct connector *dp_conn)
 	dp_conn->test_pattern.fb = igt_create_fb(drm_fd,
 						 video_width, video_height,
 						 gen == 10 ? DRM_FORMAT_ARGB8888 : DRM_FORMAT_XRGB8888,
-						 LOCAL_DRM_FORMAT_MOD_NONE,
+						 DRM_FORMAT_MOD_LINEAR,
 						 &dp_conn->test_pattern.fb_pattern);
 	igt_assert(dp_conn->test_pattern.fb);
 
 	/* Map the mapping of GEM object into the virtual address space */
-	dp_conn->test_pattern.pixmap = gem_mmap__gtt(drm_fd,
+	dp_conn->test_pattern.pixmap = gem_mmap__device_coherent(drm_fd,
 						     dp_conn->test_pattern.fb_pattern.gem_handle,
-						     dp_conn->test_pattern.fb_pattern.size,
+						     0, dp_conn->test_pattern.fb_pattern.size,
 						     PROT_READ | PROT_WRITE);
 	if (dp_conn->test_pattern.pixmap == NULL)
 		return -1;
@@ -535,71 +445,14 @@ static int setup_video_pattern_framebuffer(struct connector *dp_conn)
 
 }
 
-static int fill_framebuffer(struct connector *dp_conn)
-{
-	uint32_t tile_height, tile_width, video_width, video_height;
-	uint32_t *red_ptr, *green_ptr, *blue_ptr, *white_ptr, *src_ptr, *dst_ptr;
-	int x, y;
-	int32_t pixel_val;
-	uint8_t alpha;
-
-	video_width = dp_conn->test_pattern.hdisplay;
-	video_height = dp_conn->test_pattern.vdisplay;
-
-	tile_height = 64;
-	tile_width = 1 <<  (dp_conn->test_pattern.bitdepth);
-
-	red_ptr = dp_conn->test_pattern.pixmap;
-	green_ptr = red_ptr + (video_width * tile_height);
-	blue_ptr = green_ptr + (video_width * tile_height);
-	white_ptr = blue_ptr + (video_width * tile_height);
-	x = 0;
-
-	/* Fill the frame buffer with video pattern from CTS 3.1.5 */
-	while (x < video_width) {
-		for (pixel_val = 0; pixel_val < 256;
-		     pixel_val = pixel_val + (256 / tile_width)) {
-			alpha = gen == 10 ? 0xff : 0;
-			red_ptr[x] = alpha << 24 | pixel_val << 16;
-			green_ptr[x] = alpha << 24 | pixel_val << 8;
-			blue_ptr[x] = alpha << 24 | pixel_val << 0;
-			white_ptr[x] = alpha << 24 | red_ptr[x] | green_ptr[x] |
-				       blue_ptr[x];
-			if (++x >= video_width)
-				break;
-		}
-	}
-	for (y = 0; y < video_height; y++) {
-		if (y == 0 || y == 64 || y == 128 || y == 192)
-			continue;
-		switch ((y / tile_height) % 4) {
-		case 0:
-			src_ptr = red_ptr;
-			break;
-		case 1:
-			src_ptr = green_ptr;
-			break;
-		case 2:
-			src_ptr = blue_ptr;
-			break;
-		case 3:
-			src_ptr = white_ptr;
-			break;
-		}
-		dst_ptr = dp_conn->test_pattern.pixmap + (y * video_width);
-		memcpy(dst_ptr, src_ptr, (video_width * 4));
-	}
-	munmap(dp_conn->test_pattern.pixmap,
-	       dp_conn->test_pattern.size);
-	return 0;
-}
-
 static int set_test_mode(struct connector *dp_conn)
 {
 	int ret = 0;
 	int i;
 	bool found_std = false, found_fs = false;
+	uint32_t alpha;
 	drmModeConnector *c = dp_conn->connector;
+	uint32_t *pixmap;
 
 	/* Ignore any disconnected devices */
 	if (c->connection != DRM_MODE_CONNECTED) {
@@ -671,6 +524,7 @@ static int set_test_mode(struct connector *dp_conn)
 		dp_conn->test_pattern.hdisplay = hdisplay;
 		dp_conn->test_pattern.vdisplay = vdisplay;
 		dp_conn->test_pattern.bitdepth = bitdepth;
+		alpha = gen == 10 ? 0xff : 0;
 
 		ret = setup_video_pattern_framebuffer(dp_conn);
 		if (ret) {
@@ -679,12 +533,21 @@ static int set_test_mode(struct connector *dp_conn)
 			return ret;
 		}
 
-		ret = fill_framebuffer(dp_conn);
+		pixmap = dp_conn->test_pattern.pixmap;
+
+		ret = igt_fill_cts_color_ramp_framebuffer(pixmap,
+				dp_conn->test_pattern.hdisplay,
+				dp_conn->test_pattern.vdisplay,
+				dp_conn->test_pattern.bitdepth,
+				alpha);
 		if (ret) {
 			igt_warn("Filling framebuffer for connector %u failed (%d)\n",
 				 c->connector_id, ret);
 			return ret;
 		}
+		/* unmapping the buffer previously mapped during setup */
+		munmap(dp_conn->test_pattern.pixmap,
+				dp_conn->test_pattern.size);
 	}
 
 	return ret;
@@ -778,7 +641,7 @@ set_default_mode(struct connector *c, bool set_mode)
 
 	fb_id = igt_create_pattern_fb(drm_fd, width, height,
 				      DRM_FORMAT_XRGB8888,
-				      tiling, &fb_info);
+				      modifier, &fb_info);
 
 	igt_info("CRTC(%u):[%d]", c->crtc, 0);
 	kmstest_dump_mode(&c->mode);
@@ -961,50 +824,6 @@ static gboolean input_event(GIOChannel *source, GIOCondition condition,
 	return TRUE;
 }
 
-static void enter_exec_path(char **argv)
-{
-	char *exec_path = NULL;
-	char *pos = NULL;
-	short len_path = 0;
-	int ret;
-
-	len_path = strlen(argv[0]);
-	exec_path = (char *) malloc(len_path);
-
-	memcpy(exec_path, argv[0], len_path);
-	pos = strrchr(exec_path, '/');
-	if (pos != NULL)
-		*(pos+1) = '\0';
-
-	ret = chdir(exec_path);
-	igt_assert_eq(ret, 0);
-	free(exec_path);
-}
-
-static void restore_termio_mode(int sig)
-{
-	tcsetattr(tio_fd, TCSANOW, &saved_tio);
-	close(tio_fd);
-}
-
-static void set_termio_mode(void)
-{
-	struct termios tio;
-
-	/* don't attempt to set terminal attributes if not in the foreground
-	 * process group
-	 */
-	if (getpgrp() != tcgetpgrp(STDOUT_FILENO))
-		return;
-
-	tio_fd = dup(STDIN_FILENO);
-	tcgetattr(tio_fd, &saved_tio);
-	igt_install_exit_handler(restore_termio_mode);
-	tio = saved_tio;
-	tio.c_lflag &= ~(ICANON | ECHO);
-	tcsetattr(tio_fd, TCSANOW, &tio);
-}
-
 int main(int argc, char **argv)
 {
 	int c;
@@ -1016,8 +835,6 @@ int main(int argc, char **argv)
 		{"help-description", 0, 0, HELP_DESCRIPTION},
 		{"help", 0, 0, 'h'},
 	};
-
-	igt_skip_on_simulation();
 
 	enter_exec_path(argv);
 
@@ -1068,7 +885,7 @@ int main(int argc, char **argv)
 		goto out_close;
 	}
 
-	if (!intel_dp_compliance_setup_hotplug()) {
+	if (!igt_dp_compliance_setup_hotplug()) {
 		igt_warn("Failed to initialize hotplug support\n");
 		goto out_mainloop;
 	}
@@ -1109,7 +926,7 @@ int main(int argc, char **argv)
 out_stdio:
 	g_io_channel_shutdown(stdinchannel, TRUE, NULL);
 out_hotplug:
-	intel_dp_compliance_cleanup_hotplug();
+	igt_dp_compliance_cleanup_hotplug();
 out_mainloop:
 	g_main_loop_unref(mainloop);
 out_close:

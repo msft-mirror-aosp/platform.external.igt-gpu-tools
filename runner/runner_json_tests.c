@@ -161,7 +161,15 @@ static const char *dirnames[] = {
 	"notrun-results-multiple-mode",
 	"dmesg-warn-level",
 	"dmesg-warn-level-piglit-style",
-	"dmesg-warn-level-one-piglit-style"
+	"dmesg-warn-level-one-piglit-style",
+	"dynamic-subtests-keep-dynamic",
+	"dynamic-subtests-keep-subtests",
+	"dynamic-subtests-keep-all",
+	"dynamic-subtests-keep-requested",
+	"dynamic-subtest-name-in-multiple-subtests",
+	"unprintable-characters",
+	"empty-result-files",
+	"graceful-notrun",
 };
 
 igt_main

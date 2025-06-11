@@ -5,7 +5,14 @@
 #include <stddef.h>
 #include <sys/types.h>
 #include <stdio.h>
+#ifdef ANDROID
+#include "android/glib.h"
+#else
 #include <glib.h>
+#endif
+
+#include "igt_list.h"
+#include "igt_vec.h"
 
 enum {
 	LOG_LEVEL_NORMAL = 0,
@@ -15,9 +22,21 @@ enum {
 
 #define ABORT_TAINT   (1 << 0)
 #define ABORT_LOCKDEP (1 << 1)
-#define ABORT_ALL     (ABORT_TAINT | ABORT_LOCKDEP)
+#define ABORT_PING    (1 << 2)
+#define ABORT_ALL     (ABORT_TAINT | ABORT_LOCKDEP | ABORT_PING)
 
-_Static_assert(ABORT_ALL == (ABORT_TAINT | ABORT_LOCKDEP), "ABORT_ALL must be all conditions bitwise or'd");
+_Static_assert(ABORT_ALL == (ABORT_TAINT | ABORT_LOCKDEP | ABORT_PING), "ABORT_ALL must be all conditions bitwise or'd");
+
+#define GCOV_DIR		"/sys/kernel/debug/gcov"
+#define GCOV_RESET GCOV_DIR	"/reset"
+#define CODE_COV_RESULTS_PATH	"code_cov"
+
+enum {
+	PRUNE_KEEP_DYNAMIC = 0,
+	PRUNE_KEEP_SUBTESTS,
+	PRUNE_KEEP_ALL,
+	PRUNE_KEEP_REQUESTED,
+};
 
 struct regex_list {
 	char **regex_strings;
@@ -25,25 +44,47 @@ struct regex_list {
 	size_t size;
 };
 
+struct environment_variable {
+	struct igt_list_head link;
+	char * key;
+	char * value;
+};
+
 struct settings {
 	int abort_mask;
+	size_t disk_usage_limit;
 	char *test_list;
 	char *name;
 	bool dry_run;
+	bool allow_non_root;
 	struct regex_list include_regexes;
 	struct regex_list exclude_regexes;
+	struct igt_list_head env_vars;
+	struct igt_vec hook_strs;
+	bool facts;
+	bool kmemleak;
+	bool kmemleak_each;
 	bool sync;
 	int log_level;
 	bool overwrite;
 	bool multiple_mode;
 	int inactivity_timeout;
+	int per_test_timeout;
 	int overall_timeout;
 	bool use_watchdog;
 	char *test_root;
 	char *results_path;
 	bool piglit_style_dmesg;
 	int dmesg_warn_level;
+	int prune_mode;
 	bool list_all;
+	char *code_coverage_script;
+	bool enable_code_coverage;
+	bool cov_results_per_test;
+	struct {
+		int argc;
+		char **argv;
+	} cmdline;
 };
 
 /**
@@ -57,14 +98,14 @@ struct settings {
 void init_settings(struct settings *settings);
 
 /**
- * free_settings:
+ * clear_settings:
  *
  * Releases all allocated resources for a settings object and
  * initializes it to an empty state (see #init_settings).
  *
- * @settings: Object to release and initialize.
+ * @settings: Object to release and reinitialize.
  */
-void free_settings(struct settings *settings);
+void clear_settings(struct settings *settings);
 
 /**
  * parse_options:

@@ -22,6 +22,16 @@
  *
  */
 
+/**
+ * TEST: kms hdmi inject
+ * Category: Display
+ * Description: Test that in-kernel EDID parsing is producing expected results
+ *              by forcing a HDMI connector with a known EDID and checking that
+ *              the metadata exposed to user space matches.
+ * Driver requirement: i915, xe
+ * Mega feature: General Display Features
+ */
+
 #include "config.h"
 
 #include <dirent.h>
@@ -29,14 +39,25 @@
 #include "igt.h"
 #include "igt_edid.h"
 #include "igt_eld.h"
+#include "xe/xe_query.h"
+
+/**
+ * SUBTEST: inject-4k
+ * Description: Make sure that 4K modes exposed by DRM match the forced EDID and
+ *              modesetting using it succeed.
+ *
+ * SUBTEST: inject-audio
+ * Description: Make sure that audio information exposed by ALSA match the forced
+ *              EDID.
+ */
 
 #define HDISPLAY_4K	3840
 #define VDISPLAY_4K	2160
 
 IGT_TEST_DESCRIPTION("Test that in-kernel EDID parsing is producing "
-		     "expected results by forcing a disconnected HDMI "
-		     "connector with a known EDID and checking that the "
-		     "metadata exposed to user space matches.");
+		     "expected results by forcing a HDMI connector "
+		     "with a known EDID and checking that the metadata "
+		     "exposed to user space matches.");
 
 /**
  * This collection of tests performs EDID and status injection tests. Injection
@@ -49,8 +70,6 @@ IGT_TEST_DESCRIPTION("Test that in-kernel EDID parsing is producing "
  * - 4K modes exposed via KMS
  * - Audio capabilities of the monitor exposed via ALSA. EDID-Like Data (ELD)
  *   entries in /proc/asound are verified.
- *
- * Injection is performed on a disconnected connector.
  */
 
 /** get_connector: get the first disconnected HDMI connector */
@@ -58,14 +77,15 @@ static drmModeConnector *
 get_connector(int drm_fd, drmModeRes *res)
 {
 	int i;
-	drmModeConnector *connector;
+	drmModeConnector *connector = NULL;
 
 	for (i = 0; i < res->count_connectors; i++) {
 
 		connector =
 			drmModeGetConnectorCurrent(drm_fd, res->connectors[i]);
 
-		if (connector->connector_type == DRM_MODE_CONNECTOR_HDMIA)
+		if (connector->connector_type == DRM_MODE_CONNECTOR_HDMIA ||
+		    connector->connector_type == DRM_MODE_CONNECTOR_HDMIB)
 			break;
 
 		drmModeFreeConnector(connector);
@@ -84,18 +104,19 @@ hdmi_inject_4k(int drm_fd, drmModeConnector *connector)
 	int fb_id;
 	struct igt_fb fb;
 	uint8_t found_4k_mode = 0;
-	uint32_t devid;
 
-	devid = intel_get_drm_devid(drm_fd);
+	if (is_intel_device(drm_fd)) {
+		uint32_t devid = intel_get_drm_devid(drm_fd);
 
-	/* 4K requires at least HSW */
-	igt_require(IS_HASWELL(devid) || intel_gen(devid) >= 8);
+		/* 4K requires at least HSW */
+		igt_require(IS_HASWELL(devid) || intel_display_ver(devid) >= 8);
+	}
 
 	edid = igt_kms_get_4k_edid();
 	kmstest_force_edid(drm_fd, connector, edid);
 
-	if (!kmstest_force_connector(drm_fd, connector, FORCE_CONNECTOR_ON))
-		igt_skip("Could not force connector on\n");
+	igt_skip_on_f(!kmstest_force_connector(drm_fd, connector, FORCE_CONNECTOR_ON),
+		      "Could not force connector on\n");
 
 	cid = connector->connector_id;
 
@@ -122,13 +143,13 @@ hdmi_inject_4k(int drm_fd, drmModeConnector *connector)
 	fb_id = igt_create_fb(drm_fd, connector->modes[i].hdisplay,
 			      connector->modes[i].vdisplay,
 			      DRM_FORMAT_XRGB8888,
-			      LOCAL_DRM_FORMAT_MOD_NONE, &fb);
+			      DRM_FORMAT_MOD_LINEAR, &fb);
 
 	ret = drmModeSetCrtc(drm_fd, config.crtc->crtc_id, fb_id, 0, 0,
 			     &connector->connector_id, 1,
 			     &connector->modes[i]);
 
-	igt_assert(ret == 0);
+	igt_assert_eq(ret, 0);
 
 	igt_remove_fb(drm_fd, &fb);
 
@@ -144,11 +165,13 @@ hdmi_inject_audio(int drm_fd, drmModeConnector *connector)
 	struct igt_fb fb;
 	struct kmstest_connector_config config;
 
+	igt_require(eld_is_supported());
+
 	edid = igt_kms_get_hdmi_audio_edid();
 	kmstest_force_edid(drm_fd, connector, edid);
 
-	if (!kmstest_force_connector(drm_fd, connector, FORCE_CONNECTOR_ON))
-		igt_skip("Could not force connector on\n");
+	igt_skip_on_f(!kmstest_force_connector(drm_fd, connector, FORCE_CONNECTOR_ON),
+		      "Could not force connector on\n");
 
 	cid = connector->connector_id;
 	connector = drmModeGetConnectorCurrent(drm_fd, cid);
@@ -164,14 +187,14 @@ hdmi_inject_audio(int drm_fd, drmModeConnector *connector)
 	fb_id = igt_create_fb(drm_fd, connector->modes[0].hdisplay,
 			      connector->modes[0].vdisplay,
 			      DRM_FORMAT_XRGB8888,
-			      LOCAL_DRM_FORMAT_MOD_NONE, &fb);
+			      DRM_FORMAT_MOD_LINEAR, &fb);
 
 	ret = drmModeSetCrtc(drm_fd, config.crtc->crtc_id, fb_id, 0, 0,
 			     &connector->connector_id, 1,
 			     &connector->modes[0]);
 
 
-	igt_assert(ret == 0);
+	igt_assert_eq(ret, 0);
 
 	/*
 	 * Test if we have /proc/asound/HDMI/eld#0.0 and is its contents are
@@ -195,7 +218,7 @@ igt_main
 	drmModeConnector *connector;
 
 	igt_fixture {
-		drm_fd = drm_open_driver_master(DRIVER_INTEL);
+		drm_fd = drm_open_driver_master(DRIVER_ANY);
 
 		res = drmModeGetResources(drm_fd);
 		igt_require(res);
@@ -218,5 +241,7 @@ igt_main
 
 	igt_fixture {
 		drmModeFreeConnector(connector);
+		drmModeFreeResources(res);
+		drm_close_driver(drm_fd);
 	}
 }

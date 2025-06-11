@@ -25,7 +25,9 @@
 #include <inttypes.h>
 #include <sys/stat.h>
 #include <sys/mount.h>
+#ifdef __linux__
 #include <sys/sysmacros.h>
+#endif
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
@@ -53,70 +55,24 @@
  * basic functions to access debugfs files with e.g. igt_debugfs_open() it also
  * provides higher-level wrappers for some debugfs features.
  *
- * # Pipe CRC Support
- *
- * This library wraps up the kernel's support for capturing pipe CRCs into a
- * neat and tidy package. For the detailed usage see all the functions which
- * work on #igt_pipe_crc_t. This is supported on all platforms and outputs.
- *
- * Actually using pipe CRCs to write modeset tests is a bit tricky though, so
- * there is no way to directly check a CRC: Both the details of the plane
- * blending, color correction and other hardware and how exactly the CRC is
- * computed at each tap point vary by hardware generation and are not disclosed.
- *
- * The only way to use #igt_crc_t CRCs therefore is to compare CRCs among each
- * another either for equality or difference. Otherwise CRCs must be treated as
- * completely opaque values. Note that not even CRCs from different pipes or tap
- * points on the same platform can be compared. Hence only use
- * igt_assert_crc_equal() to inspect CRC values captured by the same
- * #igt_pipe_crc_t object.
- *
  * # Other debugfs interface wrappers
  *
  * This covers the miscellaneous debugfs interface wrappers:
  *
  * - drm/i915 supports interfaces to evict certain classes of gem buffer
  *   objects, see igt_drop_caches_set().
- *
- * - drm/i915 supports an interface to disable prefaulting, useful to test
- *   slow paths in ioctls. See igt_disable_prefault().
  */
 
 /*
  * General debugfs helpers
  */
 
-static bool is_mountpoint(const char *path)
-{
-	char buf[strlen(path) + 4];
-	struct stat st;
-	dev_t dev;
-
-	igt_assert_lt(snprintf(buf, sizeof(buf), "%s/.", path), sizeof(buf));
-	if (stat(buf, &st))
-		return false;
-
-	if (!S_ISDIR(st.st_mode))
-		return false;
-
-	dev = st.st_dev;
-
-	igt_assert_lt(snprintf(buf, sizeof(buf), "%s/..", path), sizeof(buf));
-	if (stat(buf, &st))
-		return false;
-
-	if (!S_ISDIR(st.st_mode))
-		return false;
-
-	return dev != st.st_dev;
-}
-
 static const char *__igt_debugfs_mount(void)
 {
-	if (is_mountpoint("/sys/kernel/debug"))
+	if (igt_is_mountpoint("/sys/kernel/debug"))
 		return "/sys/kernel/debug";
 
-	if (is_mountpoint("/debug"))
+	if (igt_is_mountpoint("/debug"))
 		return "/debug";
 
 	if (mount("debug", "/sys/kernel/debug", "debugfs", 0, 0))
@@ -198,7 +154,7 @@ char *igt_debugfs_path(int device, char *path, int pathlen)
 				 debugfs_root, idx);
 			file = open(path, O_RDONLY);
 			if (file < 0)
-				return NULL;
+				continue;
 
 			cmp_len = read(file, cmp, sizeof(cmp));
 			close(file);
@@ -227,19 +183,53 @@ char *igt_debugfs_path(int device, char *path, int pathlen)
  */
 int igt_debugfs_dir(int device)
 {
+	int debugfs_dir_fd;
 	char path[200];
+
+	if (igt_debug_on(!igt_debugfs_path(device, path, sizeof(path))))
+		return -1;
+
+	debugfs_dir_fd = open(path, O_RDONLY);
+	igt_debug_on_f(debugfs_dir_fd < 0, "path: %s\n", path);
+
+	return debugfs_dir_fd;
+}
+
+/**
+ * igt_debugfs_gt_dir:
+ * @device: fd of the device
+ * @gt: GT instance number
+ *
+ * This opens the debugfs directory corresponding to device for use
+ * with igt_sysfs_get() and related functions.
+ *
+ * Returns:
+ * The directory fd, or -1 on failure.
+ */
+int igt_debugfs_gt_dir(int device, unsigned int gt)
+{
+	int debugfs_gt_dir_fd;
+	char path[PATH_MAX];
+	char gtpath[16];
+	int ret;
 
 	if (!igt_debugfs_path(device, path, sizeof(path)))
 		return -1;
 
-	igt_debug("Opening debugfs directory '%s'\n", path);
-	return open(path, O_RDONLY);
+	ret = snprintf(gtpath, sizeof(gtpath), "/gt%u", gt);
+	igt_assert(ret < sizeof(gtpath));
+	strncat(path, gtpath, sizeof(path) - 1);
+
+	debugfs_gt_dir_fd = open(path, O_RDONLY);
+	igt_debug_on_f(debugfs_gt_dir_fd < 0, "path: %s\n", path);
+
+	return debugfs_gt_dir_fd;
 }
 
 /**
  * igt_debugfs_connector_dir:
  * @device: fd of the device
- * @conn_name: conenctor name
+ * @conn_name: connector name
  * @mode: mode bits as used by open()
  *
  * This opens the debugfs directory corresponding to connector on the device
@@ -264,7 +254,29 @@ int igt_debugfs_connector_dir(int device, char *conn_name, int mode)
 }
 
 /**
+ * igt_debugfs_pipe_dir:
+ * @device: fd of the device
+ * @pipe: index of pipe
+ * @mode: mode bits as used by open()
+ *
+ * This opens the debugfs directory corresponding to the pipe index on the
+ * device for use with igt_sysfs_get() and related functions. This is just
+ * syntax sugar for igt_debugfs_open().
+ *
+ * Returns:
+ * The directory fd, or -1 on failure.
+ */
+int igt_debugfs_pipe_dir(int device, int pipe, int mode)
+{
+	char buf[128];
+
+	snprintf(buf, sizeof(buf), "crtc-%d", pipe);
+	return igt_debugfs_open(device, buf, mode);
+}
+
+/**
  * igt_debugfs_open:
+ * @device: fd of the device
  * @filename: name of the debugfs node to open
  * @mode: mode bits as used by open()
  *
@@ -290,7 +302,85 @@ int igt_debugfs_open(int device, const char *filename, int mode)
 }
 
 /**
+ * igt_debugfs_exists:
+ * @device: the drm device file fd
+ * @filename: file name
+ * @mode: mode bits as used by open()
+ *
+ * Test that the specified debugfs file exists and can be opened with the
+ * requested mode.
+ */
+bool igt_debugfs_exists(int device, const char *filename, int mode)
+{
+	int fd = igt_debugfs_open(device, filename, mode);
+
+	if (fd >= 0) {
+		close(fd);
+		return true;
+	}
+
+	return false;
+}
+
+/**
+ * igt_debugfs_gt_open:
+ * @device: open i915 drm fd
+ * @gt: gt instance number
+ * @filename: name of the debugfs node to open
+ * @mode: mode bits as used by open()
+ *
+ * This opens a debugfs file as a Unix file descriptor. The filename should be
+ * relative to the drm device's root, i.e. without "drm/$minor".
+ *
+ * Returns:
+ * The Unix file descriptor for the debugfs file or -1 if that didn't work out.
+ */
+int
+igt_debugfs_gt_open(int device, unsigned int gt, const char *filename, int mode)
+{
+	int dir, ret;
+
+	dir = igt_debugfs_gt_dir(device, gt);
+	if (dir < 0)
+		return dir;
+
+	ret = openat(dir, filename, mode);
+
+	close(dir);
+
+	return ret;
+}
+
+/**
+ * igt_debugfs_is_dir:
+ * @drm_fd: fd of the device
+ * @name: name of the debugfs node to check
+ * @gt: gt instance number
+ *
+ * This helps to find the debugfs file is  a directory or not
+ *
+ * Returns:
+ * true if the debugfs is a directory
+ */
+bool igt_debugfs_is_dir(int drm_fd, const char *name, int gt_id)
+{
+	char path[128];
+	struct stat st;
+
+	if (fstat(drm_fd, &st) != 0)
+		return false;
+
+	snprintf(path, sizeof(path), "/sys/kernel/debug/dri/%d/gt%d/%s",
+		 minor(st.st_rdev), gt_id, name);
+	if (!stat(path, &st) && S_ISDIR(st.st_mode))
+		return true;
+
+	return false;
+}
+
+/**
  * igt_debugfs_simple_read:
+ * @dir: fd of the debugfs directory
  * @filename: file name
  * @buf: buffer where the contents will be stored, allocated by the caller
  * @size: size of the buffer
@@ -300,7 +390,7 @@ int igt_debugfs_open(int device, const char *filename, int mode)
  * first argument.
  *
  * Returns:
- * -errorno on failure or bytes read on success
+ * -errno on failure or bytes read on success
  */
 int igt_debugfs_simple_read(int dir, const char *filename, char *buf, int size)
 {
@@ -317,6 +407,7 @@ int igt_debugfs_simple_read(int dir, const char *filename, char *buf, int size)
 
 /**
  * __igt_debugfs_read:
+ * @fd: fd of the device
  * @filename: file name
  * @buf: buffer where the contents will be stored, allocated by the caller
  * @size: size of the buffer
@@ -334,7 +425,25 @@ void __igt_debugfs_read(int fd, const char *filename, char *buf, int size)
 }
 
 /**
+ * __igt_debugfs_write:
+ * @fd: the drm device file fd
+ * @filename: file name
+ * @buf: buffer to be written to the debugfs file
+ * @size: size of the buffer
+ *
+ * This function opens the debugfs file, writes it, then closes the file.
+ */
+void __igt_debugfs_write(int fd, const char *filename, const char *buf, int size)
+{
+	int dir = igt_debugfs_dir(fd);
+
+	igt_sysfs_write(dir, filename, buf, size);
+	close(dir);
+}
+
+/**
  * igt_debugfs_search:
+ * @device: fd of the device
  * @filename: file name
  * @substring: string to search for in @filename
  *
@@ -367,169 +476,35 @@ bool igt_debugfs_search(int device, const char *filename, const char *substring)
 	return matched;
 }
 
-/*
- * Pipe CRC
+/**
+ * igt_ignore_long_hpd:
+ * @drm_fd: the DRM device file fd
+ * @enable: flag to control the ignore long HPD entry
+ *
+ * Set / unset ignore long HPD events from the panels. Some panels
+ * generate long HPDs even while connected to the ports causing
+ * unexpected CI execution issues. Set this to ignore such unexpected
+ * long HPDs where we dont expect to disconnect the displays.
  */
-
-static bool igt_find_crc_mismatch(const igt_crc_t *a, const igt_crc_t *b,
-				  int *index)
+bool igt_ignore_long_hpd(int drm_fd, bool enable)
 {
-	int nwords = min(a->n_words, b->n_words);
-	int i;
+	int fd = igt_debugfs_open(drm_fd, "i915_ignore_long_hpd", O_WRONLY);
+	int ret;
 
-	for (i = 0; i < nwords; i++) {
-		if (a->crc[i] != b->crc[i]) {
-			if (index)
-				*index = i;
-
-			return true;
-		}
+	if (fd < 0) {
+		igt_debug("couldn't open ignore long hpd file\n");
+		return false;
 	}
 
-	if (a->n_words != b->n_words) {
-		if (index)
-			*index = i;
-		return true;
-	}
+	ret = write(fd, enable ? "1" : "0", 1);
 
-	return false;
-}
-
-/**
- * igt_assert_crc_equal:
- * @a: first pipe CRC value
- * @b: second pipe CRC value
- *
- * Compares two CRC values and fails the testcase if they don't match with
- * igt_fail(). Note that due to CRC collisions CRC based testcase can only
- * assert that CRCs match, never that they are different. Otherwise there might
- * be random testcase failures when different screen contents end up with the
- * same CRC by chance.
- *
- * Passing --skip-crc-compare on the command line will force this function
- * to always pass, which can be useful in interactive debugging where you
- * might know the test will fail, but still want the test to keep going as if
- * it had succeeded so that you can see the on-screen behavior.
- *
- */
-void igt_assert_crc_equal(const igt_crc_t *a, const igt_crc_t *b)
-{
-	int index;
-	bool mismatch;
-
-	mismatch = igt_find_crc_mismatch(a, b, &index);
-	if (mismatch)
-		igt_debug("CRC mismatch%s at index %d: 0x%x != 0x%x\n",
-			  igt_skip_crc_compare ? " (ignored)" : "",
-			  index, a->crc[index], b->crc[index]);
-
-	igt_assert(!mismatch || igt_skip_crc_compare);
-}
-
-/**
- * igt_check_crc_equal:
- * @a: first pipe CRC value
- * @b: second pipe CRC value
- *
- * Compares two CRC values and return whether they match.
- *
- * Returns: A boolean indicating whether the CRC values match
- */
-bool igt_check_crc_equal(const igt_crc_t *a, const igt_crc_t *b)
-{
-	int index;
-	bool mismatch;
-
-	mismatch = igt_find_crc_mismatch(a, b, &index);
-	if (mismatch)
-		igt_debug("CRC mismatch at index %d: 0x%x != 0x%x\n", index,
-			  a->crc[index], b->crc[index]);
-
-	return !mismatch;
-}
-
-/**
- * igt_crc_to_string_extended:
- * @crc: pipe CRC value to print
- * @delimiter: The delimiter to use between crc words
- * @crc_size: the number of bytes to print per crc word (between 1 and 4)
- *
- * This function allocates a string and formats @crc into it, depending on
- * @delimiter and @crc_size.
- * The caller is responsible for freeing the string.
- *
- * This should only ever be used for diagnostic debug output.
- */
-char *igt_crc_to_string_extended(igt_crc_t *crc, char delimiter, int crc_size)
-{
-	int i;
-	int len = 0;
-	int field_width = 2 * crc_size; /* Two chars per byte. */
-	char *buf = malloc((field_width+1) * crc->n_words);
-
-	if (!buf)
-		return NULL;
-
-	for (i = 0; i < crc->n_words - 1; i++)
-		len += sprintf(buf + len, "%0*x%c", field_width,
-			       crc->crc[i], delimiter);
-
-	sprintf(buf + len, "%0*x", field_width, crc->crc[i]);
-
-	return buf;
-}
-
-/**
- * igt_crc_to_string:
- * @crc: pipe CRC value to print
- *
- * This function allocates a string and formats @crc into it.
- * The caller is responsible for freeing the string.
- *
- * This should only ever be used for diagnostic debug output.
- */
-char *igt_crc_to_string(igt_crc_t *crc)
-{
-	return igt_crc_to_string_extended(crc, ' ', 4);
-}
-
-#define MAX_CRC_ENTRIES 10
-#define MAX_LINE_LEN (10 + 11 * MAX_CRC_ENTRIES + 1)
-
-struct _igt_pipe_crc {
-	int fd;
-	int dir;
-	int ctl_fd;
-	int crc_fd;
-	int flags;
-
-	enum pipe pipe;
-	char *source;
-};
-
-/**
- * igt_require_pipe_crc:
- *
- * Convenience helper to check whether pipe CRC capturing is supported by the
- * kernel. Uses igt_skip to automatically skip the test/subtest if this isn't
- * the case.
- */
-void igt_require_pipe_crc(int fd)
-{
-	int dir;
-	struct stat stat;
-
-	dir = igt_debugfs_dir(fd);
-	igt_require_f(dir >= 0, "Could not open debugfs directory\n");
-	igt_require_f(fstatat(dir, "crtc-0/crc/control", &stat, 0) == 0,
-		      "CRCs not supported on this platform\n");
-
-	close(dir);
+	close(fd);
+	return ret == 1;
 }
 
 static void igt_hpd_storm_exit_handler(int sig)
 {
-	int fd = drm_open_driver(DRIVER_INTEL);
+	int fd = drm_open_driver(DRIVER_INTEL | DRIVER_XE);
 
 	/* Here we assume that only one i915 device will be ever present */
 	igt_hpd_storm_reset(fd);
@@ -539,6 +514,7 @@ static void igt_hpd_storm_exit_handler(int sig)
 
 /**
  * igt_hpd_storm_set_threshold:
+ * @drm_fd: fd of the device
  * @threshold: How many hotplugs per second required to trigger an HPD storm,
  * or 0 to disable storm detection.
  *
@@ -569,6 +545,7 @@ void igt_hpd_storm_set_threshold(int drm_fd, unsigned int threshold)
 
 /**
  * igt_hpd_storm_reset:
+ * @drm_fd: fd of the device
  *
  * Convienence helper to reset HPD storm detection to it's default settings.
  * If hotplug detection was disabled on any ports due to an HPD storm, it will
@@ -596,6 +573,7 @@ void igt_hpd_storm_reset(int drm_fd)
 
 /**
  * igt_hpd_storm_detected:
+ * @drm_fd: fd of the device
  *
  * Checks whether or not i915 has detected an HPD interrupt storm on any of the
  * system's ports.
@@ -635,6 +613,7 @@ bool igt_hpd_storm_detected(int drm_fd)
 
 /**
  * igt_require_hpd_storm_ctl:
+ * @drm_fd: fd of the device
  *
  * Skips the current test if the system does not have HPD storm detection.
  *
@@ -646,359 +625,6 @@ void igt_require_hpd_storm_ctl(int drm_fd)
 
 	igt_require_f(fd > 0, "No i915_hpd_storm_ctl found in debugfs\n");
 	close(fd);
-}
-
-static igt_pipe_crc_t *
-pipe_crc_new(int fd, enum pipe pipe, const char *source, int flags)
-{
-	igt_pipe_crc_t *pipe_crc;
-	char buf[128];
-	int debugfs;
-
-	igt_assert(source);
-
-	debugfs = igt_debugfs_dir(fd);
-	igt_assert(debugfs != -1);
-
-	pipe_crc = calloc(1, sizeof(struct _igt_pipe_crc));
-
-	sprintf(buf, "crtc-%d/crc/control", pipe);
-	pipe_crc->ctl_fd = openat(debugfs, buf, O_WRONLY);
-	igt_assert(pipe_crc->ctl_fd != -1);
-
-	pipe_crc->crc_fd = -1;
-	pipe_crc->fd = fd;
-	pipe_crc->dir = debugfs;
-	pipe_crc->pipe = pipe;
-	pipe_crc->source = strdup(source);
-	igt_assert(pipe_crc->source);
-	pipe_crc->flags = flags;
-
-	return pipe_crc;
-}
-
-/**
- * igt_pipe_crc_new:
- * @pipe: display pipe to use as source
- * @source: CRC tap point to use as source
- *
- * This sets up a new pipe CRC capture object for the given @pipe and @source
- * in blocking mode.
- *
- * Returns: A pipe CRC object for the given @pipe and @source. The library
- * assumes that the source is always available since recent kernels support at
- * least INTEL_PIPE_CRC_SOURCE_AUTO everywhere.
- */
-igt_pipe_crc_t *
-igt_pipe_crc_new(int fd, enum pipe pipe, const char *source)
-{
-	return pipe_crc_new(fd, pipe, source, O_RDONLY);
-}
-
-/**
- * igt_pipe_crc_new_nonblock:
- * @pipe: display pipe to use as source
- * @source: CRC tap point to use as source
- *
- * This sets up a new pipe CRC capture object for the given @pipe and @source
- * in nonblocking mode.
- *
- * Returns: A pipe CRC object for the given @pipe and @source. The library
- * assumes that the source is always available since recent kernels support at
- * least INTEL_PIPE_CRC_SOURCE_AUTO everywhere.
- */
-igt_pipe_crc_t *
-igt_pipe_crc_new_nonblock(int fd, enum pipe pipe, const char *source)
-{
-	return pipe_crc_new(fd, pipe, source, O_RDONLY | O_NONBLOCK);
-}
-
-/**
- * igt_pipe_crc_free:
- * @pipe_crc: pipe CRC object
- *
- * Frees all resources associated with @pipe_crc.
- */
-void igt_pipe_crc_free(igt_pipe_crc_t *pipe_crc)
-{
-	if (!pipe_crc)
-		return;
-
-	close(pipe_crc->ctl_fd);
-	close(pipe_crc->crc_fd);
-	close(pipe_crc->dir);
-	free(pipe_crc->source);
-	free(pipe_crc);
-}
-
-static bool pipe_crc_init_from_string(igt_pipe_crc_t *pipe_crc, igt_crc_t *crc,
-				      const char *line)
-{
-	int i;
-	const char *buf;
-
-	if (strncmp(line, "XXXXXXXXXX", 10) == 0)
-		crc->has_valid_frame = false;
-	else {
-		crc->has_valid_frame = true;
-		crc->frame = strtoul(line, NULL, 16);
-	}
-
-	buf = line + 10;
-	for (i = 0; *buf != '\n'; i++, buf += 11)
-		crc->crc[i] = strtoul(buf, NULL, 16);
-
-	crc->n_words = i;
-
-	return true;
-}
-
-static int read_crc(igt_pipe_crc_t *pipe_crc, igt_crc_t *out)
-{
-	ssize_t bytes_read;
-	char buf[MAX_LINE_LEN + 1];
-
-	igt_set_timeout(5, "CRC reading");
-	bytes_read = read(pipe_crc->crc_fd, &buf, MAX_LINE_LEN);
-	igt_reset_timeout();
-
-	if (bytes_read < 0)
-		bytes_read = -errno;
-	else
-		buf[bytes_read] = '\0';
-
-	if (bytes_read > 0 && !pipe_crc_init_from_string(pipe_crc, out, buf))
-		return -EINVAL;
-
-	return bytes_read;
-}
-
-static void read_one_crc(igt_pipe_crc_t *pipe_crc, igt_crc_t *out)
-{
-	int ret;
-
-	fcntl(pipe_crc->crc_fd, F_SETFL, pipe_crc->flags & ~O_NONBLOCK);
-
-	do {
-		ret = read_crc(pipe_crc, out);
-	} while (ret == -EINTR);
-
-	fcntl(pipe_crc->crc_fd, F_SETFL, pipe_crc->flags);
-}
-
-/**
- * igt_pipe_crc_start:
- * @pipe_crc: pipe CRC object
- *
- * Starts the CRC capture process on @pipe_crc.
- */
-void igt_pipe_crc_start(igt_pipe_crc_t *pipe_crc)
-{
-	const char *src = pipe_crc->source;
-	struct pollfd pfd;
-	char buf[32];
-
-	/* Stop first just to make sure we don't have lingering state left. */
-	igt_pipe_crc_stop(pipe_crc);
-
-	igt_reset_fifo_underrun_reporting(pipe_crc->fd);
-
-	igt_assert_eq(write(pipe_crc->ctl_fd, src, strlen(src)), strlen(src));
-
-	sprintf(buf, "crtc-%d/crc/data", pipe_crc->pipe);
-
-	igt_set_timeout(10, "Opening crc fd, and poll for first CRC.");
-	pipe_crc->crc_fd = openat(pipe_crc->dir, buf, pipe_crc->flags);
-	igt_assert(pipe_crc->crc_fd != -1);
-
-	pfd.fd = pipe_crc->crc_fd;
-	pfd.events = POLLIN;
-	poll(&pfd, 1, -1);
-
-	igt_reset_timeout();
-
-	errno = 0;
-}
-
-/**
- * igt_pipe_crc_stop:
- * @pipe_crc: pipe CRC object
- *
- * Stops the CRC capture process on @pipe_crc.
- */
-void igt_pipe_crc_stop(igt_pipe_crc_t *pipe_crc)
-{
-	close(pipe_crc->crc_fd);
-	pipe_crc->crc_fd = -1;
-}
-
-/**
- * igt_pipe_crc_get_crcs:
- * @pipe_crc: pipe CRC object
- * @n_crcs: number of CRCs to capture
- * @out_crcs: buffer pointer for the captured CRC values
- *
- * Read up to @n_crcs from @pipe_crc. This function does not block, and will
- * return early if not enough CRCs can be captured, if @pipe_crc has been
- * opened using igt_pipe_crc_new_nonblock(). It will block until @n_crcs are
- * retrieved if @pipe_crc has been opened using igt_pipe_crc_new(). @out_crcs is
- * alloced by this function and must be released with free() by the caller.
- *
- * Callers must start and stop the capturing themselves by calling
- * igt_pipe_crc_start() and igt_pipe_crc_stop(). For one-shot CRC collecting
- * look at igt_pipe_crc_collect_crc().
- *
- * Returns:
- * The number of CRCs captured. Should be equal to @n_crcs in blocking mode, but
- * can be less (even zero) in non-blocking mode.
- */
-int
-igt_pipe_crc_get_crcs(igt_pipe_crc_t *pipe_crc, int n_crcs,
-		      igt_crc_t **out_crcs)
-{
-	igt_crc_t *crcs;
-	int n = 0;
-
-	crcs = calloc(n_crcs, sizeof(igt_crc_t));
-
-	do {
-		igt_crc_t *crc = &crcs[n];
-		int ret;
-
-		ret = read_crc(pipe_crc, crc);
-		if (ret == -EAGAIN)
-			break;
-
-		if (ret < 0)
-			continue;
-
-		n++;
-	} while (n < n_crcs);
-
-	*out_crcs = crcs;
-	return n;
-}
-
-static void crc_sanity_checks(igt_pipe_crc_t *pipe_crc, igt_crc_t *crc)
-{
-	int i;
-	bool all_zero = true;
-
-	/* Any CRC value can be considered valid on amdgpu hardware. */
-	if (is_amdgpu_device(pipe_crc->fd))
-		return;
-
-	for (i = 0; i < crc->n_words; i++) {
-		igt_warn_on_f(crc->crc[i] == 0xffffffff,
-			      "Suspicious CRC: it looks like the CRC "
-			      "read back was from a register in a powered "
-			      "down well\n");
-		if (crc->crc[i])
-			all_zero = false;
-	}
-
-	igt_warn_on_f(all_zero, "Suspicious CRC: All values are 0.\n");
-}
-
-/**
- * igt_pipe_crc_drain:
- * @pipe_crc: pipe CRC object
- *
- * Discards all currently queued CRC values from @pipe_crc. This function does
- * not block, and is useful to flush @pipe_crc. Afterwards you can get a fresh
- * CRC with igt_pipe_crc_get_single().
- */
-void igt_pipe_crc_drain(igt_pipe_crc_t *pipe_crc)
-{
-	int ret;
-	igt_crc_t crc;
-
-	fcntl(pipe_crc->crc_fd, F_SETFL, pipe_crc->flags | O_NONBLOCK);
-
-	do {
-		ret = read_crc(pipe_crc, &crc);
-	} while (ret > 0 || ret == -EINVAL);
-
-	fcntl(pipe_crc->crc_fd, F_SETFL, pipe_crc->flags);
-}
-
-/**
- * igt_pipe_crc_get_single:
- * @pipe_crc: pipe CRC object
- * @crc: buffer pointer for the captured CRC value
- *
- * Read a single @crc from @pipe_crc. This function blocks even
- * when nonblocking CRC is requested.
- *
- * Callers must start and stop the capturing themselves by calling
- * igt_pipe_crc_start() and igt_pipe_crc_stop(). For one-shot CRC collecting
- * look at igt_pipe_crc_collect_crc().
- *
- * If capturing has been going on for a while and a fresh crc is required,
- * you should use igt_pipe_crc_get_current() instead.
- */
-void igt_pipe_crc_get_single(igt_pipe_crc_t *pipe_crc, igt_crc_t *crc)
-{
-	read_one_crc(pipe_crc, crc);
-
-	crc_sanity_checks(pipe_crc, crc);
-}
-
-/**
- * igt_pipe_crc_get_current:
- * @drm_fd: Pointer to drm fd for vblank counter
- * @pipe_crc: pipe CRC object
- * @crc: buffer pointer for the captured CRC value
- *
- * Same as igt_pipe_crc_get_single(), but will wait until a new CRC can be captured.
- * This is useful for retrieving the current CRC in a more race free way than
- * igt_pipe_crc_drain() + igt_pipe_crc_get_single().
- */
-void
-igt_pipe_crc_get_current(int drm_fd, igt_pipe_crc_t *pipe_crc, igt_crc_t *crc)
-{
-	unsigned vblank = kmstest_get_vblank(drm_fd, pipe_crc->pipe, 0);
-
-	do {
-		read_one_crc(pipe_crc, crc);
-
-		/* Only works with valid frame counter */
-		if (!crc->has_valid_frame) {
-			igt_pipe_crc_drain(pipe_crc);
-			igt_pipe_crc_get_single(pipe_crc, crc);
-			return;
-		}
-	} while (igt_vblank_before_eq(crc->frame, vblank));
-
-	crc_sanity_checks(pipe_crc, crc);
-}
-
-/**
- * igt_pipe_crc_collect_crc:
- * @pipe_crc: pipe CRC object
- * @out_crc: buffer for the captured CRC values
- *
- * Read a single CRC from @pipe_crc. This function blocks until the CRC is
- * retrieved, irrespective of whether @pipe_crc has been opened with
- * igt_pipe_crc_new() or igt_pipe_crc_new_nonblock().  @out_crc must be
- * allocated by the caller.
- *
- * This function takes care of the pipe_crc book-keeping, it will start/stop
- * the collection of the CRC.
- *
- * This function also calls the interactive debug with the "crc" domain, so you
- * can make use of this feature to actually see the screen that is being CRC'd.
- *
- * For continuous CRC collection look at igt_pipe_crc_start(),
- * igt_pipe_crc_get_crcs() and igt_pipe_crc_stop().
- */
-void igt_pipe_crc_collect_crc(igt_pipe_crc_t *pipe_crc, igt_crc_t *out_crc)
-{
-	igt_debug_wait_for_keypress("crc");
-
-	igt_pipe_crc_start(pipe_crc);
-	igt_pipe_crc_get_single(pipe_crc, out_crc);
-	igt_pipe_crc_stop(pipe_crc);
 }
 
 /**
@@ -1026,6 +652,7 @@ void igt_reset_fifo_underrun_reporting(int drm_fd)
 
 /**
  * igt_drop_caches_has:
+ * @drm_fd: fd of the device
  * @val: bitmask for DROP_* values
  *
  * This queries the debugfs to see if it supports the full set of desired
@@ -1046,6 +673,7 @@ bool igt_drop_caches_has(int drm_fd, uint64_t val)
 
 /**
  * igt_drop_caches_set:
+ * @drm_fd: fd of the device
  * @val: bitmask for DROP_* values
  *
  * This calls the debugfs interface the drm/i915 GEM driver exposes to drop or
@@ -1056,65 +684,21 @@ void igt_drop_caches_set(int drm_fd, uint64_t val)
 	int dir;
 
 	dir = igt_debugfs_dir(drm_fd);
-	igt_assert(igt_sysfs_printf(dir, "i915_gem_drop_caches",
-				    "0x%" PRIx64, val) > 0);
+	if (is_i915_device(drm_fd)) {
+		igt_assert(igt_sysfs_printf(dir, "i915_gem_drop_caches",
+					    "0x%" PRIx64, val) > 0);
+	} else if (is_msm_device(drm_fd)) {
+		/*
+		 * msm doesn't currently have debugs that supports fine grained
+		 * control of *what* to drop, just # of objects to scan (equiv
+		 * to shrink_control::nr_to_scan).  To meet that limit it will
+		 * first try shrinking, and then dropping idle.  So just tell
+		 * it to try and drop as many objects as possible:
+		 */
+		igt_assert(igt_sysfs_printf(dir, "shrink", "0x%" PRIx64,
+					    ~(uint64_t)0) > 0);
+	}
 	close(dir);
-}
-
-/*
- * Prefault control
- */
-
-#define PREFAULT_DEBUGFS "/sys/module/i915/parameters/prefault_disable"
-static void igt_prefault_control(bool enable)
-{
-	const char *name = PREFAULT_DEBUGFS;
-	int fd;
-	char buf[2] = {'Y', 'N'};
-	int index;
-
-	fd = open(name, O_RDWR);
-	igt_require(fd >= 0);
-
-	if (enable)
-		index = 1;
-	else
-		index = 0;
-
-	igt_require(write(fd, &buf[index], 1) == 1);
-
-	close(fd);
-}
-
-static void enable_prefault_at_exit(int sig)
-{
-	igt_enable_prefault();
-}
-
-/**
- * igt_disable_prefault:
- *
- * Disable prefaulting in certain gem ioctls through the debugfs interface. As
- * usual this installs an exit handler to clean up and re-enable prefaulting
- * even when the test exited abnormally.
- *
- * igt_enable_prefault() will enable normale operation again.
- */
-void igt_disable_prefault(void)
-{
-	igt_prefault_control(false);
-
-	igt_install_exit_handler(enable_prefault_at_exit);
-}
-
-/**
- * igt_enable_prefault:
- *
- * Enable prefault (again) through the debugfs interface.
- */
-void igt_enable_prefault(void)
-{
-	igt_prefault_control(true);
 }
 
 static int get_object_count(int fd)
@@ -1143,13 +727,10 @@ static int get_object_count(int fd)
  */
 int igt_get_stable_obj_count(int driver)
 {
-	int obj_count;
-	gem_quiescent_gpu(driver);
-	obj_count = get_object_count(driver);
 	/* The test relies on the system being in the same state before and
 	 * after the test so any difference in the object count is a result of
 	 * leaks during the test. */
-	return obj_count;
+	return get_object_count(driver);
 }
 
 void __igt_debugfs_dump(int device, const char *filename, int level)

@@ -20,8 +20,6 @@ license {
     name: "external_igt-gpu-tools_license",
     visibility: [
         ":__subpackages__",
-        "//test/dts/tests/display:__subpackages__",
-        "//vendor:__subpackages__",
     ],
     license_kinds: [
         "SPDX-license-identifier-Apache-2.0",
@@ -38,21 +36,58 @@ license {
 
 cc_defaults {
     name: "igt-gpu-tools-defaults",
+    c_std: "gnu11",
     cflags: [
         "-Wall",
         "-Werror",
+        "-Wno-pointer-arith",
         "-Wno-missing-field-initializers",
+        "-Wno-uninitialized",
         "-Wno-unused-parameter",
         "-Wno-unused-variable",
-        "-DHAVE_GETTID",
-        "-DHAVE_LIBGEN_H",
-        "-DHAVE_MEMFD_CREATE",
+        "-Wno-unreachable-code-loop-increment",
+        "-D_GNU_SOURCE",
     ],
+    arch: {
+        arm: {
+            cflags: [
+                "-DTARGET_CPU_PLATFORM=\"arm\"",
+            ],
+        },
+        arm64: {
+            cflags: [
+                "-DTARGET_CPU_PLATFORM=\"arm64\"",
+            ],
+        },
+        riscv64: {
+            cflags: [
+                "-DTARGET_CPU_PLATFORM=\"riscv64\"",
+            ],
+        },
+        x86: {
+            cflags: [
+                "-DTARGET_CPU_PLATFORM=\"x86\"",
+            ],
+        },
+        x86_64: {
+            cflags: [
+                "-DTARGET_CPU_PLATFORM=\"x86_64\"",
+            ],
+        },
+    },
     static_libs: [
         "libelf",
         "libkmod",
-        "libion",
         "liblog",
+        "cairo",
+        "pixman",
+        "libft2",
+        "libpng",
+        "libexpat",
+        "libpcre2",
+        "libz",
+        "libpciaccess",
+        "libudev-zero",
     ],
     shared_libs: ["libdrm"],
     compile_multilib: "both",
@@ -64,6 +99,14 @@ cc_defaults {
             suffix: "64",
         },
     },
+    local_include_dirs: [
+        "include",
+        "include/drm-uapi",
+        "include/drm-uapi-experimental",
+        "include/linux-uapi",
+        "lib",
+        "tests",
+    ],
 }
 
 cc_library_static {
@@ -71,35 +114,130 @@ cc_library_static {
     defaults: ["igt-gpu-tools-defaults"],
     srcs: [
         "lib/drmtest.c",
-        "lib/gem.c",
-        "lib/gem_msm.c",
-        "lib/igt_aux.c",
+        "lib/dmabuf_sync_file.c",
+        "lib/huc_copy.c",
+        "lib/i915/gem.c",
+        "lib/i915/gem_context.c",
+        "lib/i915/gem_create.c",
+        "lib/i915/gem_engine_topology.c",
+        "lib/i915/gem_scheduler.c",
+        "lib/i915/gem_submission.c",
+        "lib/i915/gem_ring.c",
+        "lib/i915/gem_mman.c",
+        "lib/i915/gem_vm.c",
+        "lib/i915/intel_decode.c",
+        "lib/i915/intel_drrs.c",
+        "lib/i915/intel_fbc.c",
+        "lib/i915/intel_memory_region.c",
+        "lib/i915/i915_crc.c",
+        "lib/iga64_generated_codes.c",
+        "lib/igt_collection.c",
         "lib/igt_color_encoding.c",
-        "lib/igt_core.c",
+        "lib/igt_crc.c",
         "lib/igt_debugfs.c",
         "lib/igt_device.c",
-        "lib/igt_draw.c",
-        "lib/igt_dummy.c",
-        "lib/igt_dummyload.c",
-        "lib/igt_fb.c",
-        "lib/igt_kmod.c",
-        "lib/igt_kms.c",
-        "lib/igt_pm.c",
+        "lib/igt_device_scan.c",
+        "lib/igt_drm_fdinfo.c",
+        "lib/igt_drm_clients.c",
+        "lib/igt_amd.c",
+        "lib/igt_aux.c",
+        "lib/igt_facts.c",
+        "lib/igt_gt.c",
+        "lib/igt_halffloat.c",
+        "lib/igt_hwmon.c",
+        "lib/igt_fs.c",
+        "lib/igt_matrix.c",
+        "lib/igt_os.c",
+        "lib/igt_params.c",
+        "lib/igt_perf.c",
+        "lib/igt_power.c",
+        "lib/igt_pipe_crc.c",
+        "lib/igt_primes.c",
+        "lib/igt_pci.c",
         "lib/igt_rand.c",
+        "lib/igt_sriov_device.c",
         "lib/igt_stats.c",
-        "lib/igt_sysfs.c",
         "lib/igt_syncobj.c",
-        "lib/ion.c",
+        "lib/igt_sysfs.c",
+        "lib/igt_sysrq.c",
+        "lib/igt_taints.c",
+        "lib/igt_thread.c",
+        "lib/igt_types.c",
+        "lib/igt_vc4.c",
+        "lib/igt_vec.c",
+        "lib/igt_vgem.c",
+        "lib/igt_x86.c",
+        "lib/instdone.c",
+        "lib/intel_allocator.c",
+        "lib/intel_allocator_msgchannel.c",
+        "lib/intel_allocator_reloc.c",
+        "lib/intel_allocator_simple.c",
+        "lib/intel_batchbuffer.c",
+        "lib/intel_blt.c",
+        "lib/intel_bufops.c",
+        "lib/intel_chipset.c",
+        "lib/intel_cmds_info.c",
+        "lib/intel_common.c",
+        "lib/intel_compute.c",
+        "lib/intel_compute_square_kernels.c",
+        "lib/intel_ctx.c",
+        "lib/intel_device_info.c",
+        "lib/intel_mmio.c",
+        "lib/intel_mocs.c",
+        "lib/intel_pat.c",
         "lib/ioctl_wrappers.c",
+        "lib/media_spin.c",
+        "lib/media_fill.c",
+        "lib/gpgpu_fill.c",
+        "lib/gpgpu_shader.c",
+        "lib/gpu_cmds.c",
+        "lib/rendercopy_i915.c",
+        "lib/rendercopy_i830.c",
+        "lib/rendercopy_gen4.c",
+        "lib/rendercopy_gen6.c",
+        "lib/rendercopy_gen7.c",
+        "lib/rendercopy_gen8.c",
+        "lib/rendercopy_gen9.c",
+        "lib/runnercomms.c",
         "lib/sw_sync.c",
-        "lib/i915/gem_mman.c",
+        "lib/intel_aux_pgtable.c",
+        "lib/intel_reg_map.c",
+        "lib/intel_iosf.c",
+        "lib/igt_kms.c",
+        "lib/igt_fb.c",
+        "lib/igt_core.c",
+        "lib/igt_draw.c",
+        "lib/igt_list.c",
+        "lib/igt_map.c",
+        "lib/igt_multigpu.c",
+        "lib/igt_panel.c",
+        "lib/igt_pm.c",
+        "lib/igt_profiling.c",
+        "lib/igt_dummyload.c",
+        "lib/igt_store.c",
         "lib/uwildmat/uwildmat.c",
+        "lib/igt_kmod.c",
+        "lib/igt_ktap.c",
+        "lib/igt_psr.c",
+        "lib/igt_eld.c",
+        "lib/igt_infoframe.c",
+        "lib/veboxcopy_gen12.c",
+        "lib/igt_dsc.c",
+        "lib/igt_edid.c",
+        "lib/xe/xe_gt.c",
+        "lib/xe/xe_ioctl.c",
+        "lib/xe/xe_legacy.c",
+        "lib/xe/xe_mmio.c",
+        "lib/xe/xe_query.c",
+        "lib/xe/xe_spin.c",
+        "lib/xe/xe_sriov_debugfs.c",
+        "lib/xe/xe_sriov_provisioning.c",
+        "lib/xe/xe_util.c",
+        "lib/igt_hook.c",
+        "tests/amdgpu/amd_color.c",
     ],
     export_include_dirs: [
-        "include",
         "lib",
-        "lib/stubs/drm",
-        "prebuilt-intermediates",
     ],
 }
 
@@ -110,67 +248,9 @@ cc_defaults {
 }
 
 cc_test {
-    name: "gem_blt",
-    defaults: ["igt-gpu-tools-test-defaults"],
-    srcs: ["benchmarks/gem_blt.c"],
-    gtest: false,
-}
-
-cc_test {
-    name: "kms_flip",
-    defaults: ["igt-gpu-tools-test-defaults"],
-    srcs: ["tests/kms_flip.c"],
-    gtest: false,
-}
-
-cc_test {
-    name: "kms_atomic",
-    defaults: ["igt-gpu-tools-test-defaults"],
-    srcs: ["tests/kms_atomic.c"],
-    gtest: false,
-}
-
-cc_test {
-    name: "ion_fb",
-    defaults: ["igt-gpu-tools-test-defaults"],
-    srcs: ["tests/ion_fb.c"],
-    gtest: false,
-}
-
-cc_test {
-    name: "kms_vblank",
-    defaults: ["igt-gpu-tools-test-defaults"],
-    srcs: ["tests/kms_vblank.c"],
-    gtest: false,
-}
-
-python_test_host {
-    name: "igt_gpu_tools",
-    main: "scripts/test_igt_gpu_tools.py",
-    srcs: ["scripts/test_igt_gpu_tools.py"],
-    data: ["scripts/test_igt_gpu_tools.xml"],
-    test_config: "scripts/test_igt_gpu_tools.xml",
-    test_options: {
-        unit_test: false,
-    },
-}
-
-cc_test {
-    name: "kms_throughput",
-    defaults: ["igt-gpu-tools-test-defaults"],
-    srcs: ["benchmarks/kms_throughput.c"],
-}
-
-cc_test {
     name: "core_auth",
     defaults: ["igt-gpu-tools-test-defaults"],
     srcs: ["tests/core_auth.c"],
-}
-
-cc_test {
-    name: "kms_properties",
-    defaults: ["igt-gpu-tools-test-defaults"],
-    srcs: ["tests/kms_properties.c"],
 }
 
 cc_test {
@@ -180,9 +260,88 @@ cc_test {
 }
 
 cc_test {
+    name: "core_getstats",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/core_getstats.c"],
+}
+
+cc_test {
+    name: "core_getversion",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/core_getversion.c"],
+}
+
+cc_test {
+    name: "core_hotunplug",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/core_hotunplug.c"],
+    enabled: false,
+}
+
+cc_test {
+    name: "core_setmaster",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/core_setmaster.c"],
+}
+
+cc_test {
+    name: "core_setmaster_vs_auth",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/core_setmaster_vs_auth.c"],
+}
+
+cc_test {
+    name: "dmabuf",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/dmabuf.c"],
+}
+
+cc_test {
+    name: "dmabuf_sync_file",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/dmabuf_sync_file.c"],
+}
+
+cc_test {
+    name: "device_reset",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/device_reset.c"],
+}
+
+cc_test {
+    name: "dumb_buffer",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/dumb_buffer.c"],
+}
+
+cc_test {
+    name: "drm_buddy",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/drm_buddy.c"],
+}
+
+cc_test {
+    name: "drm_mm",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/drm_mm.c"],
+}
+
+cc_test {
     name: "drm_read",
     defaults: ["igt-gpu-tools-test-defaults"],
     srcs: ["tests/drm_read.c"],
+}
+
+cc_test {
+    name: "fbdev",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/fbdev.c"],
+}
+
+cc_test {
+    name: "kms_3d",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_3d.c"],
 }
 
 cc_test {
@@ -192,9 +351,15 @@ cc_test {
 }
 
 cc_test {
-    name: "kms_getfb",
+    name: "kms_async_flips",
     defaults: ["igt-gpu-tools-test-defaults"],
-    srcs: ["tests/kms_getfb.c"],
+    srcs: ["tests/kms_async_flips.c"],
+}
+
+cc_test {
+    name: "kms_atomic",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_atomic.c"],
 }
 
 cc_test {
@@ -210,9 +375,168 @@ cc_test {
 }
 
 cc_test {
+    name: "kms_bw",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_bw.c"],
+}
+
+cc_test {
+    name: "kms_color",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: [
+        "tests/kms_color_helper.c",
+        "tests/kms_color.c",
+    ],
+}
+
+cc_test {
+    name: "kms_concurrent",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_concurrent.c"],
+}
+
+cc_test {
+    name: "kms_content_protection",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_content_protection.c"],
+}
+
+cc_test {
+    name: "kms_cursor_crc",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_cursor_crc.c"],
+}
+
+cc_test {
+    name: "kms_cursor_edge_walk",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_cursor_edge_walk.c"],
+}
+
+cc_test {
+    name: "kms_cursor_legacy",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_cursor_legacy.c"],
+}
+
+cc_test {
+    name: "kms_dither",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_dither.c"],
+}
+
+cc_test {
+    name: "kms_display_modes",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_display_modes.c"],
+}
+
+cc_test {
+    name: "kms_dp_aux_dev",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_dp_aux_dev.c"],
+}
+
+cc_test {
+    name: "kms_feature_discovery",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_feature_discovery.c"],
+}
+
+cc_test {
+    name: "kms_flip",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_flip.c"],
+}
+
+cc_test {
+    name: "kms_flip_event_leak",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_flip_event_leak.c"],
+}
+
+cc_test {
+    name: "kms_force_connector_basic",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_force_connector_basic.c"],
+}
+
+cc_test {
+    name: "kms_getfb",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_getfb.c"],
+}
+
+cc_test {
+    name: "kms_hdmi_inject",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_hdmi_inject.c"],
+}
+
+cc_test {
+    name: "kms_hdr",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_hdr.c"],
+}
+
+cc_test {
+    name: "kms_invalid_mode",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_invalid_mode.c"],
+}
+
+cc_test {
+    name: "kms_lease",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_lease.c"],
+}
+
+cc_test {
+    name: "kms_multipipe_modeset",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_multipipe_modeset.c"],
+}
+
+cc_test {
+    name: "kms_panel_fitting",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_panel_fitting.c"],
+}
+
+cc_test {
+    name: "kms_pipe_crc_basic",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_pipe_crc_basic.c"],
+}
+
+cc_test {
+    name: "kms_plane",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_plane.c"],
+}
+
+cc_test {
+    name: "kms_plane_alpha_blend",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_plane_alpha_blend.c"],
+}
+
+cc_test {
+    name: "kms_plane_cursor",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_plane_cursor.c"],
+}
+
+cc_test {
     name: "kms_plane_lowres",
     defaults: ["igt-gpu-tools-test-defaults"],
     srcs: ["tests/kms_plane_lowres.c"],
+}
+
+cc_test {
+    name: "kms_plane_multiple",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_plane_multiple.c"],
 }
 
 cc_test {
@@ -222,9 +546,123 @@ cc_test {
 }
 
 cc_test {
+    name: "kms_prime",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_prime.c"],
+}
+
+cc_test {
     name: "kms_prop_blob",
     defaults: ["igt-gpu-tools-test-defaults"],
     srcs: ["tests/kms_prop_blob.c"],
+}
+
+cc_test {
+    name: "kms_properties",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_properties.c"],
+}
+
+cc_test {
+    name: "kms_rmfb",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_rmfb.c"],
+}
+
+cc_test {
+    name: "kms_rotation_crc",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_rotation_crc.c"],
+}
+
+cc_test {
+    name: "kms_scaling_modes",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_scaling_modes.c"],
+}
+
+cc_test {
+    name: "kms_selftest",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_selftest.c"],
+}
+
+cc_test {
+    name: "kms_sequence",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_sequence.c"],
+}
+
+cc_test {
+    name: "kms_setmode",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_setmode.c"],
+}
+
+cc_test {
+    name: "kms_sysfs_edid_timing",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_sysfs_edid_timing.c"],
+}
+
+cc_test {
+    name: "kms_tiled_display",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_tiled_display.c"],
+}
+
+cc_test {
+    name: "kms_tv_load_detect",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_tv_load_detect.c"],
+}
+
+cc_test {
+    name: "kms_universal_plane",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_universal_plane.c"],
+}
+
+cc_test {
+    name: "kms_vblank",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_vblank.c"],
+}
+
+cc_test {
+    name: "kms_vrr",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_vrr.c"],
+}
+
+cc_test {
+    name: "kms_writeback",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/kms_writeback.c"],
+}
+
+cc_test {
+    name: "meta_test",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/meta_test.c"],
+}
+
+cc_test {
+    name: "prime_udl",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/prime_udl.c"],
+}
+
+cc_test {
+    name: "prime_vgem",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/prime_vgem.c"],
+}
+
+cc_test {
+    name: "sriov_basic",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/sriov_basic.c"],
 }
 
 cc_test {
@@ -234,13 +672,701 @@ cc_test {
 }
 
 cc_test {
+    name: "syncobj_eventfd",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/syncobj_eventfd.c"],
+}
+
+cc_test {
     name: "syncobj_wait",
     defaults: ["igt-gpu-tools-test-defaults"],
     srcs: ["tests/syncobj_wait.c"],
 }
 
 cc_test {
-    name: "kms_setmode",
+    name: "syncobj_timeline",
     defaults: ["igt-gpu-tools-test-defaults"],
-    srcs: ["tests/kms_setmode.c"],
+    srcs: ["tests/syncobj_timeline.c"],
+}
+
+cc_test {
+    name: "sw_sync",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/sw_sync.c"],
+}
+
+cc_test {
+    name: "template",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/template.c"],
+}
+
+cc_test {
+    name: "testdisplay",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/testdisplay.c"],
+    enabled: false,
+}
+
+cc_test {
+    name: "tools_test",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/tools_test.c"],
+}
+
+cc_test {
+    name: "vgem_basic",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/vgem_basic.c"],
+}
+
+cc_test {
+    name: "vgem_slow",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/vgem_slow.c"],
+}
+
+cc_test {
+    name: "kms_big_fb",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/kms_big_fb.c"],
+}
+
+cc_test {
+    name: "kms_busy",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/kms_busy.c"],
+}
+
+cc_test {
+    name: "kms_ccs",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/kms_ccs.c"],
+}
+
+cc_test {
+    name: "kms_cdclk",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/kms_cdclk.c"],
+}
+
+cc_test {
+    name: "kms_dirtyfb",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/kms_dirtyfb.c"],
+}
+
+cc_test {
+    name: "kms_dp_link_training",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: [
+        "tests/intel/kms_mst_helper.c",
+        "tests/intel/kms_joiner_helper.c",
+        "tests/intel/kms_dp_link_training.c",
+    ],
+}
+
+cc_test {
+    name: "kms_dp_linktrain_fallback",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: [
+        "tests/intel/kms_dsc_helper.c",
+        "tests/intel/kms_mst_helper.c",
+        "tests/intel/kms_dp_linktrain_fallback.c",
+    ],
+}
+
+cc_test {
+    name: "kms_draw_crc",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/kms_draw_crc.c"],
+}
+
+cc_test {
+    name: "kms_dsc",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: [
+        "tests/intel/kms_dsc_helper.c",
+        "tests/intel/kms_dsc.c",
+    ],
+}
+
+cc_test {
+    name: "kms_fb_coherency",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/kms_fb_coherency.c"],
+}
+
+cc_test {
+    name: "kms_fbc_dirty_rect",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/kms_fbc_dirty_rect.c"],
+}
+
+cc_test {
+    name: "kms_fbcon_fbt",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/kms_fbcon_fbt.c"],
+}
+
+cc_test {
+    name: "kms_fence_pin_leak",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/kms_fence_pin_leak.c"],
+}
+
+cc_test {
+    name: "kms_flip_scaled_crc",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/kms_flip_scaled_crc.c"],
+}
+
+cc_test {
+    name: "kms_flip_tiling",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/kms_flip_tiling.c"],
+}
+
+cc_test {
+    name: "kms_frontbuffer_tracking",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/kms_frontbuffer_tracking.c"],
+}
+
+cc_test {
+    name: "kms_joiner",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: [
+        "tests/intel/kms_joiner_helper.c",
+        "tests/intel/kms_joiner.c",
+    ],
+}
+
+cc_test {
+    name: "kms_legacy_colorkey",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/kms_legacy_colorkey.c"],
+}
+
+cc_test {
+    name: "kms_mmap_write_crc",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/kms_mmap_write_crc.c"],
+}
+
+cc_test {
+    name: "kms_pipe_b_c_ivb",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/kms_pipe_b_c_ivb.c"],
+}
+
+cc_test {
+    name: "kms_pipe_stress",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/kms_pipe_stress.c"],
+}
+
+cc_test {
+    name: "kms_pm_backlight",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/kms_pm_backlight.c"],
+}
+
+cc_test {
+    name: "kms_pm_dc",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/kms_pm_dc.c"],
+}
+
+cc_test {
+    name: "kms_pm_lpsp",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/kms_pm_lpsp.c"],
+}
+
+cc_test {
+    name: "kms_pm_rpm",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/kms_pm_rpm.c"],
+}
+
+cc_test {
+    name: "kms_psr",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/kms_psr.c"],
+}
+
+cc_test {
+    name: "kms_psr2_sf",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: [
+        "tests/intel/kms_dsc_helper.c",
+        "tests/intel/kms_psr2_sf.c",
+    ],
+}
+
+cc_test {
+    name: "kms_psr2_su",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/kms_psr2_su.c"],
+}
+
+cc_test {
+    name: "kms_psr_stress_test",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/kms_psr_stress_test.c"],
+}
+
+cc_test {
+    name: "kms_pwrite_crc",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/kms_pwrite_crc.c"],
+}
+
+cc_test {
+    name: "kms_throughput",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["benchmarks/kms_throughput.c"],
+}
+
+cc_test {
+    name: "xe_wedged",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_wedged.c"],
+}
+
+cc_test {
+    name: "xe_ccs",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_ccs.c"],
+    enabled: false,
+}
+
+cc_test {
+    name: "xe_create",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_create.c"],
+}
+
+cc_test {
+    name: "xe_compute",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_compute.c"],
+}
+
+cc_test {
+    name: "xe_compute_preempt",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_compute_preempt.c"],
+}
+
+cc_test {
+    name: "xe_copy_basic",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_copy_basic.c"],
+}
+
+cc_test {
+    name: "xe_dma_buf_sync",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_dma_buf_sync.c"],
+}
+
+cc_test {
+    name: "xe_drm_fdinfo",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_drm_fdinfo.c"],
+}
+
+cc_test {
+    name: "xe_evict",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_evict.c"],
+}
+
+cc_test {
+    name: "xe_evict_ccs",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_evict_ccs.c"],
+}
+
+cc_test {
+    name: "xe_exec_atomic",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_exec_atomic.c"],
+}
+
+cc_test {
+    name: "xe_exec_balancer",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_exec_balancer.c"],
+}
+
+cc_test {
+    name: "xe_exec_basic",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_exec_basic.c"],
+}
+
+cc_test {
+    name: "xe_exec_compute_mode",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_exec_compute_mode.c"],
+}
+
+cc_test {
+    name: "xe_exec_fault_mode",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_exec_fault_mode.c"],
+}
+
+cc_test {
+    name: "xe_exec_mix_modes",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_exec_mix_modes.c"],
+}
+
+cc_test {
+    name: "xe_exec_queue_property",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_exec_queue_property.c"],
+}
+
+cc_test {
+    name: "xe_exec_reset",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_exec_reset.c"],
+}
+
+cc_test {
+    name: "xe_exec_sip",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_exec_sip.c"],
+}
+
+cc_test {
+    name: "xe_exec_store",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_exec_store.c"],
+}
+
+cc_test {
+    name: "xe_exec_system_allocator",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_exec_system_allocator.c"],
+    enabled: false,
+}
+
+cc_test {
+    name: "xe_exec_threads",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_exec_threads.c"],
+}
+
+cc_test {
+    name: "xe_exercise_blt",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_exercise_blt.c"],
+}
+
+cc_test {
+    name: "xe_gpgpu_fill",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_gpgpu_fill.c"],
+}
+
+cc_test {
+    name: "xe_gt_freq",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_gt_freq.c"],
+}
+
+cc_test {
+    name: "xe_huc_copy",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_huc_copy.c"],
+}
+
+cc_test {
+    name: "xe_intel_bb",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_intel_bb.c"],
+}
+
+cc_test {
+    name: "xe_live_ktest",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_live_ktest.c"],
+}
+
+cc_test {
+    name: "xe_mmap",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_mmap.c"],
+}
+
+cc_test {
+    name: "xe_module_load",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_module_load.c"],
+}
+
+cc_test {
+    name: "xe_noexec_ping_pong",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_noexec_ping_pong.c"],
+}
+
+cc_test {
+    name: "xe_oa",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_oa.c"],
+    enabled: false,
+}
+
+cc_test {
+    name: "xe_pat",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_pat.c"],
+}
+
+cc_test {
+    name: "xe_peer2peer",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_peer2peer.c"],
+}
+
+cc_test {
+    name: "xe_pm",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_pm.c"],
+}
+
+cc_test {
+    name: "xe_pm_residency",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_pm_residency.c"],
+}
+
+cc_test {
+    name: "xe_prime_self_import",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_prime_self_import.c"],
+}
+
+cc_test {
+    name: "xe_pxp",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_pxp.c"],
+}
+
+cc_test {
+    name: "xe_query",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_query.c"],
+}
+
+cc_test {
+    name: "xe_render_copy",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_render_copy.c"],
+}
+
+cc_test {
+    name: "xe_vm",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_vm.c"],
+}
+
+cc_test {
+    name: "xe_waitfence",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_waitfence.c"],
+}
+
+cc_test {
+    name: "xe_spin_batch",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_spin_batch.c"],
+}
+
+cc_test {
+    name: "xe_sriov_flr",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_sriov_flr.c"],
+}
+
+cc_test {
+    name: "xe_sriov_scheduling",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_sriov_scheduling.c"],
+}
+
+cc_test {
+    name: "xe_sysfs_defaults",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_sysfs_defaults.c"],
+}
+
+cc_test {
+    name: "xe_sysfs_preempt_timeout",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_sysfs_preempt_timeout.c"],
+}
+
+cc_test {
+    name: "xe_sysfs_scheduler",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_sysfs_scheduler.c"],
+}
+
+cc_test {
+    name: "xe_sysfs_timeslice_duration",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_sysfs_timeslice_duration.c"],
+}
+
+cc_test {
+    name: "xe_tlb",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tests/intel/xe_tlb.c"],
+}
+
+cc_test {
+    name: "igt_facts",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tools/igt_facts.c"],
+}
+
+cc_test {
+    name: "igt_power",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tools/igt_power.c"],
+}
+
+cc_test {
+    name: "intel_backlight",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tools/intel_backlight.c"],
+}
+
+cc_test {
+    name: "intel_bios_dumper",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tools/intel_bios_dumper.c"],
+}
+
+cc_test {
+    name: "intel_display_bandwidth",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tools/intel_display_bandwidth.c"],
+}
+
+cc_test {
+    name: "intel_display_crc",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tools/intel_display_crc.c"],
+}
+
+cc_test {
+    name: "intel_display_poller",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tools/intel_display_poller.c"],
+}
+
+cc_test {
+    name: "intel_dump_decode",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tools/intel_dump_decode.c"],
+}
+
+cc_test {
+    name: "intel_error_decode",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tools/intel_error_decode.c"],
+}
+
+cc_test {
+    name: "intel_forcewaked",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tools/intel_forcewaked.c"],
+}
+
+cc_test {
+    name: "intel_gpu_frequency",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tools/intel_gpu_frequency.c"],
+}
+
+cc_test {
+    name: "intel_firmware_decode",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tools/intel_firmware_decode.c"],
+}
+
+cc_test {
+    name: "intel_framebuffer_dump",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tools/intel_framebuffer_dump.c"],
+}
+
+cc_test {
+    name: "intel_gpu_time",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tools/intel_gpu_time.c"],
+}
+
+cc_test {
+    name: "intel_reg_checker",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tools/intel_reg_checker.c"],
+}
+
+cc_test {
+    name: "intel_residency",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tools/intel_residency.c"],
+}
+
+cc_test {
+    name: "intel_stepping",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tools/intel_stepping.c"],
+}
+
+cc_test {
+    name: "intel_tiling_detect",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tools/intel_tiling_detect.c"],
+}
+
+cc_test {
+    name: "lsgpu",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tools/lsgpu.c"],
+}
+
+cc_test {
+    name: "gputop",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: ["tools/gputop.c"],
+}
+
+cc_test {
+    name: "intel_l3_parity",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: [
+        "tools/intel_l3_parity.c",
+        "tools/intel_l3_udev_listener.c",
+    ],
+}
+
+cc_test {
+    name: "intel_reg",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: [
+        "tools/intel_reg.c",
+        "tools/intel_reg_decode.c",
+        "tools/intel_reg_spec.c",
+    ],
 }

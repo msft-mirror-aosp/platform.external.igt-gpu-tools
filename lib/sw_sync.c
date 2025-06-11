@@ -33,7 +33,7 @@
 #include <stdint.h>
 #include <sys/ioctl.h>
 
-#include <linux/sync_file.h>
+#include "sync_file.h"
 
 #include "igt_debugfs.h"
 #include "igt_kmod.h"
@@ -119,9 +119,23 @@ int sw_sync_timeline_create_fence(int fd, uint32_t seqno)
 	return fence;
 }
 
+static int __sw_sync_timeline_inc(int fd, uint32_t count)
+{
+	int err;
+
+	err = 0;
+	if (igt_ioctl(fd, INT_SYNC_IOC_INC, &count)) {
+		err = -errno;
+		igt_assume(err);
+	}
+
+	errno = 0;
+	return err;
+}
+
 void sw_sync_timeline_inc(int fd, uint32_t count)
 {
-	do_ioctl(fd, INT_SYNC_IOC_INC, &count);
+	igt_assert_eq(__sw_sync_timeline_inc(fd, count), 0);
 }
 
 int sync_fence_merge(int fd1, int fd2)
@@ -165,6 +179,24 @@ int sync_fence_count(int fd)
 		return -errno;
 
 	return info.num_fences;
+}
+
+uint64_t sync_fence_timestamp(int fd)
+{
+	struct sync_fence_info fence = {};
+	struct sync_file_info info = {
+		.sync_fence_info = to_user_pointer(&fence),
+		.num_fences = 1,
+	};
+
+	if (ioctl(fd, SYNC_IOC_FILE_INFO, &info))
+		return 0;
+
+	if (info.num_fences > 1)
+		return 0;
+
+	igt_assert(fence.timestamp_ns);
+	return fence.timestamp_ns;
 }
 
 static int __sync_fence_count_status(int fd, int status)

@@ -29,10 +29,6 @@
 #include <stdbool.h>
 #include <math.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 /**
  * igt_stats_t:
  * @values_u64: An array containing pushed integer values
@@ -85,6 +81,7 @@ double igt_stats_get_trimean(igt_stats_t *stats);
 double igt_stats_get_median(igt_stats_t *stats);
 double igt_stats_get_variance(igt_stats_t *stats);
 double igt_stats_get_std_deviation(igt_stats_t *stats);
+double igt_stats_get_std_error(igt_stats_t *stats);
 
 /**
  * igt_mean:
@@ -103,9 +100,5 @@ void igt_mean_init(struct igt_mean *m);
 void igt_mean_add(struct igt_mean *m, double v);
 double igt_mean_get(struct igt_mean *m);
 double igt_mean_get_variance(struct igt_mean *m);
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif /* __IGT_STATS_H__ */

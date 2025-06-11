@@ -29,7 +29,6 @@
 #include <xf86drm.h>
 #include "drmtest.h"
 #include "igt.h"
-#include "ion.h"
 
 static void make_display(igt_display_t *display)
 {
@@ -230,7 +229,7 @@ static void create_dumb_fb(igt_display_t *display,
 {
 	igt_create_fb(display->drm_fd,
 		      width, height,
-		      DRM_FORMAT_ARGB8888, LOCAL_DRM_FORMAT_MOD_NONE, fb);
+		      DRM_FORMAT_ARGB8888, DRM_FORMAT_MOD_NONE, fb);
 }
 
 

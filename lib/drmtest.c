@@ -48,18 +48,23 @@
 
 #include "drmtest.h"
 #include "i915_drm.h"
+#include "i915/gem.h"
+#include "xe/xe_query.h"
 #include "intel_chipset.h"
 #include "intel_io.h"
 #include "igt_debugfs.h"
 #include "igt_device.h"
 #include "igt_gt.h"
 #include "igt_kmod.h"
+#include "igt_params.h"
 #include "igt_sysfs.h"
+#include "igt_device_scan.h"
 #include "version.h"
 #include "config.h"
 #include "intel_reg.h"
 #include "ioctl_wrappers.h"
 #include "igt_dummyload.h"
+#include "xe/xe_query.h"
 
 /**
  * SECTION:drmtest
@@ -76,7 +81,19 @@
  * and [batchbuffer](igt-gpu-tools-intel-batchbuffer.html) libraries as dependencies.
  */
 
-static int __get_drm_device_name(int fd, char *name, int name_size)
+/**
+ * __get_drm_device_name:
+ * @fd: a drm file descriptor
+ * @name: pointer to memory
+ * @name_size: size of @name
+ *
+ * A wrapper for DRM_IOCTL_VERSION which will write drm device name in @name.
+ *
+ * Returns:
+ * 0  if name of DRM driver was filled in @name
+ * -1 on ioctl fail
+ */
+int __get_drm_device_name(int fd, char *name, int name_size)
 {
 	drm_version_t version;
 
@@ -111,27 +128,49 @@ bool is_i915_device(int fd)
 	return __is_device(fd, "i915");
 }
 
+bool is_mtk_device(int fd)
+{
+	return __is_device(fd, "mediatek");
+}
+
+bool is_msm_device(int fd)
+{
+	return __is_device(fd, "msm");
+}
+
+bool is_nouveau_device(int fd)
+{
+	/* Currently all nouveau-specific codepaths require libdrm */
+#ifdef HAVE_LIBDRM_NOUVEAU
+	return __is_device(fd, "nouveau");
+#else
+	return false;
+#endif
+}
+
 bool is_vc4_device(int fd)
 {
 	return __is_device(fd, "vc4");
 }
 
-static bool has_known_intel_chipset(int fd)
+bool is_xe_device(int fd)
 {
-	struct drm_i915_getparam gp;
-	int devid = 0;
+	return __is_device(fd, "xe");
+}
 
-	memset(&gp, 0, sizeof(gp));
-	gp.param = I915_PARAM_CHIPSET_ID;
-	gp.value = &devid;
+bool is_intel_device(int fd)
+{
+	return is_i915_device(fd) || is_xe_device(fd);
+}
 
-	if (ioctl(fd, DRM_IOCTL_I915_GETPARAM, &gp, sizeof(gp)))
-		return false;
+enum intel_driver get_intel_driver(int fd)
+{
+	if (is_xe_device(fd))
+		return INTEL_DRIVER_XE;
+	else if (is_i915_device(fd))
+		return INTEL_DRIVER_I915;
 
-	if (!intel_gen(devid))
-		return false;
-
-	return true;
+	igt_assert_f(0, "Device is not handled by Intel driver\n");
 }
 
 static char _forced_driver[16] = "";
@@ -161,27 +200,6 @@ static const char *forced_driver(void)
 	return NULL;
 }
 
-#define LOCAL_I915_EXEC_VEBOX	(4 << 0)
-/**
- * gem_quiescent_gpu:
- * @fd: open i915 drm file descriptor
- *
- * Ensure the gpu is idle by launching a nop execbuf and stalling for it. This
- * is automatically run when opening a drm device node and is also installed as
- * an exit handler to have the best assurance that the test is run in a pristine
- * and controlled environment.
- *
- * This function simply allows tests to make additional calls in-between, if so
- * desired.
- */
-void gem_quiescent_gpu(int fd)
-{
-	igt_terminate_spins();
-
-	igt_drop_caches_set(fd,
-			    DROP_ACTIVE | DROP_RETIRE | DROP_IDLE | DROP_FREED);
-}
-
 static int modprobe(const char *driver)
 {
 	return igt_kmod_load(driver, "");
@@ -200,18 +218,134 @@ static const struct module {
 } modules[] = {
 	{ DRIVER_AMDGPU, "amdgpu" },
 	{ DRIVER_INTEL, "i915", modprobe_i915 },
+	{ DRIVER_MSM, "msm" },
 	{ DRIVER_PANFROST, "panfrost" },
 	{ DRIVER_V3D, "v3d" },
 	{ DRIVER_VC4, "vc4" },
 	{ DRIVER_VGEM, "vgem" },
+	{ DRIVER_VMWGFX, "vmwgfx" },
+	{ DRIVER_XE, "xe" },
 	{}
 };
 
-static int open_device(const char *name, unsigned int chipset)
+struct _opened_device_path {
+	char *path;
+	struct igt_list_head link;
+};
+
+static void modulename_to_chipset(const char *name, unsigned int *chip)
+{
+	if (!name)
+		return;
+
+	for (int start = 0, end = ARRAY_SIZE(modules) - 1; start < end; ) {
+		int mid = start + (end - start) / 2;
+		int ret = strcmp(modules[mid].module, name);
+
+		if (ret < 0) {
+			start = mid + 1;
+		} else if (ret > 0) {
+			end = mid;
+		} else {
+			*chip = modules[mid].bit;
+			break;
+		}
+	}
+}
+
+/**
+ * drm_get_chipset:
+ * @fd: a drm file descriptor
+ *
+ * Returns:
+ * chipset if driver name found in modules[] array, for example: DRIVER_INTEL
+ * DRIVER_ANY if drm device name not known
+ */
+unsigned int drm_get_chipset(int fd)
+{
+	unsigned int chip = DRIVER_ANY;
+	char name[32] = "";
+
+	if (__get_drm_device_name(fd, name, sizeof(name) - 1))
+		return chip;
+
+	modulename_to_chipset(name, &chip);
+
+	return chip;
+}
+
+static const char *chipset_to_str(int chipset)
+{
+	switch (chipset) {
+	case DRIVER_INTEL:
+		return "intel";
+	case DRIVER_V3D:
+		return "v3d";
+	case DRIVER_VC4:
+		return "vc4";
+	case DRIVER_VGEM:
+		return "vgem";
+	case DRIVER_AMDGPU:
+		return "amdgpu";
+	case DRIVER_PANFROST:
+		return "panfrost";
+	case DRIVER_MSM:
+		return "msm";
+	case DRIVER_XE:
+		return "xe";
+	case DRIVER_VMWGFX:
+		return "vmwgfx";
+	case DRIVER_ANY:
+		return "any";
+	default:
+		return "other";
+	}
+}
+
+
+/*
+ * Logs path of opened device. Device path opened for the first time is logged at info level,
+ * subsequent opens (if any) are logged at debug level.
+ */
+static void log_opened_device_path(const char *device_path)
+{
+	static IGT_LIST_HEAD(opened_paths);
+	struct _opened_device_path *item;
+
+	igt_list_for_each_entry(item, &opened_paths, link) {
+		if (!strcmp(item->path, device_path)) {
+			igt_debug("Opened previously opened device: %s\n", device_path);
+			return;
+		}
+	}
+
+	item = calloc(1, sizeof(struct _opened_device_path));
+	igt_assert(item);
+	item->path = strdup(device_path);
+	igt_assert(item->path);
+	igt_list_add(&item->link, &opened_paths);
+	igt_info("Opened device: %s\n", item->path);
+}
+
+/**
+ * __drm_open_device:
+ * @name: DRM node name
+ * @chipset: OR'd flags for chipset to be opened
+ *
+ * Open a drm legacy device node with given @name and compatible with given
+ * @chipset flag.
+ *
+ * A special case is the use of the IGT_FORCE_DRIVER environment variable. In
+ * such case, even if opened device is compatible with given @chipset flag, the
+ * function returns error if forced driver is not compatible with @chipset.
+ *
+ * Returns: DRM file descriptor or -1 on error
+ */
+int __drm_open_device(const char *name, unsigned int chipset)
 {
 	const char *forced;
 	char dev_name[16] = "";
-	int chip = DRIVER_ANY;
+	unsigned int chip = DRIVER_ANY;
 	int fd;
 
 	fd = open(name, O_RDWR);
@@ -222,43 +356,86 @@ static int open_device(const char *name, unsigned int chipset)
 		goto err;
 
 	forced = forced_driver();
-	if (forced && chipset == DRIVER_ANY && strcmp(forced, dev_name))
+	if (forced && chipset == DRIVER_ANY && strcmp(forced, dev_name)) {
+		igt_debug("Expected driver \"%s\" but got \"%s\"\n",
+				  forced, dev_name);
 		goto err;
-
-	for (int start = 0, end = ARRAY_SIZE(modules) - 1; start < end; ){
-		int mid = start + (end - start) / 2;
-		int ret = strcmp(modules[mid].module, dev_name);
-		if (ret < 0) {
-			start = mid + 1;
-		} else if (ret > 0) {
-			end = mid;
-		} else {
-			chip = modules[mid].bit;
-			break;
-		}
 	}
-	if ((chipset & chip) == chip)
+
+	modulename_to_chipset(dev_name, &chip);
+
+	if ((chipset & chip) == chip) {
+		log_opened_device_path(name);
 		return fd;
+	}
 
 err:
 	close(fd);
 	return -1;
 }
 
-static int __search_and_open(const char *base, int offset, unsigned int chipset)
+static struct {
+	int fd;
+	struct stat stat;
+}_opened_fds[64];
+
+static int _opened_fds_count;
+
+static void _set_opened_fd(int idx, int fd)
+{
+	assert(idx < ARRAY_SIZE(_opened_fds));
+	assert(idx <= _opened_fds_count);
+
+	_opened_fds[idx].fd = fd;
+
+	assert(fstat(fd, &_opened_fds[idx].stat) == 0);
+
+	_opened_fds_count = idx+1;
+}
+
+static bool _is_already_opened(const char *path, int as_idx)
+{
+	struct stat new;
+
+	assert(as_idx < ARRAY_SIZE(_opened_fds));
+	assert(as_idx <= _opened_fds_count);
+
+	/*
+	 * we cannot even stat the device, so it's of no use - let's claim it's
+	 * already opened
+	 */
+	if (igt_debug_on(stat(path, &new) != 0))
+		return true;
+
+	for (int i = 0; i < as_idx; ++i) {
+		/* did we cross filesystem boundary? */
+		assert(_opened_fds[i].stat.st_dev == new.st_dev);
+
+		if (_opened_fds[i].stat.st_ino == new.st_ino)
+			return true;
+	}
+
+	return false;
+}
+
+static int __search_and_open(const char *base, int offset, unsigned int chipset, int as_idx)
 {
 	const char *forced;
 
 	forced = forced_driver();
 	if (forced)
-		igt_info("Force option used: Using driver %s\n", forced);
+		igt_debug("Force option used: Using driver %s\n", forced);
 
 	for (int i = 0; i < 16; i++) {
 		char name[80];
 		int fd;
 
 		sprintf(name, "%s%u", base, i + offset);
-		fd = open_device(name, chipset);
+
+		if (_is_already_opened(name, as_idx))
+			continue;
+
+		fd = __drm_open_device(name, chipset);
 		if (fd != -1)
 			return fd;
 	}
@@ -266,46 +443,250 @@ static int __search_and_open(const char *base, int offset, unsigned int chipset)
 	return -1;
 }
 
-static int __open_driver(const char *base, int offset, unsigned int chipset)
+void drm_load_module(unsigned int chipset)
 {
 	static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+	const char *forced = forced_driver();
+	unsigned int chip = 0;
+	bool want_any = chipset == DRIVER_ANY;
+
+	if (forced) {
+		if (chipset == DRIVER_VGEM)
+			chip = DRIVER_VGEM; /* ignore forced */
+		else
+			modulename_to_chipset(forced, &chip);
+
+		chipset &= chip; /* forced can be in known modules */
+	}
+
+	pthread_mutex_lock(&mutex);
+	if (forced && chipset == 0) {
+		if (want_any)
+			modprobe(forced);
+	} else {
+		for (const struct module *m = modules; m->module; m++) {
+			if (chipset & m->bit) {
+				if (m->modprobe)
+					m->modprobe(m->module);
+				else
+					modprobe(m->module);
+			}
+		}
+	}
+
+	pthread_mutex_unlock(&mutex);
+	igt_devices_scan();
+}
+
+static int __open_driver(const char *base, int offset, unsigned int chipset, int as_idx)
+{
 	int fd;
 
-	fd = __search_and_open(base, offset, chipset);
+	fd = __search_and_open(base, offset, chipset, as_idx);
 	if (fd != -1)
 		return fd;
 
-	pthread_mutex_lock(&mutex);
-	for (const struct module *m = modules; m->module; m++) {
-		if (chipset & m->bit) {
-			if (m->modprobe)
-				m->modprobe(m->module);
-			else
-				modprobe(m->module);
+	drm_load_module(chipset);
+
+	return __search_and_open(base, offset, chipset, as_idx);
+}
+
+static int __open_driver_exact(const char *name, unsigned int chipset)
+{
+	int fd;
+
+	fd = __drm_open_device(name, chipset);
+	if (fd != -1)
+		return fd;
+
+	drm_load_module(chipset);
+
+	return __drm_open_device(name, chipset);
+}
+
+/*
+ * A helper to get the first matching card in case a filter is set.
+ * It does all the extra logging around the filters for us.
+ *
+ * @card: pointer to the igt_device_card structure to be filled
+ * when a card is found.
+ *
+ * Returns:
+ * True if card according to the added filter was found,
+ * false othwerwise.
+ */
+static bool __get_card_for_nth_filter(int idx, struct igt_device_card *card)
+{
+	const char *filter;
+
+	if (igt_device_filter_count() > idx) {
+		filter = igt_device_filter_get(idx);
+		igt_debug("Looking for devices to open using filter %d: %s\n", idx, filter);
+
+		if (igt_device_card_match(filter, card)) {
+			igt_debug("Filter matched %s | %s\n", card->card, card->render);
+			return true;
 		}
 	}
-	pthread_mutex_unlock(&mutex);
 
-	return __search_and_open(base, offset, chipset);
+	return false;
+}
+
+/**
+ * __drm_open_driver_another:
+ * @idx: index of the device you are opening
+ * @chipset: OR'd flags for each chipset to search, eg. #DRIVER_INTEL
+ *
+ * This function is intended to be used instead of drm_open_driver() for tests
+ * that are opening multiple /dev/dri/card* nodes, usually for the purpose of
+ * multi-GPU testing.
+ *
+ * This function opens device in the following order:
+ *
+ * 1. when --device arguments are present:
+ *   * device scanning is executed,
+ *   * idx-th filter (starting with 0, filters are semicolon separated) is used
+ *   * if there is no idx-th filter, goto 2
+ *   * first device maching the filter is selected
+ *   * if it's already opened (for indexes = 0..idx-1) we fail with -1
+ *   * otherwise open the device and return the fd
+ *
+ * 2. compatibility mode - open the first DRM device we can find that is not
+ *    already opened for indexes 0..idx-1, searching up to 16 device nodes
+ *
+ * The test is reponsible to test the interaction between devices in both
+ * directions if applicable.
+ *
+ * Example:
+ *
+ * |[<!-- language="c" -->
+ * igt_subtest_with_dynamic("basic") {
+ * 	int first_fd = -1;
+ * 	int second_fd = -1;
+ *
+ * 	first_fd = __drm_open_driver_another(0, DRIVER_ANY);
+ * 	igt_require(first_fd >= 0);
+ *
+ * 	second_fd = __drm_open_driver_another(1, DRIVER_ANY);
+ * 	igt_require(second_fd >= 0);
+ *
+ * 	if (can_do_foo(first_fd, second_fd))
+ * 		igt_dynamic("first-to-second")
+ * 			test_basic_from_to(first_fd, second_fd);
+ *
+ * 	if (can_do_foo(second_fd, first_fd))
+ * 		igt_dynamic("second-to-first")
+ * 			test_basic_from_to(second_fd, first_fd);
+ *
+ * 	close(first_fd);
+ * 	close(second_fd);
+ * }
+ * ]|
+ *
+ * Returns:
+ * An open DRM fd or -1 on error
+ */
+int __drm_open_driver_another(int idx, int chipset)
+{
+	int fd = -1;
+
+	if (chipset != DRIVER_VGEM && igt_device_filter_count() > idx) {
+		struct igt_device_card card;
+		bool found;
+
+		found = __get_card_for_nth_filter(idx, &card);
+
+		if (!found) {
+			drm_load_module(chipset);
+			found = __get_card_for_nth_filter(idx, &card);
+		}
+
+		if (!found || !strlen(card.card))
+			igt_warn("No card matches the filter! [%s]\n",
+				 igt_device_filter_get(idx));
+		else if (_is_already_opened(card.card, idx))
+			igt_warn("card maching filter %d is already opened\n", idx);
+		else
+			fd = __open_driver_exact(card.card, chipset);
+
+	} else {
+		/* no filter for device idx, let's open whatever is available */
+		fd = __open_driver("/dev/dri/card", 0, chipset, idx);
+	}
+
+	if (fd >= 0) {
+		_set_opened_fd(idx, fd);
+
+		/* Cache xe_device struct. */
+		if (is_xe_device(fd))
+			xe_device_get(fd);
+	}
+
+	return fd;
+}
+
+/**
+ * drm_open_driver_another:
+ * @idx: index of the device you are opening
+ * @chipset: OR'd flags for each chipset to search, eg. #DRIVER_INTEL
+ *
+ * A wrapper for __drm_open_driver with skip on fail.
+ *
+ * Returns:
+ * An open DRM fd or skips
+ */
+int drm_open_driver_another(int idx, int chipset)
+{
+	int fd = __drm_open_driver_another(idx, chipset);
+
+	igt_skip_on_f(fd < 0, "No known gpu found for chipset flags %d (%s)\n",
+		      chipset, chipset_to_str(chipset));
+
+	/* TODO: for i915 and idx > 0 add atomic reset before test */
+	return fd;
 }
 
 /**
  * __drm_open_driver:
  * @chipset: OR'd flags for each chipset to search, eg. #DRIVER_INTEL
  *
- * Open the first DRM device we can find, searching up to 16 device nodes
+ * Function opens device in the following order:
+ * 1. when --device arguments are present device scanning will be executed,
+ * then filter argument is used to find matching one.
+ * 2. compatibility mode - open the first DRM device we can find,
+ * searching up to 16 device nodes.
  *
  * Returns:
  * An open DRM fd or -1 on error
  */
 int __drm_open_driver(int chipset)
 {
-	return __open_driver("/dev/dri/card", 0, chipset);
+	return __drm_open_driver_another(0, chipset);
 }
 
-static int __drm_open_driver_render(int chipset)
+int __drm_open_driver_render(int chipset)
 {
-	return __open_driver("/dev/dri/renderD", 128, chipset);
+	int fd;
+
+	if (chipset != DRIVER_VGEM && igt_device_filter_count() > 0) {
+		struct igt_device_card card;
+		bool found;
+
+		found = __get_card_for_nth_filter(0, &card);
+
+		if (!found || !strlen(card.render))
+			return -1;
+
+		fd = __open_driver_exact(card.render, chipset);
+	} else {
+		fd = __open_driver("/dev/dri/renderD", 128, chipset, 0);
+	}
+
+	/* Cache xe_device struct. */
+	if (fd >= 0 && is_xe_device(fd))
+		xe_device_get(fd);
+
+	return fd;
 }
 
 static int at_exit_drm_fd = -1;
@@ -315,7 +696,7 @@ static void __cancel_work_at_exit(int fd)
 {
 	igt_terminate_spins(); /* for older kernels */
 
-	igt_sysfs_set_parameter(fd, "reset", "%x", -1u /* any method */);
+	igt_params_set(fd, "reset", "%u", -1u /* any method */);
 	igt_drop_caches_set(fd,
 			    /* cancel everything */
 			    DROP_RESET_ACTIVE | DROP_RESET_SEQNO |
@@ -345,26 +726,9 @@ static void cancel_work_at_exit_render(int sig)
 	at_exit_drm_render_fd = -1;
 }
 
-static const char *chipset_to_str(int chipset)
+static const char *chipset_to_vendor_str(int chipset)
 {
-	switch (chipset) {
-	case DRIVER_INTEL:
-		return "intel";
-	case DRIVER_V3D:
-		return "v3d";
-	case DRIVER_VC4:
-		return "vc4";
-	case DRIVER_VGEM:
-		return "vgem";
-	case DRIVER_AMDGPU:
-		return "amdgpu";
-	case DRIVER_PANFROST:
-		return "panfrost";
-	case DRIVER_ANY:
-		return "any";
-	default:
-		return "other";
-	}
+	return chipset == DRIVER_XE ? chipset_to_str(DRIVER_INTEL) : chipset_to_str(chipset);
 }
 
 /**
@@ -391,14 +755,78 @@ int drm_open_driver(int chipset)
 	 */
 	if (is_i915_device(fd)) {
 		if (__sync_fetch_and_add(&open_count, 1) == 0) {
-			gem_quiescent_gpu(fd);
-
-			at_exit_drm_fd = __drm_open_driver(chipset);
+			__cancel_work_at_exit(fd);
+			at_exit_drm_fd = drm_reopen_driver(fd);
 			igt_install_exit_handler(cancel_work_at_exit);
 		}
 	}
 
 	return fd;
+}
+
+static bool is_valid_fd(int fd)
+{
+	char path[32];
+	char buf[PATH_MAX];
+	int len;
+
+	if (fd < 0)
+		return false;
+
+	snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
+
+	memset(buf, 0, sizeof(buf));
+	len = readlink(path, buf, sizeof(buf) - 1);
+	if (len <= 0)
+		return false;
+
+	buf[len] = '\0';
+	if (strstr(buf, "/dev/dri/card") == buf ||
+	    strstr(buf, "/dev/dri/renderD") == buf)
+		return true;
+
+	return false;
+}
+
+/**
+ * __drm_close_driver:
+ * @fd: a drm file descriptor
+ *
+ * Check the given drm file descriptor @fd is valid and if not,
+ * return -1. For valid fd close it and make cleanups.
+ *
+ * Returns: 0 on success or -1 on error.
+ */
+int __drm_close_driver(int fd)
+{
+	if (!is_valid_fd(fd))
+		return -1;
+
+	/* Remove xe_device from cache. */
+	if (is_xe_device(fd))
+		xe_device_put(fd);
+
+	return close(fd);
+}
+
+/**
+ * drm_close_driver:
+ * @fd: a drm file descriptor
+ *
+ * Check the given drm file descriptor @fd is valid and if not issue warning.
+ * For valid fd close it and make cleanups.
+ *
+ * Returns: 0 on success or -1 on error.
+ */
+int drm_close_driver(int fd)
+{
+	if (!is_valid_fd(fd)) {
+		igt_warn("Don't attempt to close standard/invalid file "
+			 "descriptor: %d\n", fd);
+		return -1;
+	}
+
+	return __drm_close_driver(fd);
 }
 
 /**
@@ -440,10 +868,75 @@ int drm_open_driver_render(int chipset)
 	if (__sync_fetch_and_add(&open_count, 1))
 		return fd;
 
-	at_exit_drm_render_fd = __drm_open_driver(chipset);
-	if(chipset & DRIVER_INTEL){
-		gem_quiescent_gpu(fd);
+	at_exit_drm_render_fd = drm_reopen_driver(fd);
+	if (chipset & DRIVER_INTEL) {
+		__cancel_work_at_exit(fd);
 		igt_install_exit_handler(cancel_work_at_exit_render);
+	}
+
+	return fd;
+}
+
+/**
+ * drm_reopen_driver:
+ * @fd: re-open the drm file descriptor
+ *
+ * Re-opens the drm fd which is useful in instances where a clean default
+ * context is needed.
+ */
+int drm_reopen_driver(int fd)
+{
+	char path[256];
+
+	snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
+	fd = open(path, O_RDWR);
+	igt_assert_fd(fd);
+
+	if (is_xe_device(fd))
+		xe_device_get(fd);
+
+	return fd;
+}
+
+int drm_prepare_filtered_multigpu(int chipset)
+{
+	const char *vendor = chipset_to_vendor_str(chipset);
+
+	return igt_device_prepare_filtered_view(vendor);
+}
+
+/**
+ * drm_open_filtered_card:
+ * @idx: index for GPU to open
+ *
+ * Open N-th GPU from filtered list
+ *
+ * Returns:
+ * Opened device or -1 if error.
+ */
+int drm_open_filtered_card(int idx)
+{
+	struct igt_device_card card;
+	const char *filter;
+	int fd = -1;
+
+	if (idx < 0 || idx >= igt_device_filter_count()) {
+		igt_debug("Invalid filter index %d\n", idx);
+		return -1;
+	}
+
+	filter = igt_device_filter_get(idx);
+	if (igt_device_card_match(filter, &card))
+		fd = igt_open_card(&card);
+
+	if (fd >= 0) {
+		igt_debug("Opened GPU%d card: %s\n", idx, card.card);
+		log_opened_device_path(card.card);
+		/* Cache xe_device struct. */
+		if (is_xe_device(fd))
+			xe_device_get(fd);
+	} else {
+		igt_debug("Opening GPU%d failed, card: %s\n", idx, card.card);
 	}
 
 	return fd;
@@ -456,10 +949,25 @@ void igt_require_amdgpu(int fd)
 
 void igt_require_intel(int fd)
 {
-	igt_require(is_i915_device(fd) && has_known_intel_chipset(fd));
+	igt_require(is_intel_device(fd));
+}
+
+void igt_require_i915(int fd)
+{
+	igt_require(is_i915_device(fd));
+}
+
+void igt_require_nouveau(int fd)
+{
+	igt_require(is_nouveau_device(fd));
 }
 
 void igt_require_vc4(int fd)
 {
 	igt_require(is_vc4_device(fd));
+}
+
+void igt_require_xe(int fd)
+{
+	igt_require(is_xe_device(fd));
 }

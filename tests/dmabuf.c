@@ -23,6 +23,22 @@
 
 #include "igt.h"
 #include "igt_kmod.h"
+/**
+ * TEST: dmabuf
+ * Description: Kernel selftests for the dmabuf API
+ * Category: Core
+ * Mega feature: General Core features
+ * Functionality: drm_mm
+ * Sub-category: Memory management tests
+ * Feature: mapping, prime
+ * Test category: GEM_Legacy
+ *
+ * SUBTEST: all-tests
+ *
+ * SUBTEST: all-tests@dma_fence
+ *
+ * SUBTEST: all-tests@sanitycheck
+ */
 
 IGT_TEST_DESCRIPTION("Kernel selftests for the dmabuf API");
 

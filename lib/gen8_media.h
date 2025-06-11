@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "surfaceformat.h"
+#include "gen4_render.h"
 
 #define GEN8_FLOATING_POINT_IEEE_754		0
 #define GEN8_FLOATING_POINT_NON_IEEE_754	1
@@ -13,17 +14,16 @@
 						((Subopcode) << 16))
 
 #define GEN8_PIPELINE_SELECT			GFXPIPE(1, 1, 4)
-# define PIPELINE_SELECT_3D			(0 << 0)
-# define PIPELINE_SELECT_MEDIA			(1 << 0)
 
 #define GEN8_STATE_BASE_ADDRESS			GFXPIPE(0, 1, 1)
-# define BASE_ADDRESS_MODIFY			(1 << 0)
 
 #define GEN8_MEDIA_VFE_STATE			GFXPIPE(2, 0, 0)
 #define GEN8_MEDIA_CURBE_LOAD			GFXPIPE(2, 0, 1)
 #define GEN8_MEDIA_INTERFACE_DESCRIPTOR_LOAD	GFXPIPE(2, 0, 2)
 #define GEN8_MEDIA_STATE_FLUSH			GFXPIPE(2, 0, 4)
 #define GEN8_MEDIA_OBJECT			GFXPIPE(2, 1, 0)
+
+#define GEN8_3DSTATE_BINDING_TABLE_POOL_ALLOC	GFXPIPE(3, 1, 25)
 
 struct gen8_interface_descriptor_data
 {
@@ -206,19 +206,5 @@ struct gen8_surface_state
 		uint32_t reserved;
 	} ss15;
 };
-
-
-#define GEN9_PIPELINE_SELECTION_MASK		(3 << 8)
-
-/*  If enabled, it will force awake media enginee and the following instructions
- *  will require that the media enginee is awake.
- */
-#define GEN9_FORCE_MEDIA_AWAKE_DISABLE		(0 << 5)
-#define GEN9_FORCE_MEDIA_AWAKE_ENABLE		(1 << 5)
-#define GEN9_FORCE_MEDIA_AWAKE_MASK		(1 << 13)
-
-#define GEN9_SAMPLER_DOP_GATE_DISABLE		(0 << 4)
-#define GEN9_SAMPLER_DOP_GATE_ENABLE		(1 << 4)
-#define GEN9_SAMPLER_DOP_GATE_MASK		(1 << 12)
 
 #endif /* GEN8_MEDIA_H */

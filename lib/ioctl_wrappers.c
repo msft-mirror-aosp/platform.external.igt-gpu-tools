@@ -49,12 +49,15 @@
 
 #include "drmtest.h"
 #include "i915_drm.h"
+#include "i915/gem_create.h"
 #include "intel_batchbuffer.h"
 #include "intel_chipset.h"
 #include "intel_io.h"
 #include "igt_debugfs.h"
 #include "igt_sysfs.h"
+#include "igt_x86.h"
 #include "config.h"
+#include "i915/gem_mman.h"
 
 #ifdef HAVE_VALGRIND
 #include <valgrind/valgrind.h>
@@ -86,39 +89,8 @@
  * distinguish them.
  */
 
-int (*igt_ioctl)(int fd, unsigned long request, void *arg) = drmIoctl;
+__thread int (*igt_ioctl)(int fd, unsigned long request, void *arg) = drmIoctl;
 
-
-/**
- * gem_handle_to_libdrm_bo:
- * @bufmgr: libdrm buffer manager instance
- * @fd: open i915 drm file descriptor
- * @name: buffer name in libdrm
- * @handle: gem buffer object handle
- *
- * This helper function imports a raw gem buffer handle into the libdrm buffer
- * manager.
- *
- * Returns: The imported libdrm buffer manager object.
- */
-drm_intel_bo *
-gem_handle_to_libdrm_bo(drm_intel_bufmgr *bufmgr, int fd, const char *name, uint32_t handle)
-{
-	struct drm_gem_flink flink;
-	int ret;
-	drm_intel_bo *bo;
-
-	memset(&flink, 0, sizeof(handle));
-	flink.handle = handle;
-	ret = ioctl(fd, DRM_IOCTL_GEM_FLINK, &flink);
-	igt_assert(ret == 0);
-	errno = 0;
-
-	bo = drm_intel_bo_gem_create_from_name(bufmgr, name, flink.name);
-	igt_assert(bo);
-
-	return bo;
-}
 
 static int
 __gem_get_tiling(int fd, struct drm_i915_gem_get_tiling *arg)
@@ -323,6 +295,91 @@ void gem_close(int fd, uint32_t handle)
 	do_ioctl(fd, DRM_IOCTL_GEM_CLOSE, &close_bo);
 }
 
+static bool is_cache_coherent(int fd, uint32_t handle)
+{
+	return gem_get_caching(fd, handle) != I915_CACHING_NONE;
+}
+
+static void mmap_write(int fd, uint32_t handle, uint64_t offset,
+		       const void *buf, uint64_t length)
+{
+	void *map = NULL;
+
+	if (!length)
+		return;
+
+	if (gem_has_lmem(fd)) {
+		/*
+		 * set/get_caching and set_domain are no longer supported on
+		 * discrete, also the only mmap mode supportd is FIXED.
+		 */
+		map = gem_mmap_offset__fixed(fd, handle, 0,
+					     offset + length,
+					     PROT_READ | PROT_WRITE);
+		igt_assert_eq(gem_wait(fd, handle, 0), 0);
+	}
+
+	if (!map && is_cache_coherent(fd, handle)) {
+		/* offset arg for mmap functions must be 0 */
+		map = __gem_mmap__cpu_coherent(fd, handle, 0, offset + length,
+					       PROT_READ | PROT_WRITE);
+		if (map)
+			gem_set_domain(fd, handle,
+				       I915_GEM_DOMAIN_CPU, I915_GEM_DOMAIN_CPU);
+	}
+
+	if (!map) {
+		map = __gem_mmap_offset__wc(fd, handle, 0, offset + length,
+					    PROT_READ | PROT_WRITE);
+		if (!map)
+			map = gem_mmap__wc(fd, handle, 0, offset + length,
+					   PROT_READ | PROT_WRITE);
+		gem_set_domain(fd, handle,
+			       I915_GEM_DOMAIN_WC, I915_GEM_DOMAIN_WC);
+	}
+
+	memcpy(map + offset, buf, length);
+	munmap(map, offset + length);
+}
+
+static void mmap_read(int fd, uint32_t handle, uint64_t offset, void *buf, uint64_t length)
+{
+	void *map = NULL;
+
+	if (!length)
+		return;
+
+	if (gem_has_lmem(fd)) {
+		/*
+		 * set/get_caching and set_domain are no longer supported on
+		 * discrete, also the only supported mmap mode is FIXED.
+		 */
+		map = gem_mmap_offset__fixed(fd, handle, 0,
+					     offset + length, PROT_READ);
+		igt_assert_eq(gem_wait(fd, handle, 0), 0);
+	}
+
+	if (!map && (gem_has_llc(fd) || is_cache_coherent(fd, handle))) {
+		/* offset arg for mmap functions must be 0 */
+		map = __gem_mmap__cpu_coherent(fd, handle, 0,
+					       offset + length, PROT_READ);
+		if (map)
+			gem_set_domain(fd, handle, I915_GEM_DOMAIN_CPU, 0);
+	}
+
+	if (!map) {
+		map = __gem_mmap_offset__wc(fd, handle, 0, offset + length,
+					    PROT_READ);
+		if (!map)
+			map = gem_mmap__wc(fd, handle, 0, offset + length,
+					   PROT_READ);
+		gem_set_domain(fd, handle, I915_GEM_DOMAIN_WC, 0);
+	}
+
+	igt_memcpy_from_wc(buf, map + offset, length);
+	munmap(map, offset + length);
+}
+
 int __gem_write(int fd, uint32_t handle, uint64_t offset, const void *buf, uint64_t length)
 {
 	struct drm_i915_gem_pwrite gem_pwrite;
@@ -348,15 +405,21 @@ int __gem_write(int fd, uint32_t handle, uint64_t offset, const void *buf, uint6
  * @buf: pointer to the data to write into the buffer
  * @length: size of the subrange
  *
- * This wraps the PWRITE ioctl, which is to upload a linear data to a subrange
- * of a gem buffer object.
+ * Method to write to a gem object. Uses the PWRITE ioctl when it is
+ * available, else it uses mmap + memcpy to upload linear data to a
+ * subrange of a gem buffer object.
  */
 void gem_write(int fd, uint32_t handle, uint64_t offset, const void *buf, uint64_t length)
 {
-	igt_assert_eq(__gem_write(fd, handle, offset, buf, length), 0);
+	int ret = __gem_write(fd, handle, offset, buf, length);
+
+	igt_assert(ret == 0 || ret == -EOPNOTSUPP);
+
+	if (ret == -EOPNOTSUPP)
+		mmap_write(fd, handle, offset, buf, length);
 }
 
-static int __gem_read(int fd, uint32_t handle, uint64_t offset, void *buf, uint64_t length)
+int __gem_read(int fd, uint32_t handle, uint64_t offset, void *buf, uint64_t length)
 {
 	struct drm_i915_gem_pread gem_pread;
 	int err;
@@ -380,12 +443,64 @@ static int __gem_read(int fd, uint32_t handle, uint64_t offset, void *buf, uint6
  * @buf: pointer to the data to read into
  * @length: size of the subrange
  *
- * This wraps the PREAD ioctl, which is to download a linear data to a subrange
- * of a gem buffer object.
+ * Method to read from a gem object. Uses the PREAD ioctl when it is
+ * available, else it uses mmap + memcpy to download linear data from a
+ * subrange of a gem buffer object.
  */
 void gem_read(int fd, uint32_t handle, uint64_t offset, void *buf, uint64_t length)
 {
-	igt_assert_eq(__gem_read(fd, handle, offset, buf, length), 0);
+	int ret = __gem_read(fd, handle, offset, buf, length);
+
+	igt_assert(ret == 0 || ret == -EOPNOTSUPP);
+
+	if (ret == -EOPNOTSUPP)
+		mmap_read(fd, handle, offset, buf, length);
+}
+
+/**
+ * gem_has_pwrite
+ * @fd: open i915 drm file descriptor
+ *
+ * Feature test macro to query whether pwrite ioctl is supported
+ */
+bool gem_has_pwrite(int fd)
+{
+	uint32_t handle = gem_create(fd, 4096);
+	int buf, ret;
+
+	ret = __gem_write(fd, handle, 0, &buf, sizeof(buf));
+	gem_close(fd, handle);
+
+	return ret != -EOPNOTSUPP;
+}
+
+/**
+ * gem_has_pread
+ * @fd: open i915 drm file descriptor
+ *
+ * Feature test macro to query whether pread ioctl is supported
+ */
+bool gem_has_pread(int fd)
+{
+	uint32_t handle = gem_create(fd, 4096);
+	int buf, ret;
+
+	ret = __gem_read(fd, handle, 0, &buf, sizeof(buf));
+	gem_close(fd, handle);
+
+	return ret != -EOPNOTSUPP;
+}
+
+/**
+ * gem_require_pread_pwrite
+ * @fd: open i915 drm file descriptor
+ *
+ * Feature test macro to query whether pread/pwrite ioctls are supported
+ * and skip if they are not
+ */
+void gem_require_pread_pwrite(int fd)
+{
+	igt_require(gem_has_pread(fd) && gem_has_pwrite(fd));
 }
 
 int __gem_set_domain(int fd, uint32_t handle, uint32_t read, uint32_t write)
@@ -419,7 +534,12 @@ int __gem_set_domain(int fd, uint32_t handle, uint32_t read, uint32_t write)
  */
 void gem_set_domain(int fd, uint32_t handle, uint32_t read, uint32_t write)
 {
-	igt_assert_eq(__gem_set_domain(fd, handle, read, write), 0);
+	int ret = __gem_set_domain(fd, handle, read, write);
+
+	if (ret == -ENODEV && gem_has_lmem(fd))
+		igt_assert_eq(gem_wait(fd, handle, 0), 0);
+	else
+		igt_assert_eq(ret, 0);
 }
 
 /**
@@ -445,6 +565,7 @@ int gem_wait(int fd, uint32_t handle, int64_t *timeout_ns)
 	ret = 0;
 	if (igt_ioctl(fd, DRM_IOCTL_I915_GEM_WAIT, &wait))
 		ret = -errno;
+	errno = 0;
 
 	if (timeout_ns)
 		*timeout_ns = wait.timeout_ns;
@@ -468,111 +589,24 @@ void gem_sync(int fd, uint32_t handle)
 	errno = 0;
 }
 
-
-bool gem_create__has_stolen_support(int fd)
-{
-	static int has_stolen_support = -1;
-	struct drm_i915_getparam gp;
-	int val = -1;
-
-	if (has_stolen_support < 0) {
-		memset(&gp, 0, sizeof(gp));
-		gp.param = 38; /* CREATE_VERSION */
-		gp.value = &val;
-
-		/* Do we have the extended gem_create_ioctl? */
-		ioctl(fd, DRM_IOCTL_I915_GETPARAM, &gp);
-		has_stolen_support = val >= 2;
-	}
-
-	return has_stolen_support;
-}
-
-struct local_i915_gem_create_v2 {
-	uint64_t size;
-	uint32_t handle;
-	uint32_t pad;
-#define I915_CREATE_PLACEMENT_STOLEN (1<<0)
-	uint32_t flags;
-};
-
-#define LOCAL_IOCTL_I915_GEM_CREATE       DRM_IOWR(DRM_COMMAND_BASE + DRM_I915_GEM_CREATE, struct local_i915_gem_create_v2)
-uint32_t __gem_create_stolen(int fd, uint64_t size)
-{
-	struct local_i915_gem_create_v2 create;
-	int ret;
-
-	memset(&create, 0, sizeof(create));
-	create.handle = 0;
-	create.size = size;
-	create.flags = I915_CREATE_PLACEMENT_STOLEN;
-	ret = igt_ioctl(fd, LOCAL_IOCTL_I915_GEM_CREATE, &create);
-
-	if (ret < 0)
-		return 0;
-
-	errno = 0;
-	return create.handle;
-}
-
 /**
- * gem_create_stolen:
- * @fd: open i915 drm file descriptor
- * @size: desired size of the buffer
- *
- * This wraps the new GEM_CREATE ioctl, which allocates a new gem buffer
- * object of @size and placement in stolen memory region.
- *
- * Returns: The file-private handle of the created buffer object
- */
-
-uint32_t gem_create_stolen(int fd, uint64_t size)
-{
-	struct local_i915_gem_create_v2 create;
-
-	memset(&create, 0, sizeof(create));
-	create.handle = 0;
-	create.size = size;
-	create.flags = I915_CREATE_PLACEMENT_STOLEN;
-	do_ioctl(fd, LOCAL_IOCTL_I915_GEM_CREATE, &create);
-	igt_assert(create.handle);
-
-	return create.handle;
-}
-
-int __gem_create(int fd, uint64_t size, uint32_t *handle)
-{
-	struct drm_i915_gem_create create = {
-		.size = size,
-	};
-	int err = 0;
-
-	if (igt_ioctl(fd, DRM_IOCTL_I915_GEM_CREATE, &create) == 0) {
-		*handle = create.handle;
-	} else {
-		err = -errno;
-		igt_assume(err != 0);
-	}
-
-	errno = 0;
-	return err;
-}
-
-/**
- * gem_create:
+ * gem_buffer_create_fb_obj:
  * @fd: open i915 drm file descriptor
  * @size: desired size of the buffer
  *
  * This wraps the GEM_CREATE ioctl, which allocates a new gem buffer object of
- * @size.
+ * @size from file descriptor specific region
  *
  * Returns: The file-private handle of the created buffer object
  */
-uint32_t gem_create(int fd, uint64_t size)
+uint32_t gem_buffer_create_fb_obj(int fd, uint64_t size)
 {
 	uint32_t handle;
 
-	igt_assert_eq(__gem_create(fd, size, &handle), 0);
+	if (gem_has_lmem(fd))
+		handle = gem_create_in_memory_regions(fd, size, REGION_LMEM(0));
+	else
+		handle = gem_create(fd, size);
 
 	return handle;
 }
@@ -853,49 +887,18 @@ bool gem_engine_reset_enabled(int fd)
 	return gem_gpu_reset_type(fd) > 1;
 }
 
-/**
- * gem_available_fences:
- * @fd: open i915 drm file descriptor
- *
- * Feature test macro to query the kernel for the number of available fences
- * usable in a batchbuffer. Only relevant for pre-gen4.
- *
- * Returns: The number of available fences.
- */
-int gem_available_fences(int fd)
-{
-	static int num_fences = -1;
-
-	if (num_fences < 0) {
-		struct drm_i915_getparam gp;
-
-		memset(&gp, 0, sizeof(gp));
-		gp.param = I915_PARAM_NUM_FENCES_AVAIL;
-		gp.value = &num_fences;
-
-		num_fences = 0;
-		ioctl(fd, DRM_IOCTL_I915_GETPARAM, &gp, sizeof(gp));
-		errno = 0;
-	}
-
-	return num_fences;
-}
-
 bool gem_has_llc(int fd)
 {
-	static int has_llc = -1;
+	int has_llc;
+	struct drm_i915_getparam gp;
 
-	if (has_llc < 0) {
-		struct drm_i915_getparam gp;
+	memset(&gp, 0, sizeof(gp));
+	gp.param = I915_PARAM_HAS_LLC;
+	gp.value = &has_llc;
 
-		memset(&gp, 0, sizeof(gp));
-		gp.param = I915_PARAM_HAS_LLC;
-		gp.value = &has_llc;
-
-		has_llc = 0;
-		ioctl(fd, DRM_IOCTL_I915_GETPARAM, &gp, sizeof(gp));
-		errno = 0;
-	}
+	has_llc = 0;
+	ioctl(fd, DRM_IOCTL_I915_GETPARAM, &gp, sizeof(gp));
+	errno = 0;
 
 	return has_llc;
 }
@@ -928,10 +931,7 @@ static bool has_param(int fd, int param)
  */
 bool gem_has_bsd(int fd)
 {
-	static int has_bsd = -1;
-	if (has_bsd < 0)
-		has_bsd = has_param(fd, I915_PARAM_HAS_BSD);
-	return has_bsd;
+	return has_param(fd, I915_PARAM_HAS_BSD);
 }
 
 /**
@@ -946,10 +946,7 @@ bool gem_has_bsd(int fd)
  */
 bool gem_has_blt(int fd)
 {
-	static int has_blt = -1;
-	if (has_blt < 0)
-		has_blt =  has_param(fd, I915_PARAM_HAS_BLT);
-	return has_blt;
+	return has_param(fd, I915_PARAM_HAS_BLT);
 }
 
 /**
@@ -965,10 +962,7 @@ bool gem_has_blt(int fd)
  */
 bool gem_has_vebox(int fd)
 {
-	static int has_vebox = -1;
-	if (has_vebox < 0)
-		has_vebox =  has_param(fd, I915_PARAM_HAS_VEBOX);
-	return has_vebox;
+	return has_param(fd, I915_PARAM_HAS_VEBOX);
 }
 
 #define I915_PARAM_HAS_BSD2 31
@@ -984,153 +978,7 @@ bool gem_has_vebox(int fd)
  */
 bool gem_has_bsd2(int fd)
 {
-	static int has_bsd2 = -1;
-	if (has_bsd2 < 0)
-		has_bsd2 = has_param(fd, I915_PARAM_HAS_BSD2);
-	return has_bsd2;
-}
-
-struct local_i915_gem_get_aperture {
-	__u64 aper_size;
-	__u64 aper_available_size;
-	__u64 version;
-	__u64 map_total_size;
-	__u64 stolen_total_size;
-};
-#define DRM_I915_GEM_GET_APERTURE	0x23
-#define LOCAL_IOCTL_I915_GEM_GET_APERTURE DRM_IOR  (DRM_COMMAND_BASE + DRM_I915_GEM_GET_APERTURE, struct local_i915_gem_get_aperture)
-/**
- * gem_total_mappable_size:
- * @fd: open i915 drm file descriptor
- *
- * Feature test macro to query the kernel for the total mappable size.
- *
- * Returns: Total mappable address space size.
- */
-uint64_t gem_total_mappable_size(int fd)
-{
-	struct local_i915_gem_get_aperture aperture;
-
-	memset(&aperture, 0, sizeof(aperture));
-	do_ioctl(fd, LOCAL_IOCTL_I915_GEM_GET_APERTURE, &aperture);
-
-	return aperture.map_total_size;
-}
-
-/**
- * gem_total_stolen_size:
- * @fd: open i915 drm file descriptor
- *
- * Feature test macro to query the kernel for the total stolen size.
- *
- * Returns: Total stolen memory.
- */
-uint64_t gem_total_stolen_size(int fd)
-{
-	struct local_i915_gem_get_aperture aperture;
-
-	memset(&aperture, 0, sizeof(aperture));
-	do_ioctl(fd, LOCAL_IOCTL_I915_GEM_GET_APERTURE, &aperture);
-
-	return aperture.stolen_total_size;
-}
-
-/**
- * gem_available_aperture_size:
- * @fd: open i915 drm file descriptor
- *
- * Feature test macro to query the kernel for the available gpu aperture size
- * usable in a batchbuffer.
- *
- * Returns: The available gtt address space size.
- */
-uint64_t gem_available_aperture_size(int fd)
-{
-	struct drm_i915_gem_get_aperture aperture;
-
-	memset(&aperture, 0, sizeof(aperture));
-	aperture.aper_size = 256*1024*1024;
-	do_ioctl(fd, DRM_IOCTL_I915_GEM_GET_APERTURE, &aperture);
-
-	return aperture.aper_available_size;
-}
-
-/**
- * gem_aperture_size:
- * @fd: open i915 drm file descriptor
- *
- * Feature test macro to query the kernel for the total gpu aperture size.
- *
- * Returns: The total gtt address space size.
- */
-uint64_t gem_aperture_size(int fd)
-{
-	static uint64_t aperture_size = 0;
-
-	if (aperture_size == 0) {
-		struct drm_i915_gem_context_param p;
-
-		memset(&p, 0, sizeof(p));
-		p.param = 0x3;
-		if (__gem_context_get_param(fd, &p) == 0) {
-			aperture_size = p.value;
-		} else {
-			struct drm_i915_gem_get_aperture aperture;
-
-			memset(&aperture, 0, sizeof(aperture));
-			aperture.aper_size = 256*1024*1024;
-
-			do_ioctl(fd, DRM_IOCTL_I915_GEM_GET_APERTURE, &aperture);
-			aperture_size =  aperture.aper_size;
-		}
-	}
-
-	return aperture_size;
-}
-
-/**
- * gem_mappable_aperture_size:
- *
- * Feature test macro to query the kernel for the mappable gpu aperture size.
- * This is the area available for GTT memory mappings.
- *
- * Returns: The mappable gtt address space size.
- */
-uint64_t gem_mappable_aperture_size(void)
-{
-#if defined(USE_INTEL)
-	struct pci_device *pci_dev = intel_get_pci_device();
-	int bar;
-
-	if (intel_gen(pci_dev->device_id) < 3)
-		bar = 0;
-	else
-		bar = 2;
-
-	return pci_dev->regions[bar].size;
-#else
-	return 0;
-#endif
-}
-
-/**
- * gem_global_aperture_size:
- * @fd: open i915 drm file descriptor
- *
- * Feature test macro to query the kernel for the global gpu aperture size.
- * This is the area available for the kernel to perform address translations.
- *
- * Returns: The mappable gtt address space size.
- */
-uint64_t gem_global_aperture_size(int fd)
-{
-	struct drm_i915_gem_get_aperture aperture;
-
-	memset(&aperture, 0, sizeof(aperture));
-	aperture.aper_size = 256*1024*1024;
-	do_ioctl(fd, DRM_IOCTL_I915_GEM_GET_APERTURE, &aperture);
-
-	return aperture.aper_size;
+	return has_param(fd, I915_PARAM_HAS_BSD2);
 }
 
 /**
@@ -1144,19 +992,16 @@ uint64_t gem_global_aperture_size(int fd)
  */
 bool gem_has_softpin(int fd)
 {
-	static int has_softpin = -1;
+	int has_softpin;
+	struct drm_i915_getparam gp;
 
-	if (has_softpin < 0) {
-		struct drm_i915_getparam gp;
+	memset(&gp, 0, sizeof(gp));
+	gp.param = I915_PARAM_HAS_EXEC_SOFTPIN;
+	gp.value = &has_softpin;
 
-		memset(&gp, 0, sizeof(gp));
-		gp.param = I915_PARAM_HAS_EXEC_SOFTPIN;
-		gp.value = &has_softpin;
-
-		has_softpin = 0;
-		ioctl(fd, DRM_IOCTL_I915_GETPARAM, &gp, sizeof(gp));
-		errno = 0;
-	}
+	has_softpin = 0;
+	ioctl(fd, DRM_IOCTL_I915_GETPARAM, &gp, sizeof(gp));
+	errno = 0;
 
 	return has_softpin;
 }
@@ -1172,19 +1017,16 @@ bool gem_has_softpin(int fd)
  */
 bool gem_has_exec_fence(int fd)
 {
-	static int has_exec_fence = -1;
+	int has_exec_fence;
+	struct drm_i915_getparam gp;
 
-	if (has_exec_fence < 0) {
-		struct drm_i915_getparam gp;
+	memset(&gp, 0, sizeof(gp));
+	gp.param = I915_PARAM_HAS_EXEC_FENCE;
+	gp.value = &has_exec_fence;
 
-		memset(&gp, 0, sizeof(gp));
-		gp.param = I915_PARAM_HAS_EXEC_FENCE;
-		gp.value = &has_exec_fence;
-
-		has_exec_fence = 0;
-		ioctl(fd, DRM_IOCTL_I915_GETPARAM, &gp, sizeof(gp));
-		errno = 0;
-	}
+	has_exec_fence = 0;
+	ioctl(fd, DRM_IOCTL_I915_GETPARAM, &gp, sizeof(gp));
+	errno = 0;
 
 	return has_exec_fence;
 }
@@ -1205,55 +1047,6 @@ void gem_require_caching(int fd)
 	gem_close(fd, handle);
 
 	errno = 0;
-}
-
-static void reset_device(int fd)
-{
-	int dir;
-
-	dir = igt_debugfs_dir(fd);
-	igt_require(dir >= 0);
-
-	if (ioctl(fd, DRM_IOCTL_I915_GEM_THROTTLE)) {
-		igt_info("Found wedged device, trying to reset and continue\n");
-		igt_sysfs_set(dir, "i915_wedged", "-1");
-	}
-	igt_sysfs_set(dir, "i915_next_seqno", "1");
-
-	close(dir);
-}
-
-void igt_require_gem(int fd)
-{
-	char path[256];
-	int err;
-
-	igt_require_intel(fd);
-
-	/*
-	 * We only want to use the throttle-ioctl for its -EIO reporting
-	 * of a wedged device, not for actually waiting on outstanding
-	 * requests! So create a new drm_file for the device that is clean.
-	 */
-	snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
-	fd = open(path, O_RDWR);
-	igt_assert_lte(0, fd);
-
-	/*
-	 * Reset the global seqno at the start of each test. This ensures that
-	 * the test will not wrap unless it explicitly sets up seqno wrapping
-	 * itself, which avoids accidentally hanging when setting up long
-	 * sequences of batches.
-	 */
-	reset_device(fd);
-
-	err = 0;
-	if (ioctl(fd, DRM_IOCTL_I915_GEM_THROTTLE))
-		err = -errno;
-
-	close(fd);
-
-	igt_require_f(err == 0, "Unresponsive i915/GEM device\n");
 }
 
 /**
@@ -1432,17 +1225,13 @@ void prime_sync_end(int dma_buf_fd, bool write)
 
 bool igt_has_fb_modifiers(int fd)
 {
-	static bool has_modifiers, cap_modifiers_tested;
+	bool has_modifiers;
+	uint64_t cap_modifiers;
+	int ret;
 
-	if (!cap_modifiers_tested) {
-		uint64_t cap_modifiers;
-		int ret;
-
-		ret = drmGetCap(fd, DRM_CAP_ADDFB2_MODIFIERS, &cap_modifiers);
-		igt_assert(ret == 0 || errno == EINVAL || errno == EOPNOTSUPP);
-		has_modifiers = ret == 0 && cap_modifiers == 1;
-		cap_modifiers_tested = true;
-	}
+	ret = drmGetCap(fd, DRM_CAP_ADDFB2_MODIFIERS, &cap_modifiers);
+	igt_assert(ret == 0 || errno == EINVAL || errno == EOPNOTSUPP);
+	has_modifiers = ret == 0 && cap_modifiers == 1;
 
 	return has_modifiers;
 }
@@ -1489,4 +1278,43 @@ int __kms_addfb(int fd, uint32_t handle,
 	*buf_id = f.fb_id;
 
 	return ret < 0 ? -errno : ret;
+}
+
+/**
+ * igt_has_drm_cap:
+ * @fd: Open DRM file descriptor.
+ * @capability: DRM capability
+ *
+ * This helper verifies if the passed capability is supported by the kernel.
+ * This function asserts in case of a bad file descriptor.
+ *
+ * Returns: negative value if error (e.g. cap does not exist), 0 if cap is
+ * not supported, 1 if cap is supported.
+ */
+int igt_has_drm_cap(int fd, uint64_t capability)
+{
+	uint64_t value = 0;
+	int ret;
+
+	ret = drmGetCap(fd, capability, &value);
+	if (ret) {
+		igt_assert_neq(errno, EBADF);
+		return -errno;
+	}
+
+	return value ? 1 : 0;
+}
+
+/**
+ * igt_has_set_caching:
+ * @devid: platform id.
+ *
+ * This helper verifies if the passed platform id
+ * has support for setting cache.
+ *
+ * Returns: Whether the cache setting  is supported or not.
+ */
+bool igt_has_set_caching(uint32_t devid)
+{
+	return IS_METEORLAKE(devid) ? false : true;
 }

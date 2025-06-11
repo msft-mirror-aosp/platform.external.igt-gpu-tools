@@ -15,36 +15,35 @@
 #include <i915_drm.h>
 
 #include "drmtest.h"
-#include "intel_bufmgr.h"
+#include "intel_aux_pgtable.h"
+#include "intel_bufops.h"
 #include "intel_batchbuffer.h"
 #include "intel_io.h"
+#include "intel_mocs.h"
 #include "rendercopy.h"
 #include "gen9_render.h"
+#include "xe2_render.h"
 #include "intel_reg.h"
 #include "igt_aux.h"
-
-#include "intel_aub.h"
+#include "intel_chipset.h"
 
 #define VERTEX_SIZE (3*4)
 
 #if DEBUG_RENDERCPY
-static void dump_batch(struct intel_batchbuffer *batch) {
-	int fd = open("/tmp/i965-batchbuffers.dump", O_WRONLY | O_CREAT,  0666);
-	if (fd != -1) {
-		igt_assert_eq(write(fd, batch->buffer, 4096), 4096);
-		fd = close(fd);
-	}
+static void dump_batch(struct intel_bb *ibb)
+{
+	intel_bb_dump(ibb, "/tmp/gen9-batchbuffers.dump", true);
 }
 #else
 #define dump_batch(x) do { } while(0)
 #endif
 
-struct {
+static struct {
 	uint32_t cc_state;
 	uint32_t blend_state;
 } cc;
 
-struct {
+static struct {
 	uint32_t cc_state;
 	uint32_t sf_clip_state;
 } viewport;
@@ -101,88 +100,95 @@ static const uint32_t ps_kernel_gen11[][4] = {
 #endif
 };
 
-/* AUB annotation support */
-#define MAX_ANNOTATIONS	33
-struct annotations_context {
-	drm_intel_aub_annotation annotations[MAX_ANNOTATIONS];
-	int index;
-	uint32_t offset;
-} aub_annotations;
+/* see lib/i915/shaders/ps/gen12_render_copy.asm */
+static const uint32_t gen12_render_copy[][4] = {
+	{ 0x8003005b, 0x200002f0, 0x0a0a0664, 0x06040205 },
+	{ 0x8003005b, 0x71040fa8, 0x0a0a2001, 0x06240305 },
+	{ 0x8003005b, 0x200002f0, 0x0a0a0664, 0x06040405 },
+	{ 0x8003005b, 0x72040fa8, 0x0a0a2001, 0x06240505 },
+	{ 0x8003005b, 0x200002f0, 0x0a0a06e4, 0x06840205 },
+	{ 0x8003005b, 0x73040fa8, 0x0a0a2001, 0x06a40305 },
+	{ 0x8003005b, 0x200002f0, 0x0a0a06e4, 0x06840405 },
+	{ 0x8003005b, 0x74040fa8, 0x0a0a2001, 0x06a40505 },
+	{ 0x80049031, 0x0c440000, 0x20027124, 0x01000000 },
+	{ 0x00042061, 0x71050aa0, 0x00460c05, 0x00000000 },
+	{ 0x00040061, 0x73050aa0, 0x00460e05, 0x00000000 },
+	{ 0x00040061, 0x75050aa0, 0x00461005, 0x00000000 },
+	{ 0x00040061, 0x77050aa0, 0x00461205, 0x00000000 },
+	{ 0x80040131, 0x00000004, 0x50007144, 0x00c40000 },
+};
 
-static void annotation_init(struct annotations_context *ctx)
+/* see lib/i915/shaders/ps/gen12p71_render_copy.asm */
+static const uint32_t gen12p71_render_copy[][4] = {
+	{ 0x8003005b, 0x200002a0, 0x0a0a0664, 0x06040205 },
+	{ 0x8003005b, 0x71040aa8, 0x0a0a2001, 0x06240305 },
+	{ 0x8003005b, 0x200002a0, 0x0a0a0664, 0x06040405 },
+	{ 0x8003005b, 0x72040aa8, 0x0a0a2001, 0x06240505 },
+	{ 0x8003005b, 0x200002a0, 0x0a0a06e4, 0x06840205 },
+	{ 0x8003005b, 0x73040aa8, 0x0a0a2001, 0x06a40305 },
+	{ 0x8003005b, 0x200002a0, 0x0a0a06e4, 0x06840405 },
+	{ 0x8003005b, 0x74040aa8, 0x0a0a2001, 0x06a40505 },
+	{ 0x80031101, 0x00010000, 0x00000000, 0x00000000 },
+	{ 0x80044031, 0x0c440000, 0x20027124, 0x01000000 },
+	{ 0x00042061, 0x71050aa0, 0x00460c05, 0x00000000 },
+	{ 0x00040061, 0x73050aa0, 0x00460e05, 0x00000000 },
+	{ 0x00040061, 0x75050aa0, 0x00461005, 0x00000000 },
+	{ 0x00040061, 0x77050aa0, 0x00461205, 0x00000000 },
+	{ 0x80041131, 0x00000004, 0x50007144, 0x00c40000 },
+};
+
+static const uint32_t xe2_render_copy[][4] = {
+	{ 0x8010005b, 0x200002a0, 0x020a0604, 0x06640104 },
+	{ 0x8010005b, 0x710402a8, 0x020a2000, 0x06140104 },
+	{ 0x8010005b, 0x200002a0, 0x020a0634, 0x06440104 },
+	{ 0x8010005b, 0x720402a8, 0x020a2000, 0x06540204 },
+	{ 0x80122031, 0x0c240000, 0x20027114, 0x00800000 },
+	{ 0x8010c031, 0x00000004, 0x58000c24, 0x00c40000 },
+};
+
+static uint32_t lnl_compression_format(const struct intel_buf *buf)
 {
-	/* ctx->annotations is an array keeping a list of annotations of the
-	 * batch buffer ordered by offset. ctx->annotations[0] is thus left
-	 * for the command stream and will be filled just before executing
-	 * the batch buffer with annotations_add_batch() */
-	ctx->index = 1;
+	switch (buf->bpp) {
+	case 64:
+		return 0x7; /* CMF_R16_G16_B16_A16 */
+	case 32:
+		if (buf->depth == 30)
+			return 0x3; /* CMF_R10_G10_B10_A2 */
+		else
+			return 0x2; /* CMF_R8_G8_B8_A8 */
+	default:
+		igt_assert(0);
+		return 0;
+	}
 }
 
-static void add_annotation(drm_intel_aub_annotation *a,
-			   uint32_t type, uint32_t subtype,
-			   uint32_t ending_offset)
+static uint32_t dg2_compression_format(const struct intel_buf *buf)
 {
-	a->type = type;
-	a->subtype = subtype;
-	a->ending_offset = ending_offset;
-}
-
-static void annotation_add_batch(struct annotations_context *ctx, size_t size)
-{
-	add_annotation(&ctx->annotations[0], AUB_TRACE_TYPE_BATCH, 0, size);
-}
-
-static void annotation_add_state(struct annotations_context *ctx,
-				 uint32_t state_type,
-				 uint32_t start_offset,
-				 size_t   size)
-{
-	assert(ctx->index < MAX_ANNOTATIONS);
-
-	add_annotation(&ctx->annotations[ctx->index++],
-		       AUB_TRACE_TYPE_NOTYPE, 0,
-		       start_offset);
-	add_annotation(&ctx->annotations[ctx->index++],
-		       AUB_TRACE_TYPE(state_type),
-		       AUB_TRACE_SUBTYPE(state_type),
-		       start_offset + size);
-}
-
-static void annotation_flush(struct annotations_context *ctx,
-			     struct intel_batchbuffer *batch)
-{
-	if (!igt_aub_dump_enabled())
-		return;
-
-	drm_intel_bufmgr_gem_set_aub_annotations(batch->bo,
-						 ctx->annotations,
-						 ctx->index);
-}
-
-static void
-gen6_render_flush(struct intel_batchbuffer *batch,
-		  drm_intel_context *context, uint32_t batch_end)
-{
-	int ret;
-
-	ret = drm_intel_bo_subdata(batch->bo, 0, 4096, batch->buffer);
-	if (ret == 0)
-		ret = drm_intel_gem_bo_context_exec(batch->bo, context,
-						    batch_end, 0);
-	assert(ret == 0);
+	switch (buf->bpp) {
+	case 64:
+		return 0x5;
+	case 32:
+		if (buf->depth == 30)
+			return 0xc;
+		else
+			return 0x8;
+	default:
+		igt_assert(0);
+		return 0;
+	}
 }
 
 /* Mostly copy+paste from gen6, except height, width, pitch moved */
 static uint32_t
-gen8_bind_buf(struct intel_batchbuffer *batch, const struct igt_buf *buf,
-	      int is_dst) {
+gen9_bind_buf(struct intel_bb *ibb, const struct intel_buf *buf, int is_dst,
+	      bool fast_clear) {
 	struct gen9_surface_state *ss;
-	uint32_t write_domain, read_domain, offset;
-	int ret;
+	uint32_t write_domain, read_domain;
+	uint64_t address;
 
-	igt_assert_lte(buf->stride, 256*1024);
-	igt_assert_lte(igt_buf_width(buf), 16384);
-	igt_assert_lte(igt_buf_height(buf), 16384);
+	igt_assert_lte(buf->surface[0].stride, 256*1024);
+	igt_assert_lte(intel_buf_width(buf), 16384);
+	igt_assert_lte(intel_buf_height(buf), 16384);
 
 	if (is_dst) {
 		write_domain = read_domain = I915_GEM_DOMAIN_RENDER;
@@ -191,98 +197,147 @@ gen8_bind_buf(struct intel_batchbuffer *batch, const struct igt_buf *buf,
 		read_domain = I915_GEM_DOMAIN_SAMPLER;
 	}
 
-	ss = intel_batchbuffer_subdata_alloc(batch, sizeof(*ss), 64);
-	offset = intel_batchbuffer_subdata_offset(batch, ss);
-	annotation_add_state(&aub_annotations, AUB_TRACE_SURFACE_STATE,
-			     offset, sizeof(*ss));
+	ss = intel_bb_ptr_align(ibb, 64);
 
 	ss->ss0.surface_type = SURFACE_2D;
-	switch (buf->bpp) {
-		case 8: ss->ss0.surface_format = SURFACEFORMAT_R8_UNORM; break;
-		case 16: ss->ss0.surface_format = SURFACEFORMAT_R8G8_UNORM; break;
-		case 32: ss->ss0.surface_format = SURFACEFORMAT_B8G8R8A8_UNORM; break;
-		case 64: ss->ss0.surface_format = SURFACEFORMAT_R16G16B16A16_FLOAT; break;
-		default: igt_assert(0);
-	}
-	ss->ss0.render_cache_read_write = 1;
+	ss->ss0.surface_format = gen4_surface_format(buf->bpp, buf->depth);
 	ss->ss0.vertical_alignment = 1; /* align 4 */
-	ss->ss0.horizontal_alignment = 1; /* align 4 */
-	if (buf->tiling == I915_TILING_X)
-		ss->ss0.tiled_mode = 2;
-	else if (buf->tiling != I915_TILING_NONE)
-		ss->ss0.tiled_mode = 3;
+	ss->ss0.horizontal_alignment = 1; /* align 4 or HALIGN_32 on display ver >= 13*/
 
-	ss->ss1.memory_object_control = I915_MOCS_PTE << 1;
+	ss->ss1.mocs_index = buf->mocs_index;
 
-	if (buf->tiling == I915_TILING_Yf)
-		ss->ss5.trmode = 1;
-	else if (buf->tiling == I915_TILING_Ys)
-		ss->ss5.trmode = 2;
-	ss->ss5.mip_tail_start_lod = 1; /* needed with trmode */
-
-	ss->ss8.base_addr = buf->bo->offset64;
-	ss->ss9.base_addr_hi = buf->bo->offset64 >> 32;
-
-	ret = drm_intel_bo_emit_reloc(batch->bo,
-				      intel_batchbuffer_subdata_offset(batch, &ss->ss8),
-				      buf->bo, 0,
-				      read_domain, write_domain);
-	assert(ret == 0);
-
-	ss->ss2.height = igt_buf_height(buf) - 1;
-	ss->ss2.width  = igt_buf_width(buf) - 1;
-	ss->ss3.pitch  = buf->stride - 1;
-
-	ss->ss7.shader_chanel_select_r = 4;
-	ss->ss7.shader_chanel_select_g = 5;
-	ss->ss7.shader_chanel_select_b = 6;
-	ss->ss7.shader_chanel_select_a = 7;
-
-	if (buf->aux.stride) {
-		ss->ss6.aux_mode = 0x5; /* AUX_CCS_E */
-		ss->ss6.aux_pitch = (buf->aux.stride / 128) - 1;
-
-		ss->ss10.aux_base_addr = buf->bo->offset64 + buf->aux.offset;
-		ss->ss11.aux_base_addr_hi = (buf->bo->offset64 + buf->aux.offset) >> 32;
-
-		ret = drm_intel_bo_emit_reloc(batch->bo,
-					      intel_batchbuffer_subdata_offset(batch, &ss->ss10),
-					      buf->bo, buf->aux.offset,
-					      read_domain, write_domain);
-		assert(ret == 0);
+	if (HAS_4TILE(ibb->devid)) {
+		ss->ss5.mip_tail_start_lod = 0;
+	} else {
+		ss->ss0.render_cache_read_write = 1;
+		ss->ss5.mip_tail_start_lod = 1; /* needed with trmode */
 	}
 
-	return offset;
+	switch (buf->tiling) {
+	case I915_TILING_NONE:
+		ss->ss0.tiled_mode = 0;
+		break;
+	case I915_TILING_X:
+		ss->ss0.tiled_mode = 2;
+		break;
+	case I915_TILING_64:
+		ss->ss0.tiled_mode = 1;
+		ss->ss5.mip_tail_start_lod = 0xf;
+		break;
+	default:
+		ss->ss0.tiled_mode = 3;
+		if (buf->tiling == I915_TILING_Yf)
+			ss->ss5.trmode = 1;
+		else if (buf->tiling == I915_TILING_Ys)
+			ss->ss5.trmode = 2;
+		break;
+	}
+
+	if (intel_buf_pxp(buf))
+		ss->ss1.pxp = 1;
+
+	address = intel_bb_offset_reloc_with_delta(ibb, buf->handle,
+						   read_domain, write_domain,
+						   buf->surface[0].offset,
+						   intel_bb_offset(ibb) + 4 * 8,
+						   buf->addr.offset);
+	ss->ss8.base_addr = (address + buf->surface[0].offset);
+	ss->ss9.base_addr_hi = (address + buf->surface[0].offset) >> 32;
+
+	ss->ss2.height = intel_buf_height(buf) - 1;
+	ss->ss2.width  = intel_buf_width(buf) - 1;
+	ss->ss3.pitch  = buf->surface[0].stride - 1;
+
+	ss->ss7.skl.shader_chanel_select_r = 4;
+	ss->ss7.skl.shader_chanel_select_g = 5;
+	ss->ss7.skl.shader_chanel_select_b = 6;
+	ss->ss7.skl.shader_chanel_select_a = 7;
+
+	if (buf->compression == I915_COMPRESSION_MEDIA)
+		ss->ss7.tgl.media_compression = 1;
+	else if (buf->compression == I915_COMPRESSION_RENDER) {
+		if (intel_gen(ibb->devid) >= 20)
+			ss->ss6.aux_mode = 0x0; /* AUX_NONE, unified compression */
+		else
+			ss->ss6.aux_mode = 0x5; /* AUX_CCS_E */
+
+		if (intel_gen(ibb->devid) < 12 && buf->ccs[0].stride) {
+			ss->ss6.aux_pitch = (buf->ccs[0].stride / 128) - 1;
+
+			address = intel_bb_offset_reloc_with_delta(ibb, buf->handle,
+								   read_domain, write_domain,
+								   (buf->cc.offset ? (1 << 10) : 0)
+								   | buf->ccs[0].offset,
+								   intel_bb_offset(ibb) + 4 * 10,
+								   buf->addr.offset);
+			ss->ss10.aux_base_addr = (address + buf->ccs[0].offset) >> 12;
+			ss->ss11.aux_base_addr_hi = (address + buf->ccs[0].offset) >> 32;
+		}
+
+		if (buf->cc.offset) {
+			igt_assert(buf->compression == I915_COMPRESSION_RENDER);
+
+			ss->ss10.clearvalue_addr_enable = 1;
+
+			address = intel_bb_offset_reloc_with_delta(ibb, buf->handle,
+								   read_domain, write_domain,
+								   buf->cc.offset,
+								   intel_bb_offset(ibb) + 4 * 12,
+								   buf->addr.offset);
+
+			/*
+			 * If this assert doesn't hold below clear address will be
+			 * written wrong.
+			 */
+
+			igt_assert(__builtin_ctzl(address + buf->cc.offset) >= 6 &&
+				   (__builtin_clzl(address + buf->cc.offset) >= 16));
+
+			ss->ss12.dg2.clear_address = (address + buf->cc.offset) >> 6;
+			ss->ss13.clear_address_hi = (address + buf->cc.offset) >> 32;
+		}
+
+		if (HAS_4TILE(ibb->devid)) {
+			ss->ss7.dg2.memory_compression_type = 0;
+			ss->ss7.dg2.memory_compression_enable = 0;
+			ss->ss7.dg2.disable_support_for_multi_gpu_partial_writes = 1;
+			ss->ss7.dg2.disable_support_for_multi_gpu_atomics = 1;
+
+			if (intel_gen(ibb->devid) >= 20)
+				ss->ss12.lnl.compression_format = lnl_compression_format(buf);
+			else
+				ss->ss12.dg2.compression_format = dg2_compression_format(buf);
+		}
+	}
+
+	return intel_bb_ptr_add_return_prev_offset(ibb, sizeof(*ss));
 }
 
 static uint32_t
-gen8_bind_surfaces(struct intel_batchbuffer *batch,
-		   const struct igt_buf *src,
-		   const struct igt_buf *dst)
+gen8_bind_surfaces(struct intel_bb *ibb,
+		   const struct intel_buf *src,
+		   const struct intel_buf *dst)
 {
-	uint32_t *binding_table, offset;
+	uint32_t *binding_table, binding_table_offset;
+	bool fast_clear = !src;
 
-	binding_table = intel_batchbuffer_subdata_alloc(batch, 8, 32);
-	offset = intel_batchbuffer_subdata_offset(batch, binding_table);
-	annotation_add_state(&aub_annotations, AUB_TRACE_BINDING_TABLE,
-			     offset, 8);
+	binding_table = intel_bb_ptr_align(ibb, 32);
+	binding_table_offset = intel_bb_ptr_add_return_prev_offset(ibb, 32);
 
-	binding_table[0] = gen8_bind_buf(batch, dst, 1);
-	binding_table[1] = gen8_bind_buf(batch, src, 0);
+	binding_table[0] = gen9_bind_buf(ibb, dst, 1, fast_clear);
 
-	return offset;
+	if (src != NULL)
+		binding_table[1] = gen9_bind_buf(ibb, src, 0, false);
+
+	return binding_table_offset;
 }
 
 /* Mostly copy+paste from gen6, except wrap modes moved */
 static uint32_t
-gen8_create_sampler(struct intel_batchbuffer *batch) {
+gen8_create_sampler(struct intel_bb *ibb) {
 	struct gen8_sampler_state *ss;
-	uint32_t offset;
 
-	ss = intel_batchbuffer_subdata_alloc(batch, sizeof(*ss), 64);
-	offset = intel_batchbuffer_subdata_offset(batch, ss);
-	annotation_add_state(&aub_annotations, AUB_TRACE_SAMPLER_STATE,
-			     offset, sizeof(*ss));
+	ss = intel_bb_ptr_align(ibb, 64);
 
 	ss->ss0.min_filter = GEN4_MAPFILTER_NEAREST;
 	ss->ss0.mag_filter = GEN4_MAPFILTER_NEAREST;
@@ -294,21 +349,104 @@ gen8_create_sampler(struct intel_batchbuffer *batch) {
 	 * sampler fetch, but couldn't make it work. */
 	ss->ss3.non_normalized_coord = 0;
 
-	return offset;
+	return intel_bb_ptr_add_return_prev_offset(ibb, sizeof(*ss));
 }
 
 static uint32_t
-gen8_fill_ps(struct intel_batchbuffer *batch,
+gen8_fill_ps(struct intel_bb *ibb,
 	     const uint32_t kernel[][4],
 	     size_t size)
 {
-	uint32_t offset;
+	return intel_bb_copy_data(ibb, kernel, size, 64);
+}
 
-	offset = intel_batchbuffer_copy_data(batch, kernel, size, 64);
-	annotation_add_state(&aub_annotations, AUB_TRACE_KERNEL_INSTRUCTIONS,
-			     offset, size);
-
-	return offset;
+static void fast_clear_scale(const struct intel_buf *buf,
+			     int *x_scale, int *y_scale)
+{
+	switch (buf->tiling) {
+	case I915_TILING_4:
+		*x_scale = 1024 * 8 / buf->bpp;
+		*y_scale = 16;
+		break;
+	case I915_TILING_64:
+		switch (buf->bpp) {
+		case 8:
+			*x_scale = 128;
+			*y_scale = 128;
+			break;
+		case 16:
+			*x_scale = 128;
+			*y_scale = 64;
+			break;
+		case 32:
+			*x_scale = 64;
+			*y_scale = 64;
+			break;
+		case 64:
+			*x_scale = 64;
+			*y_scale = 32;
+			break;
+		case 128:
+			*x_scale = 32;
+			*y_scale = 32;
+			break;
+		}
+		break;
+	case I915_TILING_Y:
+		*x_scale = 256 * 8 / buf->bpp;
+		*y_scale = 16;
+		break;
+	case I915_TILING_Yf:
+		switch (buf->bpp) {
+		case 8:
+			*x_scale = 128;
+			*y_scale = 32;
+			break;
+		case 16:
+			*x_scale = 128;
+			*y_scale = 16;
+			break;
+		case 32:
+			*x_scale = 64;
+			*y_scale = 16;
+			break;
+		case 64:
+			*x_scale = 64;
+			*y_scale = 8;
+			break;
+		case 128:
+			*x_scale = 32;
+			*y_scale = 8;
+			break;
+		}
+		break;
+	case I915_TILING_Ys:
+		switch (buf->bpp) {
+		case 8:
+			*x_scale = 64;
+			*y_scale = 64;
+			break;
+		case 16:
+			*x_scale = 64;
+			*y_scale = 32;
+			break;
+		case 32:
+			*x_scale = 32;
+			*y_scale = 32;
+			break;
+		case 64:
+			*x_scale = 32;
+			*y_scale = 16;
+			break;
+		case 128:
+			*x_scale = 16;
+			*y_scale = 16;
+			break;
+		}
+		break;
+	default:
+		igt_assert(0);
+	}
 }
 
 /*
@@ -322,33 +460,54 @@ gen8_fill_ps(struct intel_batchbuffer *batch,
  * see gen6_emit_vertex_elements
  */
 static uint32_t
-gen7_fill_vertex_buffer_data(struct intel_batchbuffer *batch,
-			     const struct igt_buf *src,
+gen7_fill_vertex_buffer_data(struct intel_bb *ibb,
+			     const struct intel_buf *src,
 			     uint32_t src_x, uint32_t src_y,
+			     const struct intel_buf *dst,
 			     uint32_t dst_x, uint32_t dst_y,
 			     uint32_t width, uint32_t height)
 {
-	void *start;
 	uint32_t offset;
 
-	intel_batchbuffer_align(batch, 8);
-	start = batch->ptr;
+	intel_bb_ptr_align(ibb, 8);
+	offset = intel_bb_offset(ibb);
 
-	emit_vertex_2s(batch, dst_x + width, dst_y + height);
-	emit_vertex_normalized(batch, src_x + width, igt_buf_width(src));
-	emit_vertex_normalized(batch, src_y + height, igt_buf_height(src));
+	if (src != NULL) {
+		emit_vertex_2s(ibb, dst_x + width, dst_y + height);
 
-	emit_vertex_2s(batch, dst_x, dst_y + height);
-	emit_vertex_normalized(batch, src_x, igt_buf_width(src));
-	emit_vertex_normalized(batch, src_y + height, igt_buf_height(src));
+		emit_vertex_normalized(ibb, src_x + width, intel_buf_width(src));
+		emit_vertex_normalized(ibb, src_y + height, intel_buf_height(src));
 
-	emit_vertex_2s(batch, dst_x, dst_y);
-	emit_vertex_normalized(batch, src_x, igt_buf_width(src));
-	emit_vertex_normalized(batch, src_y, igt_buf_height(src));
+		emit_vertex_2s(ibb, dst_x, dst_y + height);
 
-	offset = intel_batchbuffer_subdata_offset(batch, start);
-	annotation_add_state(&aub_annotations, AUB_TRACE_VERTEX_BUFFER,
-			     offset, 3 * VERTEX_SIZE);
+		emit_vertex_normalized(ibb, src_x, intel_buf_width(src));
+		emit_vertex_normalized(ibb, src_y + height, intel_buf_height(src));
+
+		emit_vertex_2s(ibb, dst_x, dst_y);
+
+		emit_vertex_normalized(ibb, src_x, intel_buf_width(src));
+		emit_vertex_normalized(ibb, src_y, intel_buf_height(src));
+	} else {
+		int x_scale, y_scale;
+
+		fast_clear_scale(dst, &x_scale, &y_scale);
+
+		emit_vertex_2s(ibb, DIV_ROUND_UP(dst_x + width, x_scale), DIV_ROUND_UP(dst_y + height, y_scale));
+
+		emit_vertex_normalized(ibb, 0, 0);
+		emit_vertex_normalized(ibb, 0, 0);
+
+		emit_vertex_2s(ibb, dst_x/x_scale, DIV_ROUND_UP(dst_y + height, y_scale));
+
+		emit_vertex_normalized(ibb, 0, 0);
+		emit_vertex_normalized(ibb, 0, 0);
+
+		emit_vertex_2s(ibb, dst_x/x_scale, dst_y/y_scale);
+
+		emit_vertex_normalized(ibb, 0, 0);
+		emit_vertex_normalized(ibb, 0, 0);
+	}
+
 	return offset;
 }
 
@@ -362,25 +521,25 @@ gen7_fill_vertex_buffer_data(struct intel_batchbuffer *batch,
  * packed.
  */
 static void
-gen6_emit_vertex_elements(struct intel_batchbuffer *batch) {
+gen6_emit_vertex_elements(struct intel_bb *ibb) {
 	/*
 	 * The VUE layout
 	 *    dword 0-3: pad (0, 0, 0. 0)
 	 *    dword 4-7: position (x, y, 0, 1.0),
 	 *    dword 8-11: texture coordinate 0 (u0, v0, 0, 1.0)
 	 */
-	OUT_BATCH(GEN4_3DSTATE_VERTEX_ELEMENTS | (3 * 2 + 1 - 2));
+	intel_bb_out(ibb, GEN4_3DSTATE_VERTEX_ELEMENTS | (3 * 2 + 1 - 2));
 
 	/* Element state 0. These are 4 dwords of 0 required for the VUE format.
 	 * We don't really know or care what they do.
 	 */
-	OUT_BATCH(0 << GEN6_VE0_VERTEX_BUFFER_INDEX_SHIFT | GEN6_VE0_VALID |
-		  SURFACEFORMAT_R32G32B32A32_FLOAT << VE0_FORMAT_SHIFT |
-		  0 << VE0_OFFSET_SHIFT); /* we specify 0, but it's really does not exist */
-	OUT_BATCH(GEN4_VFCOMPONENT_STORE_0 << VE1_VFCOMPONENT_0_SHIFT |
-		  GEN4_VFCOMPONENT_STORE_0 << VE1_VFCOMPONENT_1_SHIFT |
-		  GEN4_VFCOMPONENT_STORE_0 << VE1_VFCOMPONENT_2_SHIFT |
-		  GEN4_VFCOMPONENT_STORE_0 << VE1_VFCOMPONENT_3_SHIFT);
+	intel_bb_out(ibb, 0 << GEN6_VE0_VERTEX_BUFFER_INDEX_SHIFT | GEN6_VE0_VALID |
+		     SURFACEFORMAT_R32G32B32A32_FLOAT << VE0_FORMAT_SHIFT |
+		     0 << VE0_OFFSET_SHIFT); /* we specify 0, but it's really does not exist */
+	intel_bb_out(ibb, GEN4_VFCOMPONENT_STORE_0 << VE1_VFCOMPONENT_0_SHIFT |
+		     GEN4_VFCOMPONENT_STORE_0 << VE1_VFCOMPONENT_1_SHIFT |
+		     GEN4_VFCOMPONENT_STORE_0 << VE1_VFCOMPONENT_2_SHIFT |
+		     GEN4_VFCOMPONENT_STORE_0 << VE1_VFCOMPONENT_3_SHIFT);
 
 	/* Element state 1 - Our "destination" vertices. These are passed down
 	 * through the pipeline, and eventually make it to the pixel shader as
@@ -388,25 +547,25 @@ gen6_emit_vertex_elements(struct intel_batchbuffer *batch) {
 	 * signed/scaled because of gen6 rendercopy. I see no particular reason
 	 * for doing this though.
 	 */
-	OUT_BATCH(0 << GEN6_VE0_VERTEX_BUFFER_INDEX_SHIFT | GEN6_VE0_VALID |
-		  SURFACEFORMAT_R16G16_SSCALED << VE0_FORMAT_SHIFT |
-		  0 << VE0_OFFSET_SHIFT); /* offsets vb in bytes */
-	OUT_BATCH(GEN4_VFCOMPONENT_STORE_SRC << VE1_VFCOMPONENT_0_SHIFT |
-		  GEN4_VFCOMPONENT_STORE_SRC << VE1_VFCOMPONENT_1_SHIFT |
-		  GEN4_VFCOMPONENT_STORE_0 << VE1_VFCOMPONENT_2_SHIFT |
-		  GEN4_VFCOMPONENT_STORE_1_FLT << VE1_VFCOMPONENT_3_SHIFT);
+	intel_bb_out(ibb, 0 << GEN6_VE0_VERTEX_BUFFER_INDEX_SHIFT | GEN6_VE0_VALID |
+		     SURFACEFORMAT_R16G16_SSCALED << VE0_FORMAT_SHIFT |
+		     0 << VE0_OFFSET_SHIFT); /* offsets vb in bytes */
+	intel_bb_out(ibb, GEN4_VFCOMPONENT_STORE_SRC << VE1_VFCOMPONENT_0_SHIFT |
+		     GEN4_VFCOMPONENT_STORE_SRC << VE1_VFCOMPONENT_1_SHIFT |
+		     GEN4_VFCOMPONENT_STORE_0 << VE1_VFCOMPONENT_2_SHIFT |
+		     GEN4_VFCOMPONENT_STORE_1_FLT << VE1_VFCOMPONENT_3_SHIFT);
 
 	/* Element state 2. Last but not least we store the U,V components as
 	 * normalized floats. These will be used in the pixel shader to sample
 	 * from the source buffer.
 	 */
-	OUT_BATCH(0 << GEN6_VE0_VERTEX_BUFFER_INDEX_SHIFT | GEN6_VE0_VALID |
-		  SURFACEFORMAT_R32G32_FLOAT << VE0_FORMAT_SHIFT |
-		  4 << VE0_OFFSET_SHIFT);	/* offset vb in bytes */
-	OUT_BATCH(GEN4_VFCOMPONENT_STORE_SRC << VE1_VFCOMPONENT_0_SHIFT |
-		  GEN4_VFCOMPONENT_STORE_SRC << VE1_VFCOMPONENT_1_SHIFT |
-		  GEN4_VFCOMPONENT_STORE_0 << VE1_VFCOMPONENT_2_SHIFT |
-		  GEN4_VFCOMPONENT_STORE_1_FLT << VE1_VFCOMPONENT_3_SHIFT);
+	intel_bb_out(ibb, 0 << GEN6_VE0_VERTEX_BUFFER_INDEX_SHIFT | GEN6_VE0_VALID |
+		     SURFACEFORMAT_R32G32_FLOAT << VE0_FORMAT_SHIFT |
+		     4 << VE0_OFFSET_SHIFT);	/* offset vb in bytes */
+	intel_bb_out(ibb, GEN4_VFCOMPONENT_STORE_SRC << VE1_VFCOMPONENT_0_SHIFT |
+		     GEN4_VFCOMPONENT_STORE_SRC << VE1_VFCOMPONENT_1_SHIFT |
+		     GEN4_VFCOMPONENT_STORE_0 << VE1_VFCOMPONENT_2_SHIFT |
+		     GEN4_VFCOMPONENT_STORE_1_FLT << VE1_VFCOMPONENT_3_SHIFT);
 }
 
 /*
@@ -415,42 +574,35 @@ gen6_emit_vertex_elements(struct intel_batchbuffer *batch) {
  * @batch
  * @offset - bytw offset within the @batch where the vertex buffer starts.
  */
-static void gen7_emit_vertex_buffer(struct intel_batchbuffer *batch,
-				    uint32_t offset) {
-	OUT_BATCH(GEN4_3DSTATE_VERTEX_BUFFERS | (1 + (4 * 1) - 2));
-	OUT_BATCH(0 << GEN6_VB0_BUFFER_INDEX_SHIFT | /* VB 0th index */
-		  GEN8_VB0_BUFFER_ADDR_MOD_EN | /* Address Modify Enable */
-		  VERTEX_SIZE << VB0_BUFFER_PITCH_SHIFT);
-	OUT_RELOC(batch->bo, I915_GEM_DOMAIN_VERTEX, 0, offset);
-	OUT_BATCH(3 * VERTEX_SIZE);
+static void gen7_emit_vertex_buffer(struct intel_bb *ibb, uint32_t offset)
+{
+	intel_bb_out(ibb, GEN4_3DSTATE_VERTEX_BUFFERS | (1 + (4 * 1) - 2));
+	intel_bb_out(ibb, 0 << GEN6_VB0_BUFFER_INDEX_SHIFT | /* VB 0th index */
+		     GEN8_VB0_BUFFER_ADDR_MOD_EN | /* Address Modify Enable */
+		     VERTEX_SIZE << VB0_BUFFER_PITCH_SHIFT);
+	intel_bb_emit_reloc(ibb, ibb->handle,
+			    I915_GEM_DOMAIN_VERTEX, 0,
+			    offset, ibb->batch_offset);
+	intel_bb_out(ibb, 3 * VERTEX_SIZE);
 }
 
 static uint32_t
-gen6_create_cc_state(struct intel_batchbuffer *batch)
+gen6_create_cc_state(struct intel_bb *ibb)
 {
 	struct gen6_color_calc_state *cc_state;
-	uint32_t offset;
 
-	cc_state = intel_batchbuffer_subdata_alloc(batch,
-						   sizeof(*cc_state), 64);
-	offset = intel_batchbuffer_subdata_offset(batch, cc_state);
-	annotation_add_state(&aub_annotations, AUB_TRACE_CC_STATE,
-			     offset, sizeof(*cc_state));
+	cc_state = intel_bb_ptr_align(ibb, 64);
 
-	return offset;
+	return intel_bb_ptr_add_return_prev_offset(ibb, sizeof(*cc_state));
 }
 
 static uint32_t
-gen8_create_blend_state(struct intel_batchbuffer *batch)
+gen8_create_blend_state(struct intel_bb *ibb)
 {
 	struct gen8_blend_state *blend;
 	int i;
-	uint32_t offset;
 
-	blend = intel_batchbuffer_subdata_alloc(batch, sizeof(*blend), 64);
-	offset = intel_batchbuffer_subdata_offset(batch, blend);
-	annotation_add_state(&aub_annotations, AUB_TRACE_BLEND_STATE,
-			     offset, sizeof(*blend));
+	blend = intel_bb_ptr_align(ibb, 64);
 
 	for (i = 0; i < 16; i++) {
 		blend->bs[i].dest_blend_factor = GEN6_BLENDFACTOR_ZERO;
@@ -460,466 +612,542 @@ gen8_create_blend_state(struct intel_batchbuffer *batch)
 		blend->bs[i].color_buffer_blend = 0;
 	}
 
-	return offset;
+	return intel_bb_ptr_add_return_prev_offset(ibb, sizeof(*blend));
 }
 
 static uint32_t
-gen6_create_cc_viewport(struct intel_batchbuffer *batch)
+gen6_create_cc_viewport(struct intel_bb *ibb)
 {
 	struct gen4_cc_viewport *vp;
-	uint32_t offset;
 
-	vp = intel_batchbuffer_subdata_alloc(batch, sizeof(*vp), 32);
-	offset = intel_batchbuffer_subdata_offset(batch, vp);
-	annotation_add_state(&aub_annotations, AUB_TRACE_CC_VP_STATE,
-			     offset, sizeof(*vp));
+	vp = intel_bb_ptr_align(ibb, 32);
 
 	/* XXX I don't understand this */
 	vp->min_depth = -1.e35;
 	vp->max_depth = 1.e35;
 
-	return offset;
+	return intel_bb_ptr_add_return_prev_offset(ibb, sizeof(*vp));
 }
 
 static uint32_t
-gen7_create_sf_clip_viewport(struct intel_batchbuffer *batch) {
+gen7_create_sf_clip_viewport(struct intel_bb *ibb) {
 	/* XXX these are likely not needed */
 	struct gen7_sf_clip_viewport *scv_state;
-	uint32_t offset;
 
-	scv_state = intel_batchbuffer_subdata_alloc(batch,
-						    sizeof(*scv_state), 64);
-	offset = intel_batchbuffer_subdata_offset(batch, scv_state);
-	annotation_add_state(&aub_annotations, AUB_TRACE_CLIP_VP_STATE,
-			     offset, sizeof(*scv_state));
+	scv_state = intel_bb_ptr_align(ibb, 64);
 
 	scv_state->guardband.xmin = 0;
 	scv_state->guardband.xmax = 1.0f;
 	scv_state->guardband.ymin = 0;
 	scv_state->guardband.ymax = 1.0f;
 
-	return offset;
+	return intel_bb_ptr_add_return_prev_offset(ibb, sizeof(*scv_state));
 }
 
 static uint32_t
-gen6_create_scissor_rect(struct intel_batchbuffer *batch)
+gen6_create_scissor_rect(struct intel_bb *ibb)
 {
 	struct gen6_scissor_rect *scissor;
-	uint32_t offset;
 
-	scissor = intel_batchbuffer_subdata_alloc(batch, sizeof(*scissor), 64);
-	offset = intel_batchbuffer_subdata_offset(batch, scissor);
-	annotation_add_state(&aub_annotations, AUB_TRACE_SCISSOR_STATE,
-			     offset, sizeof(*scissor));
+	scissor = intel_bb_ptr_align(ibb, 64);
 
-	return offset;
+	return intel_bb_ptr_add_return_prev_offset(ibb, sizeof(*scissor));
 }
 
 static void
-gen8_emit_sip(struct intel_batchbuffer *batch) {
-	OUT_BATCH(GEN4_STATE_SIP | (3 - 2));
-	OUT_BATCH(0);
-	OUT_BATCH(0);
+gen8_emit_sip(struct intel_bb *ibb) {
+	intel_bb_out(ibb, GEN4_STATE_SIP | (3 - 2));
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
 }
 
 static void
-gen7_emit_push_constants(struct intel_batchbuffer *batch) {
-	OUT_BATCH(GEN7_3DSTATE_PUSH_CONSTANT_ALLOC_VS);
-	OUT_BATCH(0);
-	OUT_BATCH(GEN8_3DSTATE_PUSH_CONSTANT_ALLOC_HS);
-	OUT_BATCH(0);
-	OUT_BATCH(GEN8_3DSTATE_PUSH_CONSTANT_ALLOC_DS);
-	OUT_BATCH(0);
-	OUT_BATCH(GEN8_3DSTATE_PUSH_CONSTANT_ALLOC_GS);
-	OUT_BATCH(0);
-	OUT_BATCH(GEN7_3DSTATE_PUSH_CONSTANT_ALLOC_PS);
-	OUT_BATCH(0);
+gen7_emit_push_constants(struct intel_bb *ibb) {
+	intel_bb_out(ibb, GEN7_3DSTATE_PUSH_CONSTANT_ALLOC_VS);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, GEN8_3DSTATE_PUSH_CONSTANT_ALLOC_HS);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, GEN8_3DSTATE_PUSH_CONSTANT_ALLOC_DS);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, GEN8_3DSTATE_PUSH_CONSTANT_ALLOC_GS);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, GEN7_3DSTATE_PUSH_CONSTANT_ALLOC_PS);
+	intel_bb_out(ibb, 0);
 }
 
 static void
-gen9_emit_state_base_address(struct intel_batchbuffer *batch) {
+gen9_emit_state_base_address(struct intel_bb *ibb) {
 
 	/* WaBindlessSurfaceStateModifyEnable:skl,bxt */
 	/* The length has to be one less if we dont modify
 	   bindless state */
-	OUT_BATCH(GEN4_STATE_BASE_ADDRESS | (19 - 1 - 2));
+	if (intel_gen(intel_get_drm_devid(ibb->fd)) >= 20)
+		intel_bb_out(ibb, GEN4_STATE_BASE_ADDRESS | 20);
+	else
+		intel_bb_out(ibb, GEN4_STATE_BASE_ADDRESS | (19 - 1 - 2));
 
 	/* general */
-	OUT_BATCH(0 | BASE_ADDRESS_MODIFY);
-	OUT_BATCH(0);
+	intel_bb_out(ibb, 0 | BASE_ADDRESS_MODIFY);
+	intel_bb_out(ibb, 0);
 
 	/* stateless data port */
-	OUT_BATCH(0 | BASE_ADDRESS_MODIFY);
+	intel_bb_out(ibb, 0 | BASE_ADDRESS_MODIFY);
 
 	/* surface */
-	OUT_RELOC(batch->bo, I915_GEM_DOMAIN_SAMPLER, 0, BASE_ADDRESS_MODIFY);
+	intel_bb_emit_reloc(ibb, ibb->handle,
+			    I915_GEM_DOMAIN_SAMPLER, 0,
+			    BASE_ADDRESS_MODIFY, ibb->batch_offset);
 
 	/* dynamic */
-	OUT_RELOC(batch->bo, I915_GEM_DOMAIN_RENDER | I915_GEM_DOMAIN_INSTRUCTION,
-		  0, BASE_ADDRESS_MODIFY);
+	intel_bb_emit_reloc(ibb, ibb->handle,
+			    I915_GEM_DOMAIN_RENDER | I915_GEM_DOMAIN_INSTRUCTION, 0,
+			    BASE_ADDRESS_MODIFY, ibb->batch_offset);
 
 	/* indirect */
-	OUT_BATCH(0);
-	OUT_BATCH(0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
 
 	/* instruction */
-	OUT_RELOC(batch->bo, I915_GEM_DOMAIN_INSTRUCTION, 0, BASE_ADDRESS_MODIFY);
+	intel_bb_emit_reloc(ibb, ibb->handle,
+			    I915_GEM_DOMAIN_INSTRUCTION, 0,
+			    BASE_ADDRESS_MODIFY, ibb->batch_offset);
 
 	/* general state buffer size */
-	OUT_BATCH(0xfffff000 | 1);
+	intel_bb_out(ibb, 0xfffff000 | 1);
 	/* dynamic state buffer size */
-	OUT_BATCH(1 << 12 | 1);
+	intel_bb_out(ibb, 1 << 12 | 1);
 	/* indirect object buffer size */
-	OUT_BATCH(0xfffff000 | 1);
+	intel_bb_out(ibb, 0xfffff000 | 1);
 	/* intruction buffer size */
-	OUT_BATCH(1 << 12 | 1);
+	intel_bb_out(ibb, 1 << 12 | 1);
 
 	/* Bindless surface state base address */
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+
+	if (intel_gen(intel_get_drm_devid(ibb->fd)) >= 20) {
+		/* Bindless sampler */
+		intel_bb_out(ibb, 0);
+		intel_bb_out(ibb, 0);
+		intel_bb_out(ibb, 0);
+	}
 }
 
 static void
-gen7_emit_urb(struct intel_batchbuffer *batch) {
+gen7_emit_urb(struct intel_bb *ibb) {
 	/* XXX: Min valid values from mesa */
 	const int vs_entries = 64;
 	const int vs_size = 2;
 	const int vs_start = 4;
 
-	OUT_BATCH(GEN7_3DSTATE_URB_VS);
-	OUT_BATCH(vs_entries | ((vs_size - 1) << 16) | (vs_start << 25));
-	OUT_BATCH(GEN7_3DSTATE_URB_GS);
-	OUT_BATCH(vs_start << 25);
-	OUT_BATCH(GEN7_3DSTATE_URB_HS);
-	OUT_BATCH(vs_start << 25);
-	OUT_BATCH(GEN7_3DSTATE_URB_DS);
-	OUT_BATCH(vs_start << 25);
+	intel_bb_out(ibb, GEN7_3DSTATE_URB_VS);
+	intel_bb_out(ibb, vs_entries | ((vs_size - 1) << 16) | (vs_start << 25));
+	intel_bb_out(ibb, GEN7_3DSTATE_URB_GS);
+	intel_bb_out(ibb, vs_start << 25);
+	intel_bb_out(ibb, GEN7_3DSTATE_URB_HS);
+	intel_bb_out(ibb, vs_start << 25);
+	intel_bb_out(ibb, GEN7_3DSTATE_URB_DS);
+	intel_bb_out(ibb, vs_start << 25);
 }
 
 static void
-gen8_emit_cc(struct intel_batchbuffer *batch) {
-	OUT_BATCH(GEN7_3DSTATE_BLEND_STATE_POINTERS);
-	OUT_BATCH(cc.blend_state | 1);
+gen8_emit_cc(struct intel_bb *ibb) {
+	intel_bb_out(ibb, GEN7_3DSTATE_BLEND_STATE_POINTERS);
+	intel_bb_out(ibb, cc.blend_state | 1);
 
-	OUT_BATCH(GEN6_3DSTATE_CC_STATE_POINTERS);
-	OUT_BATCH(cc.cc_state | 1);
+	intel_bb_out(ibb, GEN6_3DSTATE_CC_STATE_POINTERS);
+	intel_bb_out(ibb, cc.cc_state | 1);
 }
 
 static void
-gen8_emit_multisample(struct intel_batchbuffer *batch) {
-	OUT_BATCH(GEN8_3DSTATE_MULTISAMPLE | 0);
-	OUT_BATCH(0);
+gen8_emit_multisample(struct intel_bb *ibb) {
+	intel_bb_out(ibb, GEN8_3DSTATE_MULTISAMPLE | 0);
+	intel_bb_out(ibb, 0);
 
-	OUT_BATCH(GEN6_3DSTATE_SAMPLE_MASK);
-	OUT_BATCH(1);
+	intel_bb_out(ibb, GEN6_3DSTATE_SAMPLE_MASK);
+	intel_bb_out(ibb, 1);
 }
 
 static void
-gen8_emit_vs(struct intel_batchbuffer *batch) {
-	OUT_BATCH(GEN6_3DSTATE_CONSTANT_VS | (11-2));
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
+gen8_emit_vs(struct intel_bb *ibb) {
+	intel_bb_out(ibb, GEN6_3DSTATE_CONSTANT_VS | (11-2));
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
 
-	OUT_BATCH(GEN7_3DSTATE_BINDING_TABLE_POINTERS_VS);
-	OUT_BATCH(0);
+	intel_bb_out(ibb, GEN7_3DSTATE_BINDING_TABLE_POINTERS_VS);
+	intel_bb_out(ibb, 0);
 
-	OUT_BATCH(GEN7_3DSTATE_SAMPLER_STATE_POINTERS_VS);
-	OUT_BATCH(0);
+	intel_bb_out(ibb, GEN7_3DSTATE_SAMPLER_STATE_POINTERS_VS);
+	intel_bb_out(ibb, 0);
 
-	OUT_BATCH(GEN6_3DSTATE_VS | (9-2));
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
+	intel_bb_out(ibb, GEN6_3DSTATE_VS | (9-2));
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
 }
 
 static void
-gen8_emit_hs(struct intel_batchbuffer *batch) {
-	OUT_BATCH(GEN7_3DSTATE_CONSTANT_HS | (11-2));
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
+gen8_emit_hs(struct intel_bb *ibb) {
+	intel_bb_out(ibb, GEN7_3DSTATE_CONSTANT_HS | (11-2));
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
 
-	OUT_BATCH(GEN7_3DSTATE_HS | (9-2));
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
+	intel_bb_out(ibb, GEN7_3DSTATE_HS | (9-2));
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
 
-	OUT_BATCH(GEN7_3DSTATE_BINDING_TABLE_POINTERS_HS);
-	OUT_BATCH(0);
+	intel_bb_out(ibb, GEN7_3DSTATE_BINDING_TABLE_POINTERS_HS);
+	intel_bb_out(ibb, 0);
 
-	OUT_BATCH(GEN8_3DSTATE_SAMPLER_STATE_POINTERS_HS);
-	OUT_BATCH(0);
+	intel_bb_out(ibb, GEN8_3DSTATE_SAMPLER_STATE_POINTERS_HS);
+	intel_bb_out(ibb, 0);
 }
 
 static void
-gen8_emit_gs(struct intel_batchbuffer *batch) {
-	OUT_BATCH(GEN6_3DSTATE_CONSTANT_GS | (11-2));
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
+gen8_emit_gs(struct intel_bb *ibb) {
+	intel_bb_out(ibb, GEN6_3DSTATE_CONSTANT_GS | (11-2));
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
 
-	OUT_BATCH(GEN6_3DSTATE_GS | (10-2));
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
+	intel_bb_out(ibb, GEN6_3DSTATE_GS | (10-2));
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
 
-	OUT_BATCH(GEN7_3DSTATE_BINDING_TABLE_POINTERS_GS);
-	OUT_BATCH(0);
+	intel_bb_out(ibb, GEN7_3DSTATE_BINDING_TABLE_POINTERS_GS);
+	intel_bb_out(ibb, 0);
 
-	OUT_BATCH(GEN7_3DSTATE_SAMPLER_STATE_POINTERS_GS);
-	OUT_BATCH(0);
+	intel_bb_out(ibb, GEN7_3DSTATE_SAMPLER_STATE_POINTERS_GS);
+	intel_bb_out(ibb, 0);
 }
 
 static void
-gen9_emit_ds(struct intel_batchbuffer *batch) {
-	OUT_BATCH(GEN7_3DSTATE_CONSTANT_DS | (11-2));
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
+gen9_emit_ds(struct intel_bb *ibb) {
+	intel_bb_out(ibb, GEN7_3DSTATE_CONSTANT_DS | (11-2));
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
 
-	OUT_BATCH(GEN7_3DSTATE_DS | (11-2));
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
+	intel_bb_out(ibb, GEN7_3DSTATE_DS | (11-2));
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
 
-	OUT_BATCH(GEN7_3DSTATE_BINDING_TABLE_POINTERS_DS);
-	OUT_BATCH(0);
+	intel_bb_out(ibb, GEN7_3DSTATE_BINDING_TABLE_POINTERS_DS);
+	intel_bb_out(ibb, 0);
 
-	OUT_BATCH(GEN8_3DSTATE_SAMPLER_STATE_POINTERS_DS);
-	OUT_BATCH(0);
+	intel_bb_out(ibb, GEN8_3DSTATE_SAMPLER_STATE_POINTERS_DS);
+	intel_bb_out(ibb, 0);
 }
 
 
 static void
-gen8_emit_wm_hz_op(struct intel_batchbuffer *batch) {
-	OUT_BATCH(GEN8_3DSTATE_WM_HZ_OP | (5-2));
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
+gen8_emit_wm_hz_op(struct intel_bb *ibb) {
+	if (intel_gen(intel_get_drm_devid(ibb->fd)) >= 20) {
+		intel_bb_out(ibb, GEN8_3DSTATE_WM_HZ_OP | (6-2));
+		intel_bb_out(ibb, 0);
+	} else {
+		intel_bb_out(ibb, GEN8_3DSTATE_WM_HZ_OP | (5-2));
+	}
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
 }
 
 static void
-gen8_emit_null_state(struct intel_batchbuffer *batch) {
-	gen8_emit_wm_hz_op(batch);
-	gen8_emit_hs(batch);
-	OUT_BATCH(GEN7_3DSTATE_TE | (4-2));
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	gen8_emit_gs(batch);
-	gen9_emit_ds(batch);
-	gen8_emit_vs(batch);
+gen8_emit_null_state(struct intel_bb *ibb) {
+	gen8_emit_wm_hz_op(ibb);
+	gen8_emit_hs(ibb);
+	intel_bb_out(ibb, GEN7_3DSTATE_TE | (4-2));
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	gen8_emit_gs(ibb);
+	gen9_emit_ds(ibb);
+	gen8_emit_vs(ibb);
 }
 
 static void
-gen7_emit_clip(struct intel_batchbuffer *batch) {
-	OUT_BATCH(GEN6_3DSTATE_CLIP | (4 - 2));
-	OUT_BATCH(0);
-	OUT_BATCH(0); /*  pass-through */
-	OUT_BATCH(0);
+gen7_emit_clip(struct intel_bb *ibb) {
+	intel_bb_out(ibb, GEN6_3DSTATE_CLIP | (4 - 2));
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0); /*  pass-through */
+	intel_bb_out(ibb, 0);
 }
 
 static void
-gen8_emit_sf(struct intel_batchbuffer *batch)
+gen8_emit_sf(struct intel_bb *ibb)
 {
 	int i;
 
-	OUT_BATCH(GEN7_3DSTATE_SBE | (6 - 2));
-	OUT_BATCH(1 << GEN7_SBE_NUM_OUTPUTS_SHIFT |
-		  GEN8_SBE_FORCE_URB_ENTRY_READ_LENGTH |
-		  GEN8_SBE_FORCE_URB_ENTRY_READ_OFFSET |
-		  1 << GEN7_SBE_URB_ENTRY_READ_LENGTH_SHIFT |
-		  1 << GEN8_SBE_URB_ENTRY_READ_OFFSET_SHIFT);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(GEN9_SBE_ACTIVE_COMPONENT_XYZW << 0);
-	OUT_BATCH(0);
+	intel_bb_out(ibb, GEN7_3DSTATE_SBE | (6 - 2));
+	intel_bb_out(ibb, 1 << GEN7_SBE_NUM_OUTPUTS_SHIFT |
+		     GEN8_SBE_FORCE_URB_ENTRY_READ_LENGTH |
+		     GEN8_SBE_FORCE_URB_ENTRY_READ_OFFSET |
+		     1 << GEN7_SBE_URB_ENTRY_READ_LENGTH_SHIFT |
+		     1 << GEN8_SBE_URB_ENTRY_READ_OFFSET_SHIFT);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, GEN9_SBE_ACTIVE_COMPONENT_XYZW << 0);
+	intel_bb_out(ibb, 0);
 
-	OUT_BATCH(GEN8_3DSTATE_SBE_SWIZ | (11 - 2));
+	intel_bb_out(ibb, GEN8_3DSTATE_SBE_SWIZ | (11 - 2));
 	for (i = 0; i < 8; i++)
-		OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
+		intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
 
-	OUT_BATCH(GEN8_3DSTATE_RASTER | (5 - 2));
-	OUT_BATCH(GEN8_RASTER_FRONT_WINDING_CCW | GEN8_RASTER_CULL_NONE);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
+	intel_bb_out(ibb, GEN8_3DSTATE_RASTER | (5 - 2));
+	intel_bb_out(ibb, GEN8_RASTER_FRONT_WINDING_CCW | GEN8_RASTER_CULL_NONE);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
 
-	OUT_BATCH(GEN6_3DSTATE_SF | (4 - 2));
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
+	intel_bb_out(ibb, GEN6_3DSTATE_SF | (4 - 2));
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
 }
 
 static void
-gen8_emit_ps(struct intel_batchbuffer *batch, uint32_t kernel) {
+gen8_emit_ps(struct intel_bb *ibb, uint32_t kernel, bool fast_clear) {
 	const int max_threads = 63;
 
-	OUT_BATCH(GEN6_3DSTATE_WM | (2 - 2));
-	OUT_BATCH(/* XXX: I don't understand the BARYCENTRIC stuff, but it
+	intel_bb_out(ibb, GEN6_3DSTATE_WM | (2 - 2));
+	intel_bb_out(ibb, /* XXX: I don't understand the BARYCENTRIC stuff, but it
 		   * appears we need it to put our setup data in the place we
 		   * expect (g6, see below) */
-		  GEN8_3DSTATE_PS_PERSPECTIVE_PIXEL_BARYCENTRIC);
+		     GEN8_3DSTATE_PS_PERSPECTIVE_PIXEL_BARYCENTRIC);
 
-	OUT_BATCH(GEN6_3DSTATE_CONSTANT_PS | (11-2));
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
+	intel_bb_out(ibb, GEN6_3DSTATE_CONSTANT_PS | (11-2));
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
 
-	OUT_BATCH(GEN7_3DSTATE_PS | (12-2));
-	OUT_BATCH(kernel);
-	OUT_BATCH(0); /* kernel hi */
-	OUT_BATCH(1 << GEN6_3DSTATE_WM_SAMPLER_COUNT_SHIFT |
-		  2 << GEN6_3DSTATE_WM_BINDING_TABLE_ENTRY_COUNT_SHIFT);
-	OUT_BATCH(0); /* scratch space stuff */
-	OUT_BATCH(0); /* scratch hi */
-	OUT_BATCH((max_threads - 1) << GEN8_3DSTATE_PS_MAX_THREADS_SHIFT |
-		  GEN6_3DSTATE_WM_16_DISPATCH_ENABLE);
-	OUT_BATCH(6 << GEN6_3DSTATE_WM_DISPATCH_START_GRF_0_SHIFT);
-	OUT_BATCH(0); // kernel 1
-	OUT_BATCH(0); /* kernel 1 hi */
-	OUT_BATCH(0); // kernel 2
-	OUT_BATCH(0); /* kernel 2 hi */
+	intel_bb_out(ibb, GEN7_3DSTATE_PS | (12-2));
+	if (intel_gen(intel_get_drm_devid(ibb->fd)) >= 20)
+		intel_bb_out(ibb, kernel | 1);
+	else
+		intel_bb_out(ibb, kernel);
+	intel_bb_out(ibb, 0); /* kernel hi */
 
-	OUT_BATCH(GEN8_3DSTATE_PS_BLEND | (2 - 2));
-	OUT_BATCH(GEN8_PS_BLEND_HAS_WRITEABLE_RT);
+	if (fast_clear)
+		intel_bb_out(ibb, 1 <<  GEN6_3DSTATE_WM_BINDING_TABLE_ENTRY_COUNT_SHIFT);
+	else
+		intel_bb_out(ibb, 1 << GEN6_3DSTATE_WM_SAMPLER_COUNT_SHIFT |
+		             2 << GEN6_3DSTATE_WM_BINDING_TABLE_ENTRY_COUNT_SHIFT);
 
-	OUT_BATCH(GEN8_3DSTATE_PS_EXTRA | (2 - 2));
-	OUT_BATCH(GEN8_PSX_PIXEL_SHADER_VALID | GEN8_PSX_ATTRIBUTE_ENABLE);
+	intel_bb_out(ibb, 0); /* scratch space stuff */
+	intel_bb_out(ibb, 0); /* scratch hi */
+	intel_bb_out(ibb, (max_threads - 1) << GEN8_3DSTATE_PS_MAX_THREADS_SHIFT |
+	             GEN6_3DSTATE_WM_16_DISPATCH_ENABLE |
+	             (fast_clear ? GEN8_3DSTATE_FAST_CLEAR_ENABLE : 0));
+	if (intel_gen(intel_get_drm_devid(ibb->fd)) >= 20)
+		intel_bb_out(ibb, 6 << GEN6_3DSTATE_WM_DISPATCH_START_GRF_0_SHIFT |
+			     GENXE_KERNEL0_POLY_PACK16_FIXED << GENXE_KERNEL0_PACKING_POLICY);
+	else
+		intel_bb_out(ibb, 6 << GEN6_3DSTATE_WM_DISPATCH_START_GRF_0_SHIFT);
+	intel_bb_out(ibb, 0); // kernel 1
+	intel_bb_out(ibb, 0); /* kernel 1 hi */
+	intel_bb_out(ibb, 0); // kernel 2
+	intel_bb_out(ibb, 0); /* kernel 2 hi */
+
+	intel_bb_out(ibb, GEN8_3DSTATE_PS_BLEND | (2 - 2));
+	intel_bb_out(ibb, GEN8_PS_BLEND_HAS_WRITEABLE_RT);
+
+	intel_bb_out(ibb, GEN8_3DSTATE_PS_EXTRA | (2 - 2));
+	intel_bb_out(ibb, GEN8_PSX_PIXEL_SHADER_VALID | GEN8_PSX_ATTRIBUTE_ENABLE);
 }
 
 static void
-gen9_emit_depth(struct intel_batchbuffer *batch)
+gen9_emit_depth(struct intel_bb *ibb)
 {
-	OUT_BATCH(GEN8_3DSTATE_WM_DEPTH_STENCIL | (4 - 2));
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
+	bool need_10dw = HAS_4TILE(ibb->devid);
 
-	OUT_BATCH(GEN7_3DSTATE_DEPTH_BUFFER | (8-2));
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
+	intel_bb_out(ibb, GEN8_3DSTATE_WM_DEPTH_STENCIL | (4 - 2));
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
 
-	OUT_BATCH(GEN8_3DSTATE_HIER_DEPTH_BUFFER | (5-2));
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
+	intel_bb_out(ibb, GEN7_3DSTATE_DEPTH_BUFFER | (need_10dw ? (10-2) : (8-2)));
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	if (need_10dw) {
+		intel_bb_out(ibb, 0);
+		intel_bb_out(ibb, 0);
+	}
 
-	OUT_BATCH(GEN8_3DSTATE_STENCIL_BUFFER | (5-2));
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
+	intel_bb_out(ibb, GEN8_3DSTATE_HIER_DEPTH_BUFFER | (5-2));
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+
+	intel_bb_out(ibb, GEN8_3DSTATE_STENCIL_BUFFER | (5-2));
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
 }
 
 static void
-gen7_emit_clear(struct intel_batchbuffer *batch) {
-	OUT_BATCH(GEN7_3DSTATE_CLEAR_PARAMS | (3-2));
-	OUT_BATCH(0);
-	OUT_BATCH(1); // clear valid
+gen7_emit_clear(struct intel_bb *ibb) {
+	if (intel_gen(intel_get_drm_devid(ibb->fd)) >= 20)
+		return;
+
+	intel_bb_out(ibb, GEN7_3DSTATE_CLEAR_PARAMS | (3-2));
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 1); // clear valid
 }
 
 static void
-gen6_emit_drawing_rectangle(struct intel_batchbuffer *batch, const struct igt_buf *dst)
+gen6_emit_drawing_rectangle(struct intel_bb *ibb, const struct intel_buf *dst)
 {
-	OUT_BATCH(GEN4_3DSTATE_DRAWING_RECTANGLE | (4 - 2));
-	OUT_BATCH(0);
-	OUT_BATCH((igt_buf_height(dst) - 1) << 16 | (igt_buf_width(dst) - 1));
-	OUT_BATCH(0);
+	if (intel_gen(intel_get_drm_devid(ibb->fd)) >= 20)
+		intel_bb_out(ibb, GENXE2_3DSTATE_DRAWING_RECTANGLE_FAST | (4 - 2));
+	else
+		intel_bb_out(ibb, GEN4_3DSTATE_DRAWING_RECTANGLE | (4 - 2));
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, (intel_buf_height(dst) - 1) << 16 | (intel_buf_width(dst) - 1));
+	intel_bb_out(ibb, 0);
 }
 
-static void gen8_emit_vf_topology(struct intel_batchbuffer *batch)
+static void gen8_emit_vf_topology(struct intel_bb *ibb)
 {
-	OUT_BATCH(GEN8_3DSTATE_VF_TOPOLOGY);
-	OUT_BATCH(_3DPRIM_RECTLIST);
+	intel_bb_out(ibb, GEN8_3DSTATE_VF_TOPOLOGY);
+	intel_bb_out(ibb, _3DPRIM_RECTLIST);
 }
 
 /* Vertex elements MUST be defined before this according to spec */
-static void gen8_emit_primitive(struct intel_batchbuffer *batch, uint32_t offset)
+static void gen8_emit_primitive(struct intel_bb *ibb, uint32_t offset)
 {
-	OUT_BATCH(GEN8_3DSTATE_VF | (2 - 2));
-	OUT_BATCH(0);
+	intel_bb_out(ibb, GEN8_3DSTATE_VF | (2 - 2));
+	intel_bb_out(ibb, 0);
 
-	OUT_BATCH(GEN8_3DSTATE_VF_INSTANCING | (3 - 2));
-	OUT_BATCH(0);
-	OUT_BATCH(0);
+	intel_bb_out(ibb, GEN8_3DSTATE_VF_INSTANCING | (3 - 2));
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
 
-	OUT_BATCH(GEN4_3DPRIMITIVE | (7-2));
-	OUT_BATCH(0);	/* gen8+ ignore the topology type field */
-	OUT_BATCH(3);	/* vertex count */
-	OUT_BATCH(0);	/*  We're specifying this instead with offset in GEN6_3DSTATE_VERTEX_BUFFERS */
-	OUT_BATCH(1);	/* single instance */
-	OUT_BATCH(0);	/* start instance location */
-	OUT_BATCH(0);	/* index buffer offset, ignored */
+	intel_bb_out(ibb, GEN4_3DPRIMITIVE | (7-2));
+	intel_bb_out(ibb, 0);	/* gen8+ ignore the topology type field */
+	intel_bb_out(ibb, 3);	/* vertex count */
+	intel_bb_out(ibb, 0);	/*  We're specifying this instead with offset in GEN6_3DSTATE_VERTEX_BUFFERS */
+	intel_bb_out(ibb, 1);	/* single instance */
+	intel_bb_out(ibb, 0);	/* start instance location */
+	intel_bb_out(ibb, 0);	/* index buffer offset, ignored */
+}
+
+#define PIPE_CONTROL_RENDER_TARGET_FLUSH    (1 << 12)
+#define PIPE_CONTROL_DATA_CACHE_INVALIDATE  (1 << 5)
+#define PIPE_CONTROL_PROTECTEDPATH_DISABLE  (1 << 27)
+#define PIPE_CONTROL_PROTECTEDPATH_ENABLE   (1 << 22)
+#define PIPE_CONTROL_POST_SYNC_OP           (1 << 14)
+#define PIPE_CONTROL_POST_SYNC_OP_STORE_DW_IDX (1 << 21)
+#define PS_OP_TAG_START                     0x1234fed0
+#define PS_OP_TAG_END                       0x5678cbaf
+static void gen12_emit_pxp_state(struct intel_bb *ibb, bool enable,
+		 uint32_t pxp_write_op_offset)
+{
+	uint32_t pipe_ctl_flags;
+	uint32_t set_app_id, ps_op_id;
+
+	if (enable) {
+		pipe_ctl_flags = PIPE_CONTROL_FLUSH_ENABLE;
+		intel_bb_out(ibb, GFX_OP_PIPE_CONTROL(2));
+		intel_bb_out(ibb, pipe_ctl_flags);
+
+		set_app_id =  MI_SET_APPID |
+			      APPTYPE(intel_bb_pxp_apptype(ibb)) |
+			      APPID(intel_bb_pxp_appid(ibb));
+		intel_bb_out(ibb, set_app_id);
+
+		pipe_ctl_flags = PIPE_CONTROL_PROTECTEDPATH_ENABLE;
+		ps_op_id = PS_OP_TAG_START;
+	} else {
+		pipe_ctl_flags = PIPE_CONTROL_PROTECTEDPATH_DISABLE;
+		ps_op_id = PS_OP_TAG_END;
+	}
+
+	pipe_ctl_flags |= (PIPE_CONTROL_CS_STALL |
+			   PIPE_CONTROL_RENDER_TARGET_FLUSH |
+			   PIPE_CONTROL_DATA_CACHE_INVALIDATE |
+			   PIPE_CONTROL_POST_SYNC_OP);
+	intel_bb_out(ibb, GFX_OP_PIPE_CONTROL(6));
+	intel_bb_out(ibb, pipe_ctl_flags);
+	intel_bb_emit_reloc(ibb, ibb->handle, 0, I915_GEM_DOMAIN_COMMAND,
+			    (enable ? pxp_write_op_offset : (pxp_write_op_offset+8)),
+			    ibb->batch_offset);
+	intel_bb_out(ibb, ps_op_id);
+	intel_bb_out(ibb, ps_op_id);
 }
 
 /* The general rule is if it's named gen6 it is directly copied from
@@ -955,137 +1183,296 @@ static void gen8_emit_primitive(struct intel_batchbuffer *batch, uint32_t offset
 #define BATCH_STATE_SPLIT 2048
 
 static
-void _gen9_render_copyfunc(struct intel_batchbuffer *batch,
-			  drm_intel_context *context,
-			  const struct igt_buf *src, unsigned src_x,
-			  unsigned src_y, unsigned width, unsigned height,
-			  const struct igt_buf *dst, unsigned dst_x,
-			  unsigned dst_y, const uint32_t ps_kernel[][4],
-			  uint32_t ps_kernel_size)
+void _gen9_render_op(struct intel_bb *ibb,
+		     struct intel_buf *src,
+		     unsigned int src_x, unsigned int src_y,
+		     unsigned int width, unsigned int height,
+		     struct intel_buf *dst,
+		     unsigned int dst_x, unsigned int dst_y,
+		     struct intel_buf *aux_pgtable_buf,
+		     const float clear_color[4],
+		     const uint32_t ps_kernel[][4],
+		     uint32_t ps_kernel_size)
 {
 	uint32_t ps_sampler_state, ps_kernel_off, ps_binding_table;
 	uint32_t scissor_state;
 	uint32_t vertex_buffer;
-	uint32_t batch_end;
+	uint32_t aux_pgtable_state;
+	bool fast_clear = !src;
+	uint32_t pxp_scratch_offset;
 
-	igt_assert(src->bpp == dst->bpp);
-	intel_batchbuffer_flush_with_context(batch, context);
+	if (!fast_clear)
+		igt_assert(src->bpp == dst->bpp);
 
-	intel_batchbuffer_align(batch, 8);
+	intel_bb_flush_render(ibb);
 
-	batch->ptr = &batch->buffer[BATCH_STATE_SPLIT];
+	intel_bb_add_intel_buf(ibb, dst, true);
 
-	annotation_init(&aub_annotations);
+	if (!fast_clear)
+		intel_bb_add_intel_buf(ibb, src, false);
 
-	ps_binding_table  = gen8_bind_surfaces(batch, src, dst);
-	ps_sampler_state  = gen8_create_sampler(batch);
-	ps_kernel_off = gen8_fill_ps(batch, ps_kernel, ps_kernel_size);
-	vertex_buffer = gen7_fill_vertex_buffer_data(batch, src,
-						     src_x, src_y,
-						     dst_x, dst_y,
+	intel_bb_ptr_set(ibb, BATCH_STATE_SPLIT);
+
+	ps_binding_table  = gen8_bind_surfaces(ibb, src, dst);
+	ps_sampler_state  = gen8_create_sampler(ibb);
+	ps_kernel_off = gen8_fill_ps(ibb, ps_kernel, ps_kernel_size);
+	vertex_buffer = gen7_fill_vertex_buffer_data(ibb, src, src_x, src_y,
+						     dst, dst_x, dst_y,
 						     width, height);
-	cc.cc_state = gen6_create_cc_state(batch);
-	cc.blend_state = gen8_create_blend_state(batch);
-	viewport.cc_state = gen6_create_cc_viewport(batch);
-	viewport.sf_clip_state = gen7_create_sf_clip_viewport(batch);
-	scissor_state = gen6_create_scissor_rect(batch);
-	/* TODO: theree is other state which isn't setup */
+	cc.cc_state = gen6_create_cc_state(ibb);
+	cc.blend_state = gen8_create_blend_state(ibb);
+	viewport.cc_state = gen6_create_cc_viewport(ibb);
+	viewport.sf_clip_state = gen7_create_sf_clip_viewport(ibb);
+	scissor_state = gen6_create_scissor_rect(ibb);
+	aux_pgtable_state = gen12_create_aux_pgtable_state(ibb, aux_pgtable_buf);
 
-	assert(batch->ptr < &batch->buffer[4095]);
+	/* TODO: there is other state which isn't setup */
+	pxp_scratch_offset = intel_bb_offset(ibb);
+	intel_bb_ptr_set(ibb, 0);
 
-	batch->ptr = batch->buffer;
+	if (intel_bb_pxp_enabled(ibb))
+		gen12_emit_pxp_state(ibb, true, pxp_scratch_offset);
 
 	/* Start emitting the commands. The order roughly follows the mesa blorp
 	 * order */
-	OUT_BATCH(G4X_PIPELINE_SELECT | PIPELINE_SELECT_3D |
-				GEN9_PIPELINE_SELECTION_MASK);
+	intel_bb_out(ibb, G4X_PIPELINE_SELECT | PIPELINE_SELECT_3D |
+		     GEN9_PIPELINE_SELECTION_MASK);
 
-	gen8_emit_sip(batch);
+	gen12_emit_aux_pgtable_state(ibb, aux_pgtable_state, true);
 
-	gen7_emit_push_constants(batch);
+	if (fast_clear || dst->cc.disable) {
+		for (int i = 0; i < 4; i++) {
+			intel_bb_out(ibb, MI_STORE_DWORD_IMM_GEN4);
+			intel_bb_emit_reloc(ibb, dst->handle,
+					    I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER,
+                                            dst->cc.offset + i*sizeof(float),
+					    dst->addr.offset);
+			if (fast_clear) {
+				intel_bb_out(ibb, *(uint32_t*)&clear_color[i]);
+			} else {
+				/*
+				 * Emit NaNs so it'll never match and thus prevent TGL/DG1
+				 * from doing "Fast clear optimization (FCV)" tricks.
+				 */
+				intel_bb_out(ibb, 0xffffffff);
+			}
+		}
+       }
 
-	gen9_emit_state_base_address(batch);
 
-	OUT_BATCH(GEN7_3DSTATE_VIEWPORT_STATE_POINTERS_CC);
-	OUT_BATCH(viewport.cc_state);
-	OUT_BATCH(GEN8_3DSTATE_VIEWPORT_STATE_POINTERS_SF_CLIP);
-	OUT_BATCH(viewport.sf_clip_state);
+	gen8_emit_sip(ibb);
 
-	gen7_emit_urb(batch);
+	gen7_emit_push_constants(ibb);
 
-	gen8_emit_cc(batch);
+	gen9_emit_state_base_address(ibb);
 
-	gen8_emit_multisample(batch);
+	if (HAS_4TILE(ibb->devid) || intel_gen(ibb->devid) > 12) {
+		intel_bb_out(ibb, GEN4_3DSTATE_BINDING_TABLE_POOL_ALLOC | 2);
+		intel_bb_emit_reloc(ibb, ibb->handle,
+				    I915_GEM_DOMAIN_RENDER | I915_GEM_DOMAIN_INSTRUCTION, 0,
+				    0, ibb->batch_offset);
+		intel_bb_out(ibb, 1 << 12);
+	}
 
-	gen8_emit_null_state(batch);
+	intel_bb_out(ibb, GEN7_3DSTATE_VIEWPORT_STATE_POINTERS_CC);
+	intel_bb_out(ibb, viewport.cc_state);
+	intel_bb_out(ibb, GEN8_3DSTATE_VIEWPORT_STATE_POINTERS_SF_CLIP);
+	intel_bb_out(ibb, viewport.sf_clip_state);
 
-	OUT_BATCH(GEN7_3DSTATE_STREAMOUT | (5 - 2));
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
-	OUT_BATCH(0);
+	gen7_emit_urb(ibb);
 
-	gen7_emit_clip(batch);
+	gen8_emit_cc(ibb);
 
-	gen8_emit_sf(batch);
+	gen8_emit_multisample(ibb);
 
-	gen8_emit_ps(batch, ps_kernel_off);
+	gen8_emit_null_state(ibb);
 
-	OUT_BATCH(GEN7_3DSTATE_BINDING_TABLE_POINTERS_PS);
-	OUT_BATCH(ps_binding_table);
+	intel_bb_out(ibb, GEN7_3DSTATE_STREAMOUT | (5 - 2));
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
+	intel_bb_out(ibb, 0);
 
-	OUT_BATCH(GEN7_3DSTATE_SAMPLER_STATE_POINTERS_PS);
-	OUT_BATCH(ps_sampler_state);
+	gen7_emit_clip(ibb);
 
-	OUT_BATCH(GEN8_3DSTATE_SCISSOR_STATE_POINTERS);
-	OUT_BATCH(scissor_state);
+	gen8_emit_sf(ibb);
 
-	gen9_emit_depth(batch);
+	gen8_emit_ps(ibb, ps_kernel_off, fast_clear);
 
-	gen7_emit_clear(batch);
+	intel_bb_out(ibb, GEN7_3DSTATE_BINDING_TABLE_POINTERS_PS);
+	intel_bb_out(ibb, ps_binding_table);
 
-	gen6_emit_drawing_rectangle(batch, dst);
+	intel_bb_out(ibb, GEN7_3DSTATE_SAMPLER_STATE_POINTERS_PS);
+	intel_bb_out(ibb, ps_sampler_state);
 
-	gen7_emit_vertex_buffer(batch, vertex_buffer);
-	gen6_emit_vertex_elements(batch);
+	intel_bb_out(ibb, GEN8_3DSTATE_SCISSOR_STATE_POINTERS);
+	intel_bb_out(ibb, scissor_state);
 
-	gen8_emit_vf_topology(batch);
-	gen8_emit_primitive(batch, vertex_buffer);
+	gen9_emit_depth(ibb);
 
-	OUT_BATCH(MI_BATCH_BUFFER_END);
+	gen7_emit_clear(ibb);
 
-	batch_end = intel_batchbuffer_align(batch, 8);
-	assert(batch_end < BATCH_STATE_SPLIT);
-	annotation_add_batch(&aub_annotations, batch_end);
+	gen6_emit_drawing_rectangle(ibb, dst);
 
-	dump_batch(batch);
+	gen7_emit_vertex_buffer(ibb, vertex_buffer);
+	gen6_emit_vertex_elements(ibb);
 
-	annotation_flush(&aub_annotations, batch);
+	gen8_emit_vf_topology(ibb);
+	gen8_emit_primitive(ibb, vertex_buffer);
 
-	gen6_render_flush(batch, context, batch_end);
-	intel_batchbuffer_reset(batch);
+	if (intel_bb_pxp_enabled(ibb))
+		gen12_emit_pxp_state(ibb, false, pxp_scratch_offset);
+
+	intel_bb_emit_bbe(ibb);
+	intel_bb_exec(ibb, intel_bb_offset(ibb),
+		      I915_EXEC_RENDER | I915_EXEC_NO_RELOC, false);
+	dump_batch(ibb);
+	intel_bb_reset(ibb, false);
 }
 
-void gen9_render_copyfunc(struct intel_batchbuffer *batch,
-			  drm_intel_context *context,
-			  const struct igt_buf *src, unsigned src_x, unsigned src_y,
-			  unsigned width, unsigned height,
-			  const struct igt_buf *dst, unsigned dst_x, unsigned dst_y)
+void gen9_render_copyfunc(struct intel_bb *ibb,
+			  struct intel_buf *src,
+			  unsigned int src_x, unsigned int src_y,
+			  unsigned int width, unsigned int height,
+			  struct intel_buf *dst,
+			  unsigned int dst_x, unsigned int dst_y)
 
 {
-	_gen9_render_copyfunc(batch, context, src, src_x, src_y,
-			  width, height, dst, dst_x, dst_y, ps_kernel_gen9,
-			  sizeof(ps_kernel_gen9));
+	_gen9_render_op(ibb, src, src_x, src_y,
+		        width, height, dst, dst_x, dst_y, NULL, NULL,
+		        ps_kernel_gen9, sizeof(ps_kernel_gen9));
 }
 
-void gen11_render_copyfunc(struct intel_batchbuffer *batch,
-			  drm_intel_context *context,
-			  const struct igt_buf *src, unsigned src_x, unsigned src_y,
-			  unsigned width, unsigned height,
-			  const struct igt_buf *dst, unsigned dst_x, unsigned dst_y)
-
+void gen11_render_copyfunc(struct intel_bb *ibb,
+			   struct intel_buf *src,
+			   unsigned int src_x, unsigned int src_y,
+			   unsigned int width, unsigned int height,
+			   struct intel_buf *dst,
+			   unsigned int dst_x, unsigned int dst_y)
 {
-	_gen9_render_copyfunc(batch, context, src, src_x, src_y,
-			  width, height, dst, dst_x, dst_y, ps_kernel_gen11,
-			  sizeof(ps_kernel_gen11));
+	_gen9_render_op(ibb, src, src_x, src_y,
+		        width, height, dst, dst_x, dst_y, NULL, NULL,
+		        ps_kernel_gen11, sizeof(ps_kernel_gen11));
+}
+
+void gen12_render_copyfunc(struct intel_bb *ibb,
+			   struct intel_buf *src,
+			   unsigned int src_x, unsigned int src_y,
+			   unsigned int width, unsigned int height,
+			   struct intel_buf *dst,
+			   unsigned int dst_x, unsigned int dst_y)
+{
+	struct aux_pgtable_info pgtable_info = { };
+
+	gen12_aux_pgtable_init(&pgtable_info, ibb, src, dst);
+
+	_gen9_render_op(ibb, src, src_x, src_y,
+		        width, height, dst, dst_x, dst_y,
+		        pgtable_info.pgtable_buf,
+		        NULL,
+		        gen12_render_copy,
+		        sizeof(gen12_render_copy));
+
+	gen12_aux_pgtable_cleanup(ibb, &pgtable_info);
+}
+
+void gen12p71_render_copyfunc(struct intel_bb *ibb,
+			      struct intel_buf *src,
+			      unsigned int src_x, unsigned int src_y,
+			      unsigned int width, unsigned int height,
+			      struct intel_buf *dst,
+			      unsigned int dst_x, unsigned int dst_y)
+{
+	_gen9_render_op(ibb, src, src_x, src_y,
+			width, height, dst, dst_x, dst_y,
+			NULL,
+			NULL,
+			gen12p71_render_copy,
+			sizeof(gen12p71_render_copy));
+}
+
+void xe2_render_copyfunc(struct intel_bb *ibb,
+			 struct intel_buf *src, uint32_t src_x, uint32_t src_y,
+			 uint32_t width, uint32_t height,
+			 struct intel_buf *dst, uint32_t dst_x, uint32_t dst_y)
+{
+	_gen9_render_op(ibb, src, src_x, src_y,
+			  width, height, dst, dst_x, dst_y,
+			  NULL,
+			  NULL,
+			  xe2_render_copy,
+			  sizeof(xe2_render_copy));
+}
+
+void mtl_render_copyfunc(struct intel_bb *ibb,
+			 struct intel_buf *src,
+			 unsigned int src_x, unsigned int src_y,
+			 unsigned int width, unsigned int height,
+			 struct intel_buf *dst,
+			 unsigned int dst_x, unsigned int dst_y)
+{
+	struct aux_pgtable_info pgtable_info = { };
+
+	gen12_aux_pgtable_init(&pgtable_info, ibb, src, dst);
+
+	_gen9_render_op(ibb, src, src_x, src_y,
+			width, height, dst, dst_x, dst_y,
+			pgtable_info.pgtable_buf,
+			NULL,
+			gen12p71_render_copy,
+			sizeof(gen12p71_render_copy));
+
+	gen12_aux_pgtable_cleanup(ibb, &pgtable_info);
+}
+
+void gen12_render_clearfunc(struct intel_bb *ibb,
+			    struct intel_buf *dst,
+			    unsigned int dst_x, unsigned int dst_y,
+			    unsigned int width, unsigned int height,
+			    const float clear_color[4])
+{
+	struct aux_pgtable_info pgtable_info = { };
+
+	gen12_aux_pgtable_init(&pgtable_info, ibb, NULL, dst);
+
+	_gen9_render_op(ibb, NULL, 0, 0,
+			width, height, dst, dst_x, dst_y,
+			pgtable_info.pgtable_buf,
+			clear_color,
+			gen12_render_copy,
+			sizeof(gen12_render_copy));
+	gen12_aux_pgtable_cleanup(ibb, &pgtable_info);
+}
+
+void gen12p71_render_clearfunc(struct intel_bb *ibb,
+			       struct intel_buf *dst,
+			       unsigned int dst_x, unsigned int dst_y,
+			       unsigned int width, unsigned int height,
+			       const float clear_color[4])
+{
+	_gen9_render_op(ibb, NULL, 0, 0,
+			width, height, dst, dst_x, dst_y,
+			NULL,
+			clear_color,
+			gen12p71_render_copy,
+			sizeof(gen12p71_render_copy));
+}
+
+void mtl_render_clearfunc(struct intel_bb *ibb,
+			  struct intel_buf *dst,
+			  unsigned int dst_x, unsigned int dst_y,
+			  unsigned int width, unsigned int height,
+			  const float clear_color[4])
+{
+	struct aux_pgtable_info pgtable_info = { };
+
+	gen12_aux_pgtable_init(&pgtable_info, ibb, NULL, dst);
+
+	_gen9_render_op(ibb, NULL, 0, 0,
+			width, height, dst, dst_x, dst_y,
+			pgtable_info.pgtable_buf,
+			clear_color,
+			gen12p71_render_copy,
+			sizeof(gen12p71_render_copy));
+	gen12_aux_pgtable_cleanup(ibb, &pgtable_info);
 }

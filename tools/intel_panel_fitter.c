@@ -72,12 +72,12 @@ struct pipe_info {
 	bool enabled;
 	bool pf_enabled;
 	uint32_t interlace_mode;
-	uint32_t tot_width;  /* htotal */
-	uint32_t tot_height; /* vtotal */
-	uint32_t src_width;  /* pipesrc.x */
-	uint32_t src_height; /* pipesrc.y */
-	uint32_t dst_width;  /* pf_win_sz.x */
-	uint32_t dst_height; /* pf_win_sz.y */
+	int tot_width;  /* htotal */
+	int tot_height; /* vtotal */
+	int src_width;  /* pipesrc.x */
+	int src_height; /* pipesrc.y */
+	int dst_width;  /* pf_win_sz.x */
+	int dst_height; /* pf_win_sz.y */
 };
 
 static void read_pipe_info(int intel_pipe, struct pipe_info *info)
@@ -155,7 +155,7 @@ static void dump_info(void)
 static int change_screen_size(int intel_pipe, int x, int y)
 {
 	struct pipe_info info;
-	uint32_t dst_width, dst_height, pos_x, pos_y;
+	int dst_width, dst_height, pos_x, pos_y;
 	uint32_t ctrl1_val;
 	uint32_t win_pos_val;
 	uint32_t win_sz_val;
@@ -273,6 +273,7 @@ int main (int argc, char *argv[])
 	bool do_disable = false, do_dump = false, do_usage = false;
 	struct pci_device *pci_dev;
 	uint32_t devid;
+	struct intel_mmio_data mmio_data;
 
 	printf("WARNING:\n"
 	       "This tool is a workaround for people that don't have a Kernel "
@@ -280,7 +281,7 @@ int main (int argc, char *argv[])
 	       "solution that may or may not work. Use it at your own risk.\n");
 
 	pci_dev = intel_get_pci_device();
-	intel_register_access_init(pci_dev, 0, -1);
+	intel_register_access_init(&mmio_data, pci_dev, 0);
 	devid = pci_dev->device_id;
 
 	if (!HAS_PCH_SPLIT(devid)) {
@@ -342,6 +343,6 @@ int main (int argc, char *argv[])
 	}
 
 out:
-	intel_register_access_fini();
+	intel_register_access_fini(&mmio_data);
 	return ret;
 }

@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2020, The Linux Foundation. All rights reserved.
  * Copyright © 2013,2014 Intel Corporation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -31,6 +32,7 @@
 #include <cairo.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <drm_fourcc.h>
 #include <xf86drmMode.h>
 
@@ -39,15 +41,8 @@
 #include "igt_color_encoding.h"
 #include "igt_debugfs.h"
 
-#if !defined(ANDROID)
-#define USE_AMD
-#define USE_INTEL
-#define USE_VC4
-#endif
-
-#ifdef __cplusplus
-extern "C" {
-#endif
+struct buf_ops;
+typedef struct _igt_crc igt_crc_t;
 
 /*
  * Internal format to denote a buffer compatible with pixman's
@@ -58,6 +53,9 @@ extern "C" {
 #define IGT_FORMAT_FMT "%c%c%c%c(0x%08x)"
 #define IGT_FORMAT_ARGS(f) ((f) >> 0) & 0xff, ((f) >> 8) & 0xff, \
 		((f) >> 16) & 0xff, ((f) >> 24) & 0xff, (f)
+
+#define IGT_MODIFIER_FMT "%s(0x%" PRIx64 ")"
+#define IGT_MODIFIER_ARGS(m) igt_fb_modifier_name(m), (m)
 
 /**
  * igt_fb_t:
@@ -78,6 +76,7 @@ extern "C" {
  * @plane_bpp: The bpp for each plane.
  * @plane_width: The width for each plane.
  * @plane_height: The height for each plane.
+ * @driver_priv: Private driver-specific data, if any
  *
  * Tracking structure for KMS framebuffer objects.
  */
@@ -101,6 +100,7 @@ typedef struct igt_fb {
 	unsigned int plane_bpp[4];
 	unsigned int plane_width[4];
 	unsigned int plane_height[4];
+	void *driver_priv;
 } igt_fb_t;
 
 /**
@@ -125,8 +125,7 @@ enum igt_text_align {
 
 void igt_get_fb_tile_size(int fd, uint64_t modifier, int fb_bpp,
 			  unsigned *width_ret, unsigned *height_ret);
-void igt_calc_fb_size(int fd, int width, int height, uint32_t format, uint64_t modifier,
-		      uint64_t *size_ret, unsigned *stride_ret);
+void igt_calc_fb_size(struct igt_fb *fb);
 void igt_init_fb(struct igt_fb *fb, int fd, int width, int height,
 		 uint32_t drm_format, uint64_t modifier,
 		 enum igt_color_encoding color_encoding,
@@ -138,6 +137,8 @@ igt_create_fb_with_bo_size(int fd, int width, int height,
 			   enum igt_color_range color_range,
 			   struct igt_fb *fb, uint64_t bo_size,
 			   unsigned bo_stride);
+struct intel_buf *igt_fb_create_intel_buf(int fd, struct buf_ops *bops,
+					  const struct igt_fb *fb, const char *name);
 unsigned int igt_create_fb(int fd, int width, int height, uint32_t format,
 			   uint64_t modifier, struct igt_fb *fb);
 unsigned int igt_create_color_fb(int fd, int width, int height,
@@ -180,13 +181,24 @@ void igt_fb_calc_crc(struct igt_fb *fb, igt_crc_t *crc);
 uint64_t igt_fb_mod_to_tiling(uint64_t modifier);
 uint64_t igt_fb_tiling_to_mod(uint64_t tiling);
 
+bool igt_fb_is_ccs_modifier(uint64_t modifier);
+bool igt_fb_is_gen12_rc_ccs_cc_modifier(uint64_t modifier);
+bool igt_fb_is_gen12_mc_ccs_modifier(uint64_t modifier);
+bool igt_fb_is_ccs_plane(const struct igt_fb *fb, int plane);
+bool igt_fb_is_gen12_ccs_cc_plane(const struct igt_fb *fb, int plane);
+int igt_fb_ccs_to_main_plane(const struct igt_fb *fb, int ccs_plane);
+void igt_xe2_blit_with_dst_pat(const struct igt_fb *dst_fb,
+			       const struct igt_fb *src_fb,
+			       uint8_t dst_pat_index);
+
 /* cairo-based painting */
 cairo_surface_t *igt_get_cairo_surface(int fd, struct igt_fb *fb);
 cairo_surface_t *igt_cairo_image_surface_create_from_png(const char *filename);
 cairo_t *igt_get_cairo_ctx(int fd, struct igt_fb *fb);
-void igt_put_cairo_ctx(int fd, struct igt_fb *fb, cairo_t *cr);
+void igt_put_cairo_ctx(cairo_t *cr);
 void igt_paint_color(cairo_t *cr, int x, int y, int w, int h,
 			 double r, double g, double b);
+void igt_paint_color_rand(cairo_t *cr, int x, int y, int w, int h);
 void igt_paint_color_alpha(cairo_t *cr, int x, int y, int w, int h,
 			       double r, double g, double b, double a);
 void igt_paint_color_gradient(cairo_t *cr, int x, int y, int w, int h,
@@ -207,14 +219,22 @@ uint32_t igt_drm_format_to_bpp(uint32_t drm_format);
 const char *igt_format_str(uint32_t drm_format);
 bool igt_fb_supported_format(uint32_t drm_format);
 bool igt_format_is_yuv(uint32_t drm_format);
+bool igt_format_is_yuv_semiplanar(uint32_t format);
+
+uint32_t igt_drm_format_str_to_format(const char *drm_format);
+
 bool igt_format_is_fp16(uint32_t drm_format);
 int igt_format_plane_bpp(uint32_t drm_format, int plane);
 void igt_format_array_fill(uint32_t **formats_array, unsigned int *count,
 			   bool allow_yuv);
+int igt_fill_cts_color_ramp_framebuffer(uint32_t *pixmap, uint32_t video_width,
+		uint32_t video_height, uint32_t bitdepth, int alpha);
+int igt_fill_cts_color_square_framebuffer(uint32_t *pixmap,
+		uint32_t video_width, uint32_t video_height,
+		uint32_t bitdepth, int alpha);
 
-#ifdef __cplusplus
-}
-#endif
+int igt_fb_get_fnv1a_crc(struct igt_fb *fb, igt_crc_t *crc);
+const char *igt_fb_modifier_name(uint64_t modifier);
 
 #endif /* __IGT_FB_H__ */
 

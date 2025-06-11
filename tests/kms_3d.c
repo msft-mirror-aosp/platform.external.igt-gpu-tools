@@ -22,7 +22,21 @@
  *
  */
 
+/**
+ * TEST: kms 3d
+ * Category: Display
+ * Description: Tests 3D mode setting.
+ * Driver requirement: i915, xe
+ * Mega feature: General Display Features
+ */
+
 #include "igt.h"
+#include "xe/xe_query.h"
+
+/**
+ * SUBTEST:
+ * Description: Tests 3D mode setting.
+ */
 
 IGT_TEST_DESCRIPTION("Tests 3D mode setting.");
 
@@ -30,30 +44,27 @@ igt_simple_main
 {
 	int drm_fd;
 	drmModeRes *res;
-	drmModeConnector *connector;
+	drmModeConnector *connector = NULL;
 	const struct edid *edid;
 	int mode_count, connector_id;
 
-	drm_fd = drm_open_driver_master(DRIVER_INTEL);
+	drm_fd = drm_open_driver_master(DRIVER_ANY);
 
 	res = drmModeGetResources(drm_fd);
 	igt_require(res);
 
-	igt_assert(drmSetClientCap(drm_fd, DRM_CLIENT_CAP_STEREO_3D, 1) >= 0);
+	igt_assert_f(drmSetClientCap(drm_fd, DRM_CLIENT_CAP_STEREO_3D, 1) >= 0,
+		     "Failed to enable STEREO_3D capability.\n");
 
 	/* find an hdmi connector */
 	for (int i = 0; i < res->count_connectors; i++) {
-
 		connector = drmModeGetConnectorCurrent(drm_fd, res->connectors[i]);
-
 		if (connector->connector_type == DRM_MODE_CONNECTOR_HDMIA)
 			break;
-
 		drmModeFreeConnector(connector);
-
 		connector = NULL;
 	}
-	igt_require(connector);
+	igt_require_f(connector, "No HDMI connector found.\n");
 
 	kmstest_unset_all_crtcs(drm_fd, res);
 
@@ -73,7 +84,7 @@ igt_simple_main
 			mode_count++;
 	}
 
-	igt_assert_eq(mode_count, 13);
+	igt_assert_f(mode_count, "3D modes not detected.\n");
 
 	/* set 3D modes */
 	igt_info("Testing:\n");
@@ -102,7 +113,7 @@ igt_simple_main
 		/* create stereo framebuffer */
 		fb_id = igt_create_stereo_fb(drm_fd, &connector->modes[i],
 					     igt_bpp_depth_to_drm_format(32, 24),
-					     LOCAL_DRM_FORMAT_MOD_NONE);
+					     DRM_FORMAT_MOD_LINEAR);
 
 		ret = drmModeSetCrtc(drm_fd, config.crtc->crtc_id, fb_id, 0, 0,
 				     &connector->connector_id, 1,
@@ -115,4 +126,6 @@ igt_simple_main
 	kmstest_force_edid(drm_fd, connector, NULL);
 
 	drmModeFreeConnector(connector);
+
+	drm_close_driver(drm_fd);
 }

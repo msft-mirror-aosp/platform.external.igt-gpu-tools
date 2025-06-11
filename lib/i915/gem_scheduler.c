@@ -29,8 +29,7 @@
 #include "ioctl_wrappers.h"
 
 #include "i915/gem_scheduler.h"
-
-#define LOCAL_I915_PARAM_HAS_SCHEDULER		41
+#include "i915/gem_submission.h"
 
 /**
  * SECTION:gem_scheduler
@@ -55,7 +54,7 @@ unsigned gem_scheduler_capability(int fd)
 		struct drm_i915_getparam gp;
 
 		memset(&gp, 0, sizeof(gp));
-		gp.param = LOCAL_I915_PARAM_HAS_SCHEDULER;
+		gp.param = I915_PARAM_HAS_SCHEDULER;
 		gp.value = &caps;
 
 		caps = 0;
@@ -92,6 +91,19 @@ bool gem_scheduler_has_ctx_priority(int fd)
 }
 
 /**
+ * gem_scheduler_has_static_priority:
+ * @fd: open i915 drm file descriptor
+ *
+ * Feature test macro to query whether the driver supports priority assigned
+ * from user space are statically mapping into 3 buckets.
+ */
+bool gem_scheduler_has_static_priority(int fd)
+{
+	return gem_scheduler_capability(fd) &
+		I915_SCHEDULER_CAP_STATIC_PRIORITY_MAP;
+}
+
+/**
  * gem_scheduler_has_preemption:
  * @fd: open i915 drm file descriptor
  *
@@ -119,6 +131,37 @@ bool gem_scheduler_has_semaphores(int fd)
 }
 
 /**
+ * gem_scheduler_has_engine_busy_stats:
+ * @fd: open i915 drm file descriptor
+ *
+ * Feature test macro to query whether the driver supports reporting accurate
+ * per-engine utilisation.
+ */
+bool gem_scheduler_has_engine_busy_stats(int fd)
+{
+	return gem_scheduler_capability(fd) &
+		I915_SCHEDULER_CAP_ENGINE_BUSY_STATS;
+}
+
+/**
+ * gem_scheduler_has_timeslicing:
+ * @fd: open i915 drm file descriptor
+ *
+ * Feature test macro to query whether the driver supports using HW preemption
+ * to implement timeslicing of userspace batches. This allows userspace to
+ * implement micro-level scheduling within their own batches.
+ */
+bool gem_scheduler_has_timeslicing(int fd)
+{
+	return (((gem_scheduler_capability(fd) &
+	        (I915_SCHEDULER_CAP_PREEMPTION |
+		 I915_SCHEDULER_CAP_SEMAPHORES)) ==
+		(I915_SCHEDULER_CAP_PREEMPTION |
+		I915_SCHEDULER_CAP_SEMAPHORES))
+		|| gem_using_guc_submission(fd));
+}
+
+/**
  * gem_scheduler_print_capability:
  * @fd: open i915 drm file descriptor
  *
@@ -138,4 +181,8 @@ void gem_scheduler_print_capability(int fd)
 		igt_info(" - With preemption enabled\n");
 	if (caps & I915_SCHEDULER_CAP_SEMAPHORES)
 		igt_info(" - With HW semaphores enabled\n");
+	if (caps & I915_SCHEDULER_CAP_ENGINE_BUSY_STATS)
+		igt_info(" - With engine busy statistics\n");
+	if (gem_scheduler_has_timeslicing(fd))
+		igt_info(" - With timeslicing enabled\n");
 }

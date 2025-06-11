@@ -27,7 +27,9 @@
 
 #include <stdint.h>
 
+#ifdef __linux__
 #include <linux/perf_event.h>
+#endif
 
 #include "igt_gt.h"
 
@@ -51,10 +53,25 @@ perf_event_open(struct perf_event_attr *attr,
     return syscall(__NR_perf_event_open, attr, pid, cpu, group_fd, flags);
 }
 
-uint64_t i915_type_id(void);
-int perf_i915_open(uint64_t config);
-int perf_i915_open_group(uint64_t config, int group);
+uint64_t igt_perf_type_id(const char *device);
+int igt_perf_events_dir(int i915);
 int igt_perf_open(uint64_t type, uint64_t config);
 int igt_perf_open_group(uint64_t type, uint64_t config, int group);
+
+const char *i915_perf_device(int i915, char *buf, int buflen);
+uint64_t i915_perf_type_id(int i915);
+
+const char *xe_perf_device(int xe, char *buf, int buflen);
+uint64_t xe_perf_type_id(int);
+
+int perf_igfx_open(uint64_t config);
+int perf_igfx_open_group(uint64_t config, int group);
+
+int perf_i915_open(int i915, uint64_t config);
+int perf_i915_open_group(int i915, uint64_t config, int group);
+
+int perf_xe_open(int xe, uint64_t config);
+int perf_event_config(const char *device, const char *event, uint64_t *config);
+int perf_event_format(const char *device, const char *param, uint32_t *shift);
 
 #endif /* I915_PERF_H */

@@ -22,6 +22,14 @@
  *
  */
 
+/**
+ * TEST: kms flip event leak
+ * Category: Display
+ * Description: Test to validate flip event leak
+ * Driver requirement: i915, xe
+ * Mega feature: General Display Features
+ */
+
 #include "igt.h"
 #include <errno.h>
 #include <stdbool.h>
@@ -29,6 +37,15 @@
 #include <string.h>
 
 #include "igt_device.h"
+#include "xe/xe_query.h"
+
+/**
+ * SUBTEST: basic
+ * Description: This test tries to provoke the kernel into leaking a pending
+ *              page flip event when the fd is closed before the flip has
+ *              completed. The test itself won't fail even if the kernel leaks
+ *              the event, but the resulting dmesg WARN will indicate a failure.
+ */
 
 typedef struct {
 	int drm_fd;
@@ -48,16 +65,13 @@ static void test(data_t *data, enum pipe pipe, igt_output_t *output)
 	struct igt_fb fb[2];
 	int fd, ret;
 
-	/* select the pipe we want to use */
-	igt_output_set_pipe(output, pipe);
-
 	primary = igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY);
 	mode = igt_output_get_mode(output);
 
-	igt_create_color_fb(data->drm_fd, mode->hdisplay, mode->vdisplay,
-			    DRM_FORMAT_XRGB8888,
-			    LOCAL_DRM_FORMAT_MOD_NONE,
-			    0.0, 0.0, 0.0, &fb[0]);
+	igt_create_fb(data->drm_fd, mode->hdisplay, mode->vdisplay,
+		      DRM_FORMAT_XRGB8888,
+		      DRM_FORMAT_MOD_LINEAR,
+		      &fb[0]);
 
 	igt_plane_set_fb(primary, &fb[0]);
 	igt_display_commit2(&data->display, COMMIT_LEGACY);
@@ -68,16 +82,16 @@ static void test(data_t *data, enum pipe pipe, igt_output_t *output)
 
 	igt_device_set_master(fd);
 
-	igt_create_color_fb(fd, mode->hdisplay, mode->vdisplay,
-			    DRM_FORMAT_XRGB8888,
-			    LOCAL_DRM_FORMAT_MOD_NONE,
-			    0.0, 0.0, 0.0, &fb[1]);
+	igt_create_fb(fd, mode->hdisplay, mode->vdisplay,
+		      DRM_FORMAT_XRGB8888,
+		      DRM_FORMAT_MOD_LINEAR,
+		      &fb[1]);
 	ret = drmModePageFlip(fd, output->config.crtc->crtc_id,
 			      fb[1].fb_id, DRM_MODE_PAGE_FLIP_EVENT,
 			      data);
 	igt_assert_eq(ret, 0);
 
-	ret = close(fd);
+	ret = drm_close_driver(fd);
 	igt_assert_eq(ret, 0);
 
 	igt_device_set_master(data->drm_fd);
@@ -89,26 +103,36 @@ static void test(data_t *data, enum pipe pipe, igt_output_t *output)
 	igt_remove_fb(data->drm_fd, &fb[0]);
 }
 
-igt_simple_main
+igt_main
 {
 	data_t data = {};
 	igt_output_t *output;
-	int valid_tests = 0;
 	enum pipe pipe;
 
-	igt_skip_on_simulation();
+	igt_fixture {
+		data.drm_fd = drm_open_driver_master(DRIVER_ANY);
+		kmstest_set_vt_graphics_mode();
 
-	data.drm_fd = drm_open_driver_master(DRIVER_ANY);
-	kmstest_set_vt_graphics_mode();
-
-	igt_display_require(&data.display, data.drm_fd);
-
-	for_each_pipe_with_valid_output(&data.display, pipe, output) {
-		test(&data, pipe, output);
-		valid_tests++;
+		igt_display_require(&data.display, data.drm_fd);
+		igt_display_require_output(&data.display);
 	}
 
-	igt_require_f(valid_tests, "no valid crtc/connector combinations found\n");
+	igt_subtest_with_dynamic("basic") {
+		for_each_pipe_with_valid_output(&data.display, pipe, output) {
+			igt_display_reset(&data.display);
 
-	igt_display_fini(&data.display);
+			igt_output_set_pipe(output, pipe);
+			if (!intel_pipe_output_combo_valid(&data.display))
+				continue;
+
+			igt_dynamic_f("pipe-%s-%s", kmstest_pipe_name(pipe), igt_output_name(output)) {
+				test(&data, pipe, output);
+			}
+		}
+	}
+
+	igt_fixture {
+		igt_display_fini(&data.display);
+		drm_close_driver(data.drm_fd);
+	}
 }

@@ -25,10 +25,28 @@
 #define __INTEL_REG_SPEC_H__
 
 enum port_addr {
+	/* Negative port numbers are not real sideband ports. */
+	PORT_MMIO_32 = -127,
+	PORT_MMIO_16,
+	PORT_MMIO_8,
+
+	PORT_MCHBAR_32,
+	PORT_MCHBAR_16,
+	PORT_MCHBAR_8,
+
+	PORT_MMIO_VGA_AR,
+	PORT_MMIO_VGA_SR,
+	PORT_MMIO_VGA_GR,
+	PORT_MMIO_VGA_CR,
+
+	PORT_PORTIO,
+
+	PORT_PORTIO_VGA_AR,
+	PORT_PORTIO_VGA_SR,
+	PORT_PORTIO_VGA_GR,
+	PORT_PORTIO_VGA_CR,
+
 	PORT_NONE = 0,
-	PORT_MMIO = -1,
-	PORT_PORTIO_VGA = -2,	/* see vga reg read/write */
-	PORT_MMIO_VGA = -3,	/* see vga reg read/write */
 
 	/* vlv */
 	PORT_BUNIT = 0x03,

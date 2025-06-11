@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2020, The Linux Foundation. All rights reserved.
  * Copyright © 2013 Intel Corporation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -35,7 +36,6 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <string.h>
-#include <strings.h>
 #include <stdlib.h>
 #ifdef HAVE_LINUX_KD_H
 #include <linux/kd.h>
@@ -43,17 +43,16 @@
 #include <sys/kd.h>
 #endif
 
-#if !defined(ANDROID)
 #include <libudev.h>
-#endif
-
 #include <poll.h>
 #include <errno.h>
 #include <time.h>
+#include <ctype.h>
 
 #include <i915_drm.h>
 
 #include "drmtest.h"
+#include "igt_core.h"
 #include "igt_kms.h"
 #include "igt_aux.h"
 #include "igt_edid.h"
@@ -62,6 +61,9 @@
 #include "igt_device.h"
 #include "igt_sysfs.h"
 #include "sw_sync.h"
+#ifdef HAVE_CHAMELIUM
+#include "igt_chamelium.h"
+#endif
 
 /**
  * SECTION:igt_kms
@@ -88,8 +90,21 @@
 
 /* list of connectors that need resetting on exit */
 #define MAX_CONNECTORS 32
-static char *forced_connectors[MAX_CONNECTORS + 1];
-static int forced_connectors_device[MAX_CONNECTORS + 1];
+#define MAX_EDID 2
+#define DISPLAY_TILE_BLOCK 0x12
+
+typedef bool (*igt_connector_attr_set)(int dir, const char *attr, const char *value);
+
+struct igt_connector_attr {
+	uint32_t connector_type;
+	uint32_t connector_type_id;
+	int idx;
+	int dir;
+	igt_connector_attr_set set;
+	const char *attr, *value, *reset_value;
+};
+
+static struct igt_connector_attr connector_attrs[MAX_CONNECTORS];
 
 /**
  * igt_kms_get_base_edid:
@@ -102,7 +117,7 @@ static int forced_connectors_device[MAX_CONNECTORS + 1];
  *  - 800x600 60Hz
  *  - 640x480 60Hz
  *
- * Returns: a basic edid block
+ * Returns: A basic edid block
  */
 const struct edid *igt_kms_get_base_edid(void)
 {
@@ -127,6 +142,84 @@ const struct edid *igt_kms_get_base_edid(void)
 }
 
 /**
+ * igt_kms_get_full_edid:
+ *
+ * Get the full edid block, which includes the following modes:
+ *
+ *  - 2288x1287 144Hz
+ *  - 1920x1080 60Hz
+ *  - 1280x720 60Hz
+ *  - 1024x768 60Hz
+ *  - 800x600 60Hz
+ *  - 640x480 60Hz
+ *
+ * Returns: A full edid block
+ */
+const struct edid *igt_kms_get_full_edid(void)
+{
+	static struct edid edid;
+	drmModeModeInfo mode = {};
+
+	mode.clock = 148500;
+	mode.hdisplay = 2288;
+	mode.hsync_start = 2008;
+	mode.hsync_end = 2052;
+	mode.htotal = 2200;
+	mode.vdisplay = 1287;
+	mode.vsync_start = 1084;
+	mode.vsync_end = 1089;
+	mode.vtotal = 1125;
+	mode.vrefresh = 144;
+	edid_init_with_mode(&edid, &mode);
+
+	std_timing_set(&edid.standard_timings[0], 256, 60, STD_TIMING_16_10);
+	std_timing_set(&edid.standard_timings[1], 510, 69, STD_TIMING_4_3);
+	std_timing_set(&edid.standard_timings[2], 764, 78, STD_TIMING_5_4);
+	std_timing_set(&edid.standard_timings[3], 1018, 87, STD_TIMING_16_9);
+	std_timing_set(&edid.standard_timings[4], 1526, 96, STD_TIMING_16_10);
+	std_timing_set(&edid.standard_timings[5], 1780, 105, STD_TIMING_4_3);
+	std_timing_set(&edid.standard_timings[6], 2034, 114, STD_TIMING_5_4);
+	std_timing_set(&edid.standard_timings[7], 2288, 123, STD_TIMING_16_9);
+
+	edid_update_checksum(&edid);
+	return &edid;
+}
+
+/**
+ * igt_kms_get_base_tile_edid:
+ *
+ * Get the base tile edid block, which includes the following modes:
+ *
+ *  - 1920x2160 60Hz
+ *  - 1920x1080 60Hz
+ *  - 1280x720 60Hz
+ *  - 1024x768 60Hz
+ *  - 800x600 60Hz
+ *  - 640x480 60Hz
+ *
+ * Returns: A basic tile edid block
+ */
+const struct edid *igt_kms_get_base_tile_edid(void)
+{
+	static struct edid edid;
+	drmModeModeInfo mode = {};
+
+	mode.clock = 277250;
+	mode.hdisplay = 1920;
+	mode.hsync_start = 1968;
+	mode.hsync_end = 2000;
+	mode.htotal = 2080;
+	mode.vdisplay = 2160;
+	mode.vsync_start = 2163;
+	mode.vsync_end = 2173;
+	mode.vtotal = 2222;
+	mode.vrefresh = 60;
+	edid_init_with_mode(&edid, &mode);
+	edid_update_checksum(&edid);
+	return &edid;
+}
+
+/**
  * igt_kms_get_alt_edid:
  *
  * Get an alternate edid block, which includes the following modes:
@@ -138,7 +231,7 @@ const struct edid *igt_kms_get_base_edid(void)
  *  - 800x600 60Hz
  *  - 640x480 60Hz
  *
- * Returns: an alternate edid block
+ * Returns: An alternate edid block
  */
 const struct edid *igt_kms_get_alt_edid(void)
 {
@@ -160,6 +253,17 @@ const struct edid *igt_kms_get_alt_edid(void)
 	edid_update_checksum(&edid);
 
 	return &edid;
+}
+
+/**
+ * igt_kms_frame_time_from_vrefresh:
+ * @vrefresh: vertical refresh rate in 1/s units.
+ *
+ * Returns the frame time in nanoseconds for the given vrefresh rate.
+ */
+uint64_t igt_kms_frame_time_from_vrefresh(uint32_t vrefresh)
+{
+	return vrefresh ? (NSEC_PER_SEC / vrefresh) : 0;
 }
 
 #define AUDIO_EDID_SIZE (2 * EDID_BLOCK_SIZE)
@@ -213,6 +317,13 @@ generate_audio_edid(unsigned char raw_edid[static AUDIO_EDID_SIZE],
 	return edid;
 }
 
+/**
+ * igt_kms_get_hdmi_audio_edid:
+ *
+ * Get a basic edid block, which includes the HDMI Audio
+ *
+ * Returns: A basic HDMI Audio edid block
+ */
 const struct edid *igt_kms_get_hdmi_audio_edid(void)
 {
 	int channels;
@@ -237,6 +348,13 @@ const struct edid *igt_kms_get_hdmi_audio_edid(void)
 	return generate_audio_edid(raw_edid, true, &sad, &speaker_alloc);
 }
 
+/**
+ * igt_kms_get_dp_audio_edid:
+ *
+ * Get a basic edid block, which includes the DP Audio
+ *
+ * Returns: A basic DP Audio edid block
+ */
 const struct edid *igt_kms_get_dp_audio_edid(void)
 {
 	int channels;
@@ -261,6 +379,94 @@ const struct edid *igt_kms_get_dp_audio_edid(void)
 	return generate_audio_edid(raw_edid, false, &sad, &speaker_alloc);
 }
 
+/**
+ * igt_kms_get_tiled_edid:
+ * @htile: Target H-tile
+ * @vtile: Target V-tile
+ *
+ * Get a basic edid block, which includes tiled display
+ *
+ * Returns: A basic tiled display edid block
+ */
+struct edid **igt_kms_get_tiled_edid(uint8_t htile, uint8_t vtile)
+{
+	uint8_t top[2];
+	int edids, i;
+	static  char raw_edid[MAX_EDID][256] = { };
+	static struct edid *edid[MAX_EDID];
+
+	top[0] = 0x00;
+	top[1] = 0x00;
+	top[0] = top[0] | (htile<<4);
+	vtile = vtile & 15;
+	top[0] = top[0] | vtile;
+	top[1] = top[1] | ((htile << 2) & 192);
+	top[1] = top[1] | (vtile & 48);
+
+	edids = (htile+1) * (vtile+1);
+
+	for (i = 0; i < edids; i++)
+		edid[i] = (struct edid *) raw_edid[i];
+
+	for (i = 0; i < edids; i++) {
+
+		struct edid_ext *edid_ext;
+		struct edid_tile *edid_tile;
+
+	/* Create a new EDID from the base IGT EDID, and add an
+	 * extension that advertises tile support.
+	 */
+		memcpy(edid[i],
+		igt_kms_get_base_tile_edid(), sizeof(struct edid));
+		edid[i]->extensions_len = 1;
+		edid_ext = &edid[i]->extensions[0];
+		edid_tile = &edid_ext->data.tile;
+	/* Set 0x70 to 1st byte of extension,
+	 * so it is identified as display block
+	 */
+		edid_ext_set_displayid(edid_ext);
+	/* To identify it as a tiled display block extension */
+		edid_tile->header[0] = DISPLAY_TILE_BLOCK;
+		edid_tile->header[1] = 0x79;
+		edid_tile->header[2] = 0x00;
+		edid_tile->header[3] = 0x00;
+		edid_tile->header[4] = 0x12;
+		edid_tile->header[5] = 0x00;
+		edid_tile->header[6] = 0x16;
+	/* Tile Capabilities */
+		edid_tile->tile_cap = SCALE_TO_FIT;
+	/* Set number of htile and vtile */
+		edid_tile->topo[0] = top[0];
+		if (i == 0)
+			edid_tile->topo[1] = 0x10;
+		else if (i == 1)
+			edid_tile->topo[1] = 0x00;
+		edid_tile->topo[2] = top[1];
+	/* Set tile resolution */
+		edid_tile->tile_size[0] = 0x7f;
+		edid_tile->tile_size[1] = 0x07;
+		edid_tile->tile_size[2] = 0x6f;
+		edid_tile->tile_size[3] = 0x08;
+	/* Dimension of Bezels */
+		edid_tile->tile_pixel_bezel[0] = 0;
+		edid_tile->tile_pixel_bezel[1] = 0;
+		edid_tile->tile_pixel_bezel[2] = 0;
+		edid_tile->tile_pixel_bezel[3] = 0;
+		edid_tile->tile_pixel_bezel[4] = 0;
+	/* Manufacturer Information */
+		edid_tile->topology_id[0] = 0x44;
+		edid_tile->topology_id[1] = 0x45;
+		edid_tile->topology_id[2] = 0x4c;
+		edid_tile->topology_id[3] = 0x43;
+		edid_tile->topology_id[4] = 0x48;
+		edid_tile->topology_id[5] = 0x02;
+		edid_tile->topology_id[6] = 0x00;
+		edid_tile->topology_id[7] = 0x00;
+		edid_tile->topology_id[8] = 0x00;
+	}
+	return edid;
+}
+
 static const uint8_t edid_4k_svds[] = {
 	32 | CEA_SVD_NATIVE, /* 1080p @ 24Hz (native) */
 	5,                   /* 1080i @ 60Hz */
@@ -269,6 +475,13 @@ static const uint8_t edid_4k_svds[] = {
 	19,                  /* 720p @ 50Hz */
 };
 
+/**
+ * igt_kms_get_4k_edid:
+ *
+ * Get a basic edid block, which includes 4K resolution
+ *
+ * Returns: A basic edid block with 4K resolution
+ */
 const struct edid *igt_kms_get_4k_edid(void)
 {
 	static unsigned char raw_edid[256] = {0};
@@ -321,6 +534,13 @@ const struct edid *igt_kms_get_4k_edid(void)
 	return edid;
 }
 
+/**
+ * igt_kms_get_3d_edid:
+ *
+ * Get a basic edid block, which includes 3D mode
+ *
+ * Returns: A basic edid block with 3D mode
+ */
 const struct edid *igt_kms_get_3d_edid(void)
 {
 	static unsigned char raw_edid[256] = {0};
@@ -372,6 +592,90 @@ const struct edid *igt_kms_get_3d_edid(void)
 	return edid;
 }
 
+/* Set of Video Identification Codes advertised in the EDID */
+static const uint8_t edid_ar_svds[] = {
+	16, /* 1080p @ 60Hz, 16:9 */
+};
+
+/**
+ * igt_kms_get_aspect_ratio_edid:
+ *
+ * Gets the base edid block, which includes the following modes
+ * and different aspect ratio
+ *
+ *  - 1920x1080 60Hz
+ *  - 1280x720 60Hz
+ *  - 1024x768 60Hz
+ *  - 800x600 60Hz
+ *  - 640x480 60Hz
+ *
+ * Returns: A basic edid block with aspect ratio block
+ */
+const struct edid *igt_kms_get_aspect_ratio_edid(void)
+{
+	static unsigned char raw_edid[2 * EDID_BLOCK_SIZE] = {0};
+	struct edid *edid;
+	struct edid_ext *edid_ext;
+	struct edid_cea *edid_cea;
+	char *cea_data;
+	struct edid_cea_data_block *block;
+	size_t cea_data_size = 0, vsdb_size;
+	const struct cea_vsdb *vsdb;
+
+	edid = (struct edid *) raw_edid;
+	memcpy(edid, igt_kms_get_base_edid(), sizeof(struct edid));
+	edid->extensions_len = 1;
+	edid_ext = &edid->extensions[0];
+	edid_cea = &edid_ext->data.cea;
+	cea_data = edid_cea->data;
+
+	/* The HDMI VSDB advertises support for InfoFrames */
+	block = (struct edid_cea_data_block *) &cea_data[cea_data_size];
+	vsdb = cea_vsdb_get_hdmi_default(&vsdb_size);
+	cea_data_size += edid_cea_data_block_set_vsdb(block, vsdb,
+						      vsdb_size);
+
+	/* Short Video Descriptor */
+	block = (struct edid_cea_data_block *) &cea_data[cea_data_size];
+	cea_data_size += edid_cea_data_block_set_svd(block, edid_ar_svds,
+						     sizeof(edid_ar_svds));
+
+	assert(cea_data_size <= sizeof(edid_cea->data));
+
+	edid_ext_set_cea(edid_ext, cea_data_size, 0, 0);
+
+	edid_update_checksum(edid);
+
+	return edid;
+}
+
+/**
+ * igt_kms_get_custom_edid:
+ *
+ * @edid: enum to specify which edid block is required
+ * returns pointer to requested edid block
+ *
+ * Returns: Required edid
+ */
+const struct edid *igt_kms_get_custom_edid(enum igt_custom_edid_type edid)
+{
+	switch (edid) {
+	case IGT_CUSTOM_EDID_BASE:
+		return igt_kms_get_base_edid();
+	case IGT_CUSTOM_EDID_FULL:
+		return igt_kms_get_full_edid();
+	case IGT_CUSTOM_EDID_ALT:
+		return igt_kms_get_alt_edid();
+	case IGT_CUSTOM_EDID_HDMI_AUDIO:
+		return igt_kms_get_hdmi_audio_edid();
+	case IGT_CUSTOM_EDID_DP_AUDIO:
+		return igt_kms_get_dp_audio_edid();
+	case IGT_CUSTOM_EDID_ASPECT_RATIO:
+		return igt_kms_get_aspect_ratio_edid();
+	}
+	assert(0); /* unreachable */
+}
+
 const char * const igt_plane_prop_names[IGT_NUM_PLANE_PROPS] = {
 	[IGT_PLANE_SRC_X] = "SRC_X",
 	[IGT_PLANE_SRC_Y] = "SRC_Y",
@@ -381,6 +685,8 @@ const char * const igt_plane_prop_names[IGT_NUM_PLANE_PROPS] = {
 	[IGT_PLANE_CRTC_Y] = "CRTC_Y",
 	[IGT_PLANE_CRTC_W] = "CRTC_W",
 	[IGT_PLANE_CRTC_H] = "CRTC_H",
+	[IGT_PLANE_HOTSPOT_X] = "HOTSPOT_X",
+	[IGT_PLANE_HOTSPOT_Y] = "HOTSPOT_Y",
 	[IGT_PLANE_FB_ID] = "FB_ID",
 	[IGT_PLANE_CRTC_ID] = "CRTC_ID",
 	[IGT_PLANE_IN_FENCE_FD] = "IN_FENCE_FD",
@@ -392,10 +698,12 @@ const char * const igt_plane_prop_names[IGT_NUM_PLANE_PROPS] = {
 	[IGT_PLANE_PIXEL_BLEND_MODE] = "pixel blend mode",
 	[IGT_PLANE_ALPHA] = "alpha",
 	[IGT_PLANE_ZPOS] = "zpos",
+	[IGT_PLANE_FB_DAMAGE_CLIPS] = "FB_DAMAGE_CLIPS",
+	[IGT_PLANE_SCALING_FILTER] = "SCALING_FILTER",
+	[IGT_PLANE_SIZE_HINTS] = "SIZE_HINTS",
 };
 
 const char * const igt_crtc_prop_names[IGT_NUM_CRTC_PROPS] = {
-	[IGT_CRTC_BACKGROUND] = "background_color",
 	[IGT_CRTC_CTM] = "CTM",
 	[IGT_CRTC_GAMMA_LUT] = "GAMMA_LUT",
 	[IGT_CRTC_GAMMA_LUT_SIZE] = "GAMMA_LUT_SIZE",
@@ -405,6 +713,7 @@ const char * const igt_crtc_prop_names[IGT_NUM_CRTC_PROPS] = {
 	[IGT_CRTC_ACTIVE] = "ACTIVE",
 	[IGT_CRTC_OUT_FENCE_PTR] = "OUT_FENCE_PTR",
 	[IGT_CRTC_VRR_ENABLED] = "VRR_ENABLED",
+	[IGT_CRTC_SCALING_FILTER] = "SCALING_FILTER",
 };
 
 const char * const igt_connector_prop_names[IGT_NUM_CONNECTOR_PROPS] = {
@@ -416,10 +725,51 @@ const char * const igt_connector_prop_names[IGT_NUM_CONNECTOR_PROPS] = {
 	[IGT_CONNECTOR_VRR_CAPABLE] = "vrr_capable",
 	[IGT_CONNECTOR_HDCP_CONTENT_TYPE] = "HDCP Content Type",
 	[IGT_CONNECTOR_LINK_STATUS] = "link-status",
+	[IGT_CONNECTOR_MAX_BPC] = "max bpc",
+	[IGT_CONNECTOR_HDR_OUTPUT_METADATA] = "HDR_OUTPUT_METADATA",
+	[IGT_CONNECTOR_WRITEBACK_PIXEL_FORMATS] = "WRITEBACK_PIXEL_FORMATS",
+	[IGT_CONNECTOR_WRITEBACK_FB_ID] = "WRITEBACK_FB_ID",
+	[IGT_CONNECTOR_WRITEBACK_OUT_FENCE_PTR] = "WRITEBACK_OUT_FENCE_PTR",
+	[IGT_CONNECTOR_DITHERING_MODE] = "dithering mode",
 };
 
+const char * const igt_rotation_names[] = {
+	[0] = "rotate-0",
+	[1] = "rotate-90",
+	[2] = "rotate-180",
+	[3] = "rotate-270",
+	[4] = "reflect-x",
+	[5] = "reflect-y",
+};
+
+static unsigned int
+igt_plane_rotations(igt_display_t *display, igt_plane_t *plane,
+		    drmModePropertyPtr prop)
+{
+	unsigned int rotations = 0;
+
+	igt_assert_eq(prop->flags & DRM_MODE_PROP_LEGACY_TYPE,
+		      DRM_MODE_PROP_BITMASK);
+	igt_assert_eq(prop->count_values, prop->count_enums);
+
+	for (int i = 0; i < ARRAY_SIZE(igt_rotation_names); i++) {
+		for (int j = 0; j < prop->count_enums; j++) {
+			if (strcmp(igt_rotation_names[i], prop->enums[j].name))
+				continue;
+
+			/* various places assume the uabi uses specific bit values */
+			igt_assert_eq(prop->values[j], i);
+
+			rotations |= 1 << i;
+		}
+	}
+	igt_assert_neq(rotations, 0);
+
+	return rotations;
+}
+
 /*
- * Retrieve all the properies specified in props_name and store them into
+ * Retrieve all the properties specified in props_name and store them into
  * plane->props.
  */
 static void
@@ -446,14 +796,20 @@ igt_fill_plane_props(igt_display_t *display, igt_plane_t *plane,
 			break;
 		}
 
+		if (strcmp(prop->name, "rotation") == 0)
+			plane->rotations = igt_plane_rotations(display, plane, prop);
+
 		drmModeFreeProperty(prop);
 	}
+
+	if (!plane->rotations)
+		plane->rotations = IGT_ROTATION_0;
 
 	drmModeFreeObjectProperties(props);
 }
 
 /*
- * Retrieve all the properies specified in props_name and store them into
+ * Retrieve all the properties specified in props_name and store them into
  * config->atomic_props_crtc and config->atomic_props_connector.
  */
 static void
@@ -516,15 +872,61 @@ igt_fill_pipe_props(igt_display_t *display, igt_pipe_t *pipe,
 	drmModeFreeObjectProperties(props);
 }
 
+static igt_plane_t *igt_get_assigned_primary(igt_output_t *output, igt_pipe_t *pipe)
+{
+	int drm_fd = output->display->drm_fd;
+	drmModeModeInfo *mode;
+	struct igt_fb fb;
+	igt_plane_t *plane = NULL;
+	uint32_t crtc_id;
+	int i;
+
+	mode = igt_output_get_mode(output);
+
+	igt_create_color_fb(drm_fd, mode->hdisplay, mode->vdisplay,
+						DRM_FORMAT_XRGB8888,
+						DRM_FORMAT_MOD_LINEAR,
+						1.0, 1.0, 1.0, &fb);
+
+	crtc_id = pipe->crtc_id;
+
+	/*
+	 * Do a legacy SETCRTC to start things off, so that we know that
+	 * the kernel will pick the correct primary plane and attach it
+	 * to the CRTC. This lets us handle the case that there are
+	 * multiple primary planes (one per CRTC), but which can *also*
+	 * be attached to other CRTCs
+	 */
+	igt_assert(drmModeSetCrtc(output->display->drm_fd, crtc_id, fb.fb_id,
+							  0, 0, &output->id, 1, mode) == 0);
+
+	for(i = 0; i < pipe->n_planes; i++) {
+		if (pipe->planes[i].type != DRM_PLANE_TYPE_PRIMARY)
+			continue;
+
+		if (igt_plane_get_prop(&pipe->planes[i], IGT_PLANE_CRTC_ID) != crtc_id)
+			continue;
+
+		plane = &pipe->planes[i];
+		break;
+	}
+
+	/* Removing the FB will also shut down the display for us: */
+	igt_remove_fb(drm_fd, &fb);
+	igt_assert_f(plane, "Valid assigned primary plane for CRTC_ID %d not found.\n", crtc_id);
+
+	return plane;
+}
+
 /**
  * kmstest_pipe_name:
  * @pipe: display pipe
  *
- * Returns: String representing @pipe, e.g. "A".
+ * Returns: A string representing @pipe, e.g. "A".
  */
 const char *kmstest_pipe_name(enum pipe pipe)
 {
-	static const char str[] = "A\0B\0C\0D\0E\0F";
+	static const char str[] = "A\0B\0C\0D\0E\0F\0G\0H\0I\0J\0K\0L\0M\0N\0O\0P";
 
 	_Static_assert(sizeof(str) == IGT_MAX_PIPES * 2,
 		       "Missing pipe name");
@@ -540,9 +942,9 @@ const char *kmstest_pipe_name(enum pipe pipe)
 
 /**
  * kmstest_pipe_to_index:
- *@pipe: display pipe in string format
+ * @pipe: display pipe in string format
  *
- * Returns: index to corresponding pipe
+ * Returns: Index to corresponding pipe
  */
 int kmstest_pipe_to_index(char pipe)
 {
@@ -558,7 +960,7 @@ int kmstest_pipe_to_index(char pipe)
  * kmstest_plane_type_name:
  * @plane_type: display plane type
  *
- * Returns: String representing @plane_type, e.g. "overlay".
+ * Returns: A string representing @plane_type, e.g. "overlay".
  */
 const char *kmstest_plane_type_name(int plane_type)
 {
@@ -629,6 +1031,46 @@ const char *kmstest_connector_status_str(int status)
 	return find_type_name(connector_status_names, status);
 }
 
+enum scaling_filter {
+	SCALING_FILTER_DEFAULT,
+	SCALING_FILTER_NEAREST_NEIGHBOR,
+};
+
+static const struct type_name scaling_filter_names[] = {
+	{ SCALING_FILTER_DEFAULT, "Default" },
+	{ SCALING_FILTER_NEAREST_NEIGHBOR, "Nearest Neighbor" },
+	{}
+};
+
+/**
+ * kmstest_scaling_filter_str:
+ * @filter: SCALING_FILTER_* filter value
+ *
+ * Returns: A string representing the scaling filter @filter.
+ */
+const char *kmstest_scaling_filter_str(int filter)
+{
+	return find_type_name(scaling_filter_names, filter);
+}
+
+static const struct type_name dsc_output_format_names[] = {
+	{ DSC_FORMAT_RGB, "RGB" },
+	{ DSC_FORMAT_YCBCR420, "YCBCR420" },
+	{ DSC_FORMAT_YCBCR444, "YCBCR444" },
+	{}
+};
+
+/**
+ * kmstest_dsc_output_format_str:
+ * @output_format: DSC_FORMAT_* output format value
+ *
+ * Returns: A string representing the output format @output format.
+ */
+const char *kmstest_dsc_output_format_str(int output_format)
+{
+	return find_type_name(dsc_output_format_names, output_format);
+}
+
 static const struct type_name connector_type_names[] = {
 	{ DRM_MODE_CONNECTOR_Unknown, "Unknown" },
 	{ DRM_MODE_CONNECTOR_VGA, "VGA" },
@@ -648,6 +1090,7 @@ static const struct type_name connector_type_names[] = {
 	{ DRM_MODE_CONNECTOR_VIRTUAL, "Virtual" },
 	{ DRM_MODE_CONNECTOR_DSI, "DSI" },
 	{ DRM_MODE_CONNECTOR_DPI, "DPI" },
+	{ DRM_MODE_CONNECTOR_WRITEBACK, "Writeback" },
 	{}
 };
 
@@ -715,17 +1158,65 @@ void kmstest_dump_mode(drmModeModeInfo *mode)
 	const char *stereo = mode_stereo_name(mode);
 	const char *aspect = mode_picture_aspect_name(mode);
 
-	igt_info("  %s %d %d %d %d %d %d %d %d %d 0x%x 0x%x %d%s%s%s%s%s%s\n",
-		 mode->name, mode->vrefresh,
+	igt_info("  %s: %d %d %d %d %d %d %d %d %d %d 0x%x 0x%x %s%s%s%s%s%s\n",
+		 mode->name, mode->vrefresh, mode->clock,
 		 mode->hdisplay, mode->hsync_start,
 		 mode->hsync_end, mode->htotal,
 		 mode->vdisplay, mode->vsync_start,
 		 mode->vsync_end, mode->vtotal,
-		 mode->flags, mode->type, mode->clock,
+		 mode->type, mode->flags,
 		 stereo ? " (3D:" : "",
 		 stereo ? stereo : "", stereo ? ")" : "",
 		 aspect ? " (PAR:" : "",
 		 aspect ? aspect : "", aspect ? ")" : "");
+}
+
+/*
+ * With non-contiguous pipes display, crtc mapping is not always same
+ * as pipe mapping, In i915 pipe is enum id of i915's crtc object.
+ * hence allocating upper bound igt_pipe array to support non-contiguos
+ * pipe display and reading pipe enum for a crtc using GET_PIPE_FROM_CRTC_ID
+ * ioctl for a pipe to do pipe ordering with respect to crtc list.
+ */
+static int __intel_get_pipe_from_crtc_id(int fd, int crtc_id, int crtc_idx)
+{
+	char buf[2];
+	int debugfs_fd, res = 0;
+
+	/*
+	 * No GET_PIPE_FROM_CRTC_ID ioctl support for XE. Instead read
+	 * from the debugfs "i915_pipe".
+	 *
+	 * This debugfs is applicable for both i915 & XE. For i915, still
+	 * we can fallback to ioctl method to support older kernels.
+	 */
+	debugfs_fd = igt_debugfs_pipe_dir(fd, crtc_idx, O_RDONLY);
+
+	if (debugfs_fd >= 0) {
+		res = igt_debugfs_simple_read(debugfs_fd, "i915_pipe", buf, sizeof(buf));
+		close(debugfs_fd);
+	}
+
+	if (res <= 0) {
+		/* Fallback to older ioctl method. */
+		if (is_i915_device(fd)) {
+			struct drm_i915_get_pipe_from_crtc_id get_pipe;
+
+			get_pipe.pipe = 0;
+			get_pipe.crtc_id =  crtc_id;
+
+			do_ioctl(fd, DRM_IOCTL_I915_GET_PIPE_FROM_CRTC_ID,
+				 &get_pipe);
+
+			return get_pipe.pipe;
+		} else
+			igt_assert_f(false, "XE: Failed to read the debugfs i915_pipe.\n");
+	} else {
+		char pipe;
+
+		igt_assert_eq(sscanf(buf, "%c", &pipe), 1);
+		return kmstest_pipe_to_index(pipe);
+	}
 }
 
 /**
@@ -738,7 +1229,6 @@ void kmstest_dump_mode(drmModeModeInfo *mode)
  * value used in other helper functions.  Returns 0 if the index could not be
  * determined.
  */
-
 int kmstest_get_pipe_from_crtc_id(int fd, int crtc_id)
 {
 	drmModeRes *res;
@@ -761,7 +1251,8 @@ int kmstest_get_pipe_from_crtc_id(int fd, int crtc_id)
 
 	drmModeFreeResources(res);
 
-	return i;
+	return is_intel_device(fd) ?
+		__intel_get_pipe_from_crtc_id(fd, crtc_id, i) : i;
 }
 
 /**
@@ -771,7 +1262,7 @@ int kmstest_get_pipe_from_crtc_id(int fd, int crtc_id)
  * @connector: libdrm connector pointer
  * @crtc_blacklist_idx_mask: a mask of CRTC indexes that we can't return
  *
- * Returns: the CRTC ID for a CRTC that fits the connector, otherwise it asserts
+ * Returns: The CRTC ID for a CRTC that fits the connector, otherwise it asserts
  * false and never returns. The blacklist mask can be used in case you have
  * CRTCs that are already in use by other connectors.
  */
@@ -840,7 +1331,9 @@ uint32_t kmstest_dumb_create(int fd, int width, int height, int bpp,
  * @handle: Offset in the file referred to by fd
  * @size: Length of the mapping, must be greater than 0
  * @prot: Describes the memory protection of the mapping
+ *
  * Returns: A pointer representing the start of the virtual mapping
+ * Caller of this function should munmap the pointer returned, after its usage.
  */
 void *kmstest_dumb_map_buffer(int fd, uint32_t handle, uint64_t size,
 			      unsigned prot)
@@ -880,9 +1373,8 @@ void kmstest_dumb_destroy(int fd, uint32_t handle)
 	igt_assert_eq(__kmstest_dumb_destroy(fd, handle), 0);
 }
 
-#if !defined(ANDROID)
 /*
- * Returns: the previous mode, or KD_GRAPHICS if no /dev/tty0 was
+ * Returns: The previous mode, or KD_GRAPHICS if no /dev/tty0 was
  * found and nothing was done.
  */
 static signed long set_vt_mode(unsigned long mode)
@@ -918,7 +1410,6 @@ err:
 
 	return -errno;
 }
-#endif
 
 static unsigned long orig_vt_mode = -1UL;
 
@@ -929,7 +1420,6 @@ static unsigned long orig_vt_mode = -1UL;
  */
 void kmstest_restore_vt_mode(void)
 {
-#if !defined(ANDROID)
 	long ret;
 
 	if (orig_vt_mode != -1UL) {
@@ -939,7 +1429,6 @@ void kmstest_restore_vt_mode(void)
 		igt_debug("VT: original mode 0x%lx restored\n", orig_vt_mode);
 		orig_vt_mode = -1UL;
 	}
-#endif
 }
 
 /**
@@ -954,7 +1443,6 @@ void kmstest_restore_vt_mode(void)
  */
 void kmstest_set_vt_graphics_mode(void)
 {
-#if !defined(ANDROID)
 	long ret;
 
 	igt_install_exit_handler((igt_exit_handler_t) kmstest_restore_vt_mode);
@@ -965,13 +1453,235 @@ void kmstest_set_vt_graphics_mode(void)
 	orig_vt_mode = ret;
 
 	igt_debug("VT: graphics mode set (mode was 0x%lx)\n", ret);
-#endif
 }
 
+/**
+ * kmstest_set_vt_text_mode:
+ *
+ * Sets the controlling VT (if available) into text mode.
+ * Unlikely kmstest_set_vt_graphics_mode() it do not install an igt exit
+ * handler to set the VT back to the previous mode.
+ */
+void kmstest_set_vt_text_mode(void)
+{
+	igt_assert(set_vt_mode(KD_TEXT) >= 0);
+}
 
 static void reset_connectors_at_exit(int sig)
 {
 	igt_reset_connectors();
+}
+
+static char *kmstest_connector_dirname(int idx,
+				       uint32_t connector_type,
+				       uint32_t connector_type_id,
+				       char *name, int namelen)
+{
+	snprintf(name, namelen, "card%d-%s-%d", idx,
+		 kmstest_connector_type_str(connector_type),
+		 connector_type_id);
+
+	return name;
+}
+
+/**
+ * igt_connector_sysfs_open:
+ * @drm_fd: drm file descriptor
+ * @connector: drm connector
+ *
+ * Returns: The connector sysfs fd, or -1 on failure.
+ */
+int igt_connector_sysfs_open(int drm_fd,
+			     drmModeConnector *connector)
+{
+	char name[80];
+	int dir, conn_dir;
+
+	dir = igt_sysfs_open(drm_fd);
+	if (dir < 0)
+		return dir;
+
+	kmstest_connector_dirname(igt_device_get_card_index(drm_fd),
+				  connector->connector_type,
+				  connector->connector_type_id,
+				  name, sizeof(name));
+
+	conn_dir = openat(dir, name, O_RDONLY);
+
+	close(dir);
+
+	return conn_dir;
+}
+
+static struct igt_connector_attr *connector_attr_find(int idx, drmModeConnector *connector,
+						      igt_connector_attr_set set,
+						      const char *attr)
+{
+	igt_assert(connector->connector_type != 0);
+
+	for (int i = 0; i < ARRAY_SIZE(connector_attrs); i++) {
+		struct igt_connector_attr *c = &connector_attrs[i];
+
+		if (c->idx == idx &&
+		    c->connector_type == connector->connector_type &&
+		    c->connector_type_id == connector->connector_type_id &&
+		    c->set == set && !strcmp(c->attr, attr))
+			return c;
+	}
+
+	return NULL;
+}
+
+static struct igt_connector_attr *connector_attr_find_free(void)
+{
+	for (int i = 0; i < ARRAY_SIZE(connector_attrs); i++) {
+		struct igt_connector_attr *c = &connector_attrs[i];
+
+		if (!c->attr)
+			return c;
+	}
+
+	return NULL;
+}
+
+static struct igt_connector_attr *connector_attr_alloc(int idx, drmModeConnector *connector,
+						       int dir, igt_connector_attr_set set,
+						       const char *attr, const char *reset_value)
+{
+	struct igt_connector_attr *c = connector_attr_find_free();
+
+	c->idx = idx;
+	c->connector_type = connector->connector_type;
+	c->connector_type_id = connector->connector_type_id;
+
+	c->dir = dir;
+	c->set = set;
+	c->attr = attr;
+	c->reset_value = reset_value;
+
+	return c;
+}
+
+static void connector_attr_free(struct igt_connector_attr *c)
+{
+	memset(c, 0, sizeof(*c));
+}
+
+static bool connector_attr_set(int idx, drmModeConnector *connector,
+			       int dir, igt_connector_attr_set set,
+			       const char *attr, const char *value,
+			       const char *reset_value,
+			       bool force_reset)
+{
+	struct igt_connector_attr *c;
+
+	c = connector_attr_find(idx, connector, set, attr);
+	if (!c)
+		c = connector_attr_alloc(idx, connector, dir, set,
+					 attr, reset_value);
+
+	c->value = value;
+
+	if (!c->set(c->dir, c->attr, c->value)) {
+		connector_attr_free(c);
+		return false;
+	}
+
+	if (!force_reset && !strcmp(c->value, c->reset_value))
+		connector_attr_free(c);
+
+	return true;
+}
+
+static bool connector_attr_set_sysfs(int drm_fd,
+				     drmModeConnector *connector,
+				     const char *attr, const char *value,
+				     const char *reset_value,
+				     bool force_reset)
+{
+	char name[80];
+	int idx, dir;
+
+	idx = igt_device_get_card_index(drm_fd);
+	if (idx < 0 || idx > 63)
+		return false;
+
+	kmstest_connector_dirname(idx, connector->connector_type,
+				  connector->connector_type_id,
+				  name, sizeof(name));
+
+	dir = igt_connector_sysfs_open(drm_fd, connector);
+	if (dir < 0)
+		return false;
+
+	if (!connector_attr_set(idx, connector, dir,
+				igt_sysfs_set, attr, value, reset_value,
+				force_reset))
+		return false;
+
+	igt_debug("Connector %s/%s is now %s\n", name, attr, value);
+
+	return true;
+}
+
+static bool connector_attr_set_debugfs(int drm_fd,
+				       drmModeConnector *connector,
+				       const char *attr, const char *value,
+				       const char *reset_value,
+				       bool force_reset)
+{
+	char name[80];
+	int idx, dir;
+
+	idx = igt_device_get_card_index(drm_fd);
+	if (idx < 0 || idx > 63)
+		return false;
+
+	snprintf(name, sizeof(name), "%s-%d",
+		 kmstest_connector_type_str(connector->connector_type),
+		 connector->connector_type_id);
+
+	dir = igt_debugfs_connector_dir(drm_fd, name, O_DIRECTORY);
+	if (dir < 0)
+		return false;
+
+	if (!connector_attr_set(idx, connector, dir,
+				igt_sysfs_set, attr,
+				value, reset_value,
+				force_reset))
+		return false;
+
+	igt_info("Connector %s/%s is now %s\n", name, attr, value);
+
+	return true;
+}
+
+static void dump_connector_attrs(void)
+{
+	char name[80];
+
+	igt_debug("Current connector attrs:\n");
+
+	for (int i = 0; i < ARRAY_SIZE(connector_attrs); i++) {
+		struct igt_connector_attr *c = &connector_attrs[i];
+
+		if (!c->attr)
+			continue;
+
+		kmstest_connector_dirname(c->idx, c->connector_type,
+					  c->connector_type_id,
+					  name, sizeof(name));
+		igt_debug("\t%s/%s: %s\n", name, c->attr, c->value);
+	}
+}
+
+static bool force_connector(int drm_fd,
+			    drmModeConnector *connector,
+			    const char *value)
+{
+	return connector_attr_set_sysfs(drm_fd, connector,
+					"status", value, "detect",
+					false);
 }
 
 /**
@@ -982,33 +1692,21 @@ static void reset_connectors_at_exit(int sig)
  *
  * Force the specified state on the specified connector.
  *
- * Returns: true on success
+ * Returns: True on success
  */
 bool kmstest_force_connector(int drm_fd, drmModeConnector *connector,
 			     enum kmstest_force_connector_state state)
 {
-	char *path, **tmp;
 	const char *value;
 	drmModeConnector *temp;
-	uint32_t devid;
-	int len, dir, idx;
 
-#if defined(USE_INTEL)
-	if (is_i915_device(drm_fd)) {
-		devid = intel_get_drm_devid(drm_fd);
-
-		/*
-		 * forcing hdmi or dp connectors on HSW and BDW doesn't
-		 * currently work, so fail early to allow the test to skip if
-		 * required
-		 */
-		if ((connector->connector_type == DRM_MODE_CONNECTOR_HDMIA ||
-		     connector->connector_type == DRM_MODE_CONNECTOR_HDMIB ||
-		     connector->connector_type == DRM_MODE_CONNECTOR_DisplayPort)
-		    && (IS_HASWELL(devid) || IS_BROADWELL(devid)))
-			return false;
-	}
-#endif
+	/*
+	 * Forcing DP connectors doesn't currently work, so
+	 * fail early to allow the test to skip if required.
+	 */
+	if (is_intel_device(drm_fd) &&
+	    connector->connector_type == DRM_MODE_CONNECTOR_DisplayPort)
+		return false;
 
 	switch (state) {
 	case FORCE_CONNECTOR_ON:
@@ -1027,57 +1725,75 @@ bool kmstest_force_connector(int drm_fd, drmModeConnector *connector,
 		break;
 	}
 
-	dir = igt_sysfs_open(drm_fd);
-	if (dir < 0)
+	if (!force_connector(drm_fd, connector, value))
 		return false;
 
-	idx = igt_device_get_card_index(drm_fd);
-	if (idx < 0 || idx > 63)
-		return false;
-
-	if (asprintf(&path, "card%d-%s-%d/status",
-		     idx,
-		     kmstest_connector_type_str(connector->connector_type),
-		     connector->connector_type_id) < 0) {
-		close(dir);
-		return false;
-	}
-
-	if (!igt_sysfs_set(dir, path, value)) {
-		close(dir);
-		return false;
-	}
-
-	for (len = 0, tmp = forced_connectors; *tmp; tmp++) {
-		/* check the connector is not already present */
-		if (strcmp(*tmp, path) == 0) {
-			len = -1;
-			break;
-		}
-		len++;
-	}
-
-	if (len != -1 && len < MAX_CONNECTORS) {
-		forced_connectors[len] = path;
-		forced_connectors_device[len] = dir;
-	}
-
-	if (len >= MAX_CONNECTORS)
-		igt_warn("Connector limit reached, %s will not be reset\n",
-			 path);
-
-	igt_debug("Connector %s is now forced %s\n", path, value);
-	igt_debug("Current forced connectors:\n");
-	tmp = forced_connectors;
-	while (*tmp) {
-		igt_debug("\t%s\n", *tmp);
-		tmp++;
-	}
+	dump_connector_attrs();
 
 	igt_install_exit_handler(reset_connectors_at_exit);
 
 	/* To allow callers to always use GetConnectorCurrent we need to force a
 	 * redetection here. */
+	temp = drmModeGetConnector(drm_fd, connector->connector_id);
+	drmModeFreeConnector(temp);
+
+	return true;
+}
+
+static bool force_connector_joiner(int drm_fd,
+				      drmModeConnector *connector,
+				      const char *value)
+{
+	return connector_attr_set_debugfs(drm_fd, connector,
+					  "i915_joiner_force_enable",
+					  value, "0", false);
+}
+
+/**
+ * kmstest_force_connector_joiner:
+ * @fd: drm file descriptor
+ * @connector: connector
+ *
+ * Enable force joiner state on the specified connector
+ * and install exit handler for resetting
+ *
+ * Returns: True on success
+ */
+bool kmstest_force_connector_joiner(int drm_fd, drmModeConnector *connector, int joined_pipes)
+{
+	const char *value;
+	drmModeConnector *temp;
+
+	switch (joined_pipes) {
+	case JOINED_PIPES_DEFAULT:
+		value = "0";
+		break;
+	case JOINED_PIPES_NONE:
+		value = "1";
+		break;
+	case JOINED_PIPES_BIG_JOINER:
+		value = "2";
+		break;
+	case JOINED_PIPES_ULTRA_JOINER:
+		value = "4";
+		break;
+	default:
+		igt_assert(0);
+	}
+
+	if (!is_intel_device(drm_fd))
+		return false;
+
+	if (!force_connector_joiner(drm_fd, connector, value))
+		return false;
+
+	dump_connector_attrs();
+	igt_install_exit_handler(reset_connectors_at_exit);
+
+	/*
+	 * To allow callers to always use GetConnectorCurrent we need to force a
+	 * redetection here.
+	 */
 	temp = drmModeGetConnector(drm_fd, connector->connector_id);
 	drmModeFreeConnector(temp);
 
@@ -1124,6 +1840,90 @@ void kmstest_force_edid(int drm_fd, drmModeConnector *connector,
 }
 
 /**
+ * sort_drm_modes_by_clk_dsc:
+ * @a: first element
+ * @b: second element
+ *
+ * Comparator function for sorting DRM modes in descending order by clock.
+ *
+ * Returns: True if first element's clock is less than second element's clock,
+ * else False.
+ */
+int sort_drm_modes_by_clk_dsc(const void *a, const void *b)
+{
+	const drmModeModeInfo *mode1 = a, *mode2 = b;
+
+	return (mode1->clock < mode2->clock) - (mode2->clock < mode1->clock);
+}
+
+/**
+ * sort_drm_modes_by_clk_asc:
+ * @a: first element
+ * @b: second element
+ *
+ * Comparator function for sorting DRM modes in ascending order by clock.
+ *
+ * Returns: True if first element's clock is greater than second element's clock,
+ * else False.
+ */
+int sort_drm_modes_by_clk_asc(const void *a, const void *b)
+{
+	const drmModeModeInfo *mode1 = a, *mode2 = b;
+
+	return (mode1->clock > mode2->clock) - (mode2->clock > mode1->clock);
+}
+
+/**
+ * sort_drm_modes_by_res_dsc:
+ * @a: first element
+ * @b: second element
+ *
+ * Comparator function for sorting DRM modes in descending order by resolution.
+ *
+ * Returns: True if first element's resolution is less than second element's
+ * resolution, else False.
+ */
+int sort_drm_modes_by_res_dsc(const void *a, const void *b)
+{
+	const drmModeModeInfo *mode1 = a, *mode2 = b;
+
+	return (mode1->hdisplay < mode2->hdisplay) - (mode2->hdisplay < mode1->hdisplay);
+}
+
+/**
+ * sort_drm_modes_by_res_asc:
+ * @a: first element
+ * @b: second element
+ *
+ * Comparator function for sorting DRM modes in ascending order by resolution.
+ *
+ * Returns: True if first element's resolution is greater than second element's
+ * resolution, else False.
+ */
+int sort_drm_modes_by_res_asc(const void *a, const void *b)
+{
+	const drmModeModeInfo *mode1 = a, *mode2 = b;
+
+	return (mode1->hdisplay > mode2->hdisplay) - (mode2->hdisplay > mode1->hdisplay);
+}
+
+/**
+ * igt_sort_connector_modes:
+ * @connector: libdrm connector
+ * @comparator: comparison function to compare two elements
+ *
+ * Sorts connector modes based on the @comparator.
+ */
+void igt_sort_connector_modes(drmModeConnector *connector,
+			      int (*comparator)(const void *, const void*))
+{
+	qsort(connector->modes,
+	      connector->count_modes,
+	      sizeof(drmModeModeInfo),
+	      comparator);
+}
+
+/**
  * kmstest_get_connector_default_mode:
  * @drm_fd: DRM fd
  * @connector: libdrm connector
@@ -1131,11 +1931,12 @@ void kmstest_force_edid(int drm_fd, drmModeConnector *connector,
  *
  * Retrieves the default mode for @connector and stores it in @mode.
  *
- * Returns: true on success, false on failure
+ * Returns: True on success, false on failure
  */
 bool kmstest_get_connector_default_mode(int drm_fd, drmModeConnector *connector,
 					drmModeModeInfo *mode)
 {
+	char *env;
 	int i;
 
 	if (!connector->count_modes) {
@@ -1144,6 +1945,26 @@ bool kmstest_get_connector_default_mode(int drm_fd, drmModeConnector *connector,
 		return false;
 	}
 
+	env = getenv("IGT_KMS_RESOLUTION");
+	if (env) {
+		/*
+		 * Only (0 or 1) and (lowest or highest) are allowed.
+		 *
+		 * 0/lowest: Choose connector mode with lowest possible resolution.
+		 * 1/highest: Choose connector mode with highest possible resolution.
+		 */
+		if (!strcmp(env, "highest") || !strcmp(env, "1"))
+			igt_sort_connector_modes(connector, sort_drm_modes_by_res_dsc);
+		else if (!strcmp(env, "lowest") || !strcmp(env, "0"))
+			igt_sort_connector_modes(connector, sort_drm_modes_by_res_asc);
+		else
+			goto default_mode;
+
+		*mode = connector->modes[0];
+		return true;
+	}
+
+default_mode:
 	for (i = 0; i < connector->count_modes; i++) {
 		if (i == 0 ||
 		    connector->modes[i].type & DRM_MODE_TYPE_PREFERRED) {
@@ -1219,6 +2040,9 @@ _kmstest_connector_config_find_encoder(int drm_fd, drmModeConnector *connector, 
  *
  * This tries to find a suitable configuration for the given connector and CRTC
  * constraint and fills it into @config.
+ *
+ * Returns: True if suitable configuration found for a given connector & CRTC,
+ * else False.
  */
 static bool _kmstest_connector_config(int drm_fd, uint32_t connector_id,
 				      unsigned long crtc_idx_mask,
@@ -1227,6 +2051,7 @@ static bool _kmstest_connector_config(int drm_fd, uint32_t connector_id,
 {
 	drmModeRes *resources;
 	drmModeConnector *connector;
+	drmModePropertyBlobPtr path_blob;
 
 	config->pipe = PIPE_NONE;
 
@@ -1249,6 +2074,13 @@ static bool _kmstest_connector_config(int drm_fd, uint32_t connector_id,
 		igt_warn("connector id doesn't match (%d != %d)\n",
 			 connector->connector_id, connector_id);
 		goto err3;
+	}
+
+	/* Set connector path for MST connectors. */
+	path_blob = kmstest_get_path_blob(drm_fd, connector_id);
+	if (path_blob) {
+		config->connector_path = strdup(path_blob->data);
+		drmModeFreePropertyBlob(path_blob);
 	}
 
 	/*
@@ -1306,6 +2138,9 @@ err1:
  *
  * This tries to find a suitable configuration for the given connector and CRTC
  * constraint and fills it into @config.
+ *
+ * Returns: True if suitable configuration found for a given connector & CRTC,
+ * else False.
  */
 bool kmstest_get_connector_config(int drm_fd, uint32_t connector_id,
 				  unsigned long crtc_idx_mask,
@@ -1313,6 +2148,31 @@ bool kmstest_get_connector_config(int drm_fd, uint32_t connector_id,
 {
 	return _kmstest_connector_config(drm_fd, connector_id, crtc_idx_mask,
 					 config, 0);
+}
+
+/**
+ * kmstest_get_path_blob:
+ * @drm_fd: DRM fd
+ * @connector_id: DRM connector id
+ *
+ * Finds a property with the name "PATH" on the connector object.
+ *
+ * Returns: Pointer to the connector's PATH property if found else NULL.
+ */
+drmModePropertyBlobPtr kmstest_get_path_blob(int drm_fd, uint32_t connector_id)
+{
+	uint64_t path_blob_id = 0;
+	drmModePropertyBlobPtr path_blob = NULL;
+
+	if (!kmstest_get_property(drm_fd, connector_id,
+				  DRM_MODE_OBJECT_CONNECTOR, "PATH", NULL,
+				  &path_blob_id, NULL)) {
+		return NULL;
+	}
+
+	path_blob = drmModeGetPropertyBlob(drm_fd, path_blob_id);
+	igt_assert(path_blob);
+	return path_blob;
 }
 
 /**
@@ -1325,6 +2185,9 @@ bool kmstest_get_connector_config(int drm_fd, uint32_t connector_id,
  * This tries to find a suitable configuration for the given connector and CRTC
  * constraint and fills it into @config, fully probing the connector in the
  * process.
+ *
+ * Returns: True if suitable configuration found for a given connector & CRTC,
+ * else False.
  */
 bool kmstest_probe_connector_config(int drm_fd, uint32_t connector_id,
 				    unsigned long crtc_idx_mask,
@@ -1400,7 +2263,7 @@ void kmstest_set_connector_dpms(int fd, drmModeConnector *connector, int mode)
  *
  * Finds a property with the given name on the given object.
  *
- * Returns: true in case we found something.
+ * Returns: True in case we found something.
  */
 bool
 kmstest_get_property(int drm_fd, uint32_t object_id, uint32_t object_type,
@@ -1414,6 +2277,9 @@ kmstest_get_property(int drm_fd, uint32_t object_id, uint32_t object_type,
 	int i;
 
 	proplist = drmModeObjectGetProperties(drm_fd, object_id, object_type);
+	if (!proplist)
+		return false;
+
 	for (i = 0; i < proplist->count_props; i++) {
 		_prop = drmModeGetProperty(drm_fd, proplist->props[i]);
 		if (!_prop)
@@ -1464,6 +2330,8 @@ void kmstest_unset_all_crtcs(int drm_fd, drmModeResPtr resources)
  *
  * Get the CRTC index based on its ID. This is useful since a few places of
  * libdrm deal with CRTC masks.
+ *
+ * Returns: CRTC index for a given @crtc_id
  */
 int kmstest_get_crtc_idx(drmModeRes *res, uint32_t crtc_id)
 {
@@ -1509,16 +2377,16 @@ unsigned int kmstest_get_vblank(int fd, int pipe, unsigned int flags)
 }
 
 /**
- * kmstest_wait_for_pageflip:
+ * kmstest_wait_for_pageflip_timeout:
  * @fd: Opened drm file descriptor
+ * @timeout_us: timeout used for waiting
  *
  * Blocks until pageflip is completed
- *
  */
-void kmstest_wait_for_pageflip(int fd)
+void kmstest_wait_for_pageflip_timeout(int fd, uint64_t timeout_us)
 {
 	drmEventContext evctx = { .version = 2 };
-	struct timeval timeout = { .tv_sec = 0, .tv_usec = 50000 };
+	struct timeval timeout = { .tv_sec = 0, .tv_usec = timeout_us };
 	fd_set fds;
 	int ret;
 
@@ -1531,7 +2399,8 @@ void kmstest_wait_for_pageflip(int fd)
 	} while (ret < 0 && errno == EINTR);
 
 	igt_fail_on_f(ret == 0,
-		     "Exceeded timeout (50ms) while waiting for a pageflip\n");
+		     "Exceeded timeout (%" PRIu64 " us) while waiting for a pageflip\n",
+		     timeout_us);
 
 	igt_assert_f(ret == 1,
 		     "Waiting for pageflip failed with %d from select(drmfd)\n",
@@ -1540,145 +2409,15 @@ void kmstest_wait_for_pageflip(int fd)
 	igt_assert(drmHandleEvent(fd, &evctx) == 0);
 }
 
-static void get_plane(char *str, int type, struct kmstest_plane *plane)
-{
-	int ret;
-	char buf[256];
-
-	plane->type = type;
-	ret = sscanf(str + 12, "%d%*c %*s %[^n]s",
-		     &plane->id,
-		     buf);
-	igt_assert_eq(ret, 2);
-
-	ret = sscanf(buf + 9, "%4d%*c%4d%*c", &plane->pos_x, &plane->pos_y);
-	igt_assert_eq(ret, 2);
-
-	ret = sscanf(buf + 30, "%4d%*c%4d%*c", &plane->width, &plane->height);
-	igt_assert_eq(ret, 2);
-}
-
-static int parse_planes(FILE *fid, struct kmstest_plane *planes)
-{
-	char tmp[256];
-	int n_planes;
-
-	n_planes = 0;
-	while (fgets(tmp, 256, fid) != NULL) {
-		if (strstr(tmp, "type=PRI") != NULL) {
-			if (planes) {
-				get_plane(tmp, DRM_PLANE_TYPE_PRIMARY, &planes[n_planes]);
-				planes[n_planes].index = n_planes;
-			}
-			n_planes++;
-		} else if (strstr(tmp, "type=OVL") != NULL) {
-			if (planes) {
-				get_plane(tmp, DRM_PLANE_TYPE_OVERLAY, &planes[n_planes]);
-				planes[n_planes].index = n_planes;
-			}
-			n_planes++;
-		} else if (strstr(tmp, "type=CUR") != NULL) {
-			if (planes) {
-				get_plane(tmp, DRM_PLANE_TYPE_CURSOR, &planes[n_planes]);
-				planes[n_planes].index = n_planes;
-			}
-			n_planes++;
-			break;
-		}
-	}
-
-	return n_planes;
-}
-
-static void parse_crtc(char *info, struct kmstest_crtc *crtc)
-{
-	char buf[256];
-	int ret;
-	char pipe;
-
-	ret = sscanf(info + 4, "%d%*c %*s %c%*c %*s %s%*c",
-		     &crtc->id, &pipe, buf);
-	igt_assert_eq(ret, 3);
-
-	crtc->pipe = kmstest_pipe_to_index(pipe);
-	igt_assert(crtc->pipe >= 0);
-
-	ret = sscanf(buf + 6, "%d%*c%d%*c",
-		     &crtc->width, &crtc->height);
-	igt_assert_eq(ret, 2);
-}
-
-static void kmstest_get_crtc(int device, enum pipe pipe, struct kmstest_crtc *crtc)
-{
-	char tmp[256];
-	FILE *file;
-	int ncrtc;
-	int line;
-	long int n;
-	int fd;
-
-	fd = igt_debugfs_open(device, "i915_display_info", O_RDONLY);
-	file = fdopen(fd, "r");
-	igt_skip_on(file == NULL);
-
-	ncrtc = 0;
-	line = 0;
-	while (fgets(tmp, 256, file) != NULL) {
-		if ((strstr(tmp, "CRTC") != NULL) && (line > 0)) {
-			if (strstr(tmp, "active=yes") != NULL) {
-				crtc->active = true;
-				parse_crtc(tmp, crtc);
-
-				n = ftell(file);
-				crtc->n_planes = parse_planes(file, NULL);
-				igt_assert_lt(0, crtc->n_planes);
-				crtc->planes = calloc(crtc->n_planes, sizeof(*crtc->planes));
-				igt_assert_f(crtc->planes, "Failed to allocate memory for %d planes\n", crtc->n_planes);
-
-				fseek(file, n, SEEK_SET);
-				parse_planes(file, crtc->planes);
-
-				if (crtc->pipe != pipe) {
-					free(crtc->planes);
-				} else {
-					ncrtc++;
-					break;
-				}
-			}
-		}
-
-		line++;
-	}
-
-	fclose(file);
-	close(fd);
-
-	igt_assert(ncrtc == 1);
-}
-
 /**
- * igt_assert_plane_visible:
- * @fd: Opened file descriptor
- * @pipe: Display pipe
- * @visibility: Boolean parameter to test against the plane's current visibility state
+ * kmstest_wait_for_pageflip:
+ * @fd: Opened drm file descriptor
  *
- * Asserts only if the plane's visibility state matches the status being passed by @visibility
+ * Blocks until pageflip is completed using a 50 ms timeout.
  */
-void igt_assert_plane_visible(int fd, enum pipe pipe, int plane_index, bool visibility)
+void kmstest_wait_for_pageflip(int fd)
 {
-	struct kmstest_crtc crtc;
-	bool visible = true;
-
-	kmstest_get_crtc(fd, pipe, &crtc);
-
-	igt_assert(plane_index < crtc.n_planes);
-
-	if (crtc.planes[plane_index].pos_x > crtc.width ||
-	    crtc.planes[plane_index].pos_y > crtc.height)
-		visible = false;
-
-	free(crtc.planes);
-	igt_assert_eq(visible, visibility);
+	kmstest_wait_for_pageflip_timeout(fd, 50000);
 }
 
 /**
@@ -1688,7 +2427,7 @@ void igt_assert_plane_visible(int fd, enum pipe pipe, int plane_index, bool visi
  * Get the VBlank errno after an attempt to call drmWaitVBlank(). This
  * function is useful for checking if a driver has support or not for VBlank.
  *
- * Returns: true if target driver has VBlank support, otherwise return false.
+ * Returns: True if target driver has VBlank support, otherwise return false.
  */
 bool kms_has_vblank(int fd)
 {
@@ -1705,7 +2444,6 @@ bool kms_has_vblank(int fd)
 /*
  * A small modeset API
  */
-
 #define LOG_SPACES		"    "
 #define LOG_N_SPACES		(sizeof(LOG_SPACES) - 1)
 
@@ -1741,7 +2479,13 @@ static void igt_display_log_shift(igt_display_t *display, int shift)
 	igt_assert(display->log_shift >= 0);
 }
 
-static void igt_output_refresh(igt_output_t *output)
+/**
+ * igt_output_refresh:
+ * @output: Target output
+ *
+ * This function sets the given @output to a valid default pipe
+ */
+void igt_output_refresh(igt_output_t *output)
 {
 	igt_display_t *display = output->display;
 	unsigned long crtc_idx_mask = 0;
@@ -1832,25 +2576,18 @@ static void igt_plane_reset(igt_plane_t *plane)
 		igt_plane_set_prop_enum(plane, IGT_PLANE_PIXEL_BLEND_MODE, "Pre-multiplied");
 
 	if (igt_plane_has_prop(plane, IGT_PLANE_ALPHA))
-	{
-		uint64_t max_alpha = 0xffff;
-		drmModePropertyPtr alpha_prop = drmModeGetProperty(
-			plane->pipe->display->drm_fd,
-			plane->props[IGT_PLANE_ALPHA]);
+		igt_plane_set_prop_value(plane, IGT_PLANE_ALPHA, 0xffff);
 
-		if (alpha_prop)
-		{
-			if (alpha_prop->flags & DRM_MODE_PROP_RANGE)
-			{
-				max_alpha = alpha_prop->values[1];
-			}
+	if (igt_plane_has_prop(plane, IGT_PLANE_FB_DAMAGE_CLIPS))
+		igt_plane_set_prop_value(plane, IGT_PLANE_FB_DAMAGE_CLIPS, 0);
 
-			drmModeFreeProperty(alpha_prop);
-		}
+	if (igt_plane_has_prop(plane, IGT_PLANE_SCALING_FILTER))
+		igt_plane_set_prop_enum(plane, IGT_PLANE_SCALING_FILTER, "Default");
 
-		igt_plane_set_prop_value(plane, IGT_PLANE_ALPHA, max_alpha);
-	}
-
+	if (igt_plane_has_prop(plane, IGT_PLANE_HOTSPOT_X))
+		igt_plane_set_prop_value(plane, IGT_PLANE_HOTSPOT_X, 0);
+	if (igt_plane_has_prop(plane, IGT_PLANE_HOTSPOT_Y))
+		igt_plane_set_prop_value(plane, IGT_PLANE_HOTSPOT_Y, 0);
 
 	igt_plane_clear_prop_changed(plane, IGT_PLANE_IN_FENCE_FD);
 	plane->values[IGT_PLANE_IN_FENCE_FD] = ~0ULL;
@@ -1872,6 +2609,12 @@ static void igt_pipe_reset(igt_pipe_t *pipe)
 	if (igt_pipe_obj_has_prop(pipe, IGT_CRTC_DEGAMMA_LUT))
 		igt_pipe_obj_set_prop_value(pipe, IGT_CRTC_DEGAMMA_LUT, 0);
 
+	if (igt_pipe_obj_has_prop(pipe, IGT_CRTC_SCALING_FILTER))
+		igt_pipe_obj_set_prop_enum(pipe, IGT_CRTC_SCALING_FILTER, "Default");
+
+	if (igt_pipe_obj_has_prop(pipe, IGT_CRTC_VRR_ENABLED))
+		igt_pipe_obj_set_prop_value(pipe, IGT_CRTC_VRR_ENABLED, 0);
+
 	pipe->out_fence_fd = -1;
 }
 
@@ -1890,6 +2633,20 @@ static void igt_output_reset(igt_output_t *output)
 	if (igt_output_has_prop(output, IGT_CONNECTOR_CONTENT_PROTECTION))
 		igt_output_set_prop_enum(output, IGT_CONNECTOR_CONTENT_PROTECTION,
 					 "Undesired");
+
+	if (igt_output_has_prop(output, IGT_CONNECTOR_HDR_OUTPUT_METADATA))
+		igt_output_set_prop_value(output,
+					  IGT_CONNECTOR_HDR_OUTPUT_METADATA, 0);
+
+	if (igt_output_has_prop(output, IGT_CONNECTOR_WRITEBACK_FB_ID))
+		igt_output_set_prop_value(output, IGT_CONNECTOR_WRITEBACK_FB_ID, 0);
+	if (igt_output_has_prop(output, IGT_CONNECTOR_WRITEBACK_OUT_FENCE_PTR)) {
+		igt_output_clear_prop_changed(output, IGT_CONNECTOR_WRITEBACK_OUT_FENCE_PTR);
+		output->writeback_out_fence_fd = -1;
+	}
+	if (igt_output_has_prop(output, IGT_CONNECTOR_DITHERING_MODE))
+		igt_output_set_prop_enum(output, IGT_CONNECTOR_DITHERING_MODE,
+					 "off");
 }
 
 /**
@@ -1903,6 +2660,8 @@ static void igt_output_reset(igt_output_t *output)
  * - %IGT_CONNECTOR_CRTC_ID
  * - %IGT_CONNECTOR_BROADCAST_RGB (if applicable)
  *   %IGT_CONNECTOR_CONTENT_PROTECTION (if applicable)
+ *   %IGT_CONNECTOR_HDR_OUTPUT_METADATA (if applicable)
+ * - %IGT_CONNECTOR_DITHERING_MODE (if applicable)
  * - igt_output_override_mode() to default.
  *
  * For pipes:
@@ -1950,49 +2709,283 @@ static void igt_fill_plane_format_mod(igt_display_t *display, igt_plane_t *plane
 static void igt_fill_display_format_mod(igt_display_t *display);
 
 /**
+ * igt_require_pipe:
+ * @display: pointer to igt_display_t
+ * @pipe: pipe which need to check
+ *
+ * Skip a (sub-)test if the pipe not enabled.
+ *
+ * Should be used everywhere where a test checks pipe and skip
+ * test when pipe is not enabled.
+ */
+void igt_require_pipe(igt_display_t *display, enum pipe pipe)
+{
+	igt_skip_on_f(pipe >= display->n_pipes || !display->pipes[pipe].enabled,
+			"Pipe %s does not exist or not enabled\n",
+			kmstest_pipe_name(pipe));
+}
+
+/* Get crtc mask for a pipe using crtc id */
+static int
+__get_crtc_mask_for_pipe(drmModeRes *resources, igt_pipe_t *pipe)
+{
+	int offset;
+
+	for (offset = 0; offset < resources->count_crtcs; offset++)
+	{
+		if(pipe->crtc_id == resources->crtcs[offset])
+			break;
+	}
+
+	return (1 << offset);
+}
+
+static bool igt_pipe_has_valid_output(igt_display_t *display, enum pipe pipe)
+{
+	igt_output_t *output;
+
+	igt_require_pipe(display, pipe);
+
+	for_each_valid_output_on_pipe(display, pipe, output)
+		return true;
+
+	return false;
+}
+
+/**
+ * igt_handle_spurious_hpd:
+ * @display: a pointer to igt_display_t structure
+ *
+ * Handle environment variable "IGT_KMS_IGNORE_HPD" to manage the spurious
+ * HPD cases in CI systems where such spurious HPDs are generated by the
+ * panels without any specific reasons and cause CI execution failures.
+ *
+ * This will set the i915_ignore_long_hpd debugfs entry to 1 as a cue for
+ * the driver to start ignoring the HPDs.
+ *
+ * Also, this will set the active connectors' force status to "on"
+ * so that dp/hdmi_detect routines don't get called frequently.
+ *
+ * Force status is kept on after this until it is manually reset.
+ */
+static void igt_handle_spurious_hpd(igt_display_t *display)
+{
+	igt_output_t *output;
+
+	/* Proceed with spurious HPD handling only if the env var is set */
+	if (!getenv("IGT_KMS_IGNORE_HPD"))
+		return;
+
+	/* Set the ignore HPD for the driver */
+	if (!igt_ignore_long_hpd(display->drm_fd, true)) {
+		igt_info("Unable set the ignore HPD debugfs entry \n");
+		return;
+	}
+
+	for_each_connected_output(display, output) {
+		drmModeConnector *conn = output->config.connector;
+
+		if (!force_connector(display->drm_fd, conn, "on")) {
+			igt_info("Unable to force state on %s-%d\n",
+				 kmstest_connector_type_str(conn->connector_type),
+				 conn->connector_type_id);
+			continue;
+		}
+
+		igt_info("Force connector ON for %s-%d\n",
+			 kmstest_connector_type_str(conn->connector_type),
+			 conn->connector_type_id);
+	}
+
+	dump_connector_attrs();
+}
+
+/**
+ * igt_display_reset_outputs:
+ * @display: a pointer to an initialized #igt_display_t structure
+ *
+ * Initialize @display outputs with their connectors and pipes.
+ * This function clears any previously allocated outputs.
+ */
+void igt_display_reset_outputs(igt_display_t *display)
+{
+	int i;
+	drmModeRes *resources;
+
+	/* Clear any existing outputs*/
+	if (display->n_outputs) {
+		for (i = 0; i < display->n_outputs; i++) {
+			struct kmstest_connector_config *config =
+				&display->outputs[i].config;
+			drmModeFreeConnector(config->connector);
+			drmModeFreeEncoder(config->encoder);
+			drmModeFreeCrtc(config->crtc);
+			free(config->connector_path);
+		}
+		free(display->outputs);
+	}
+
+	resources = drmModeGetResources(display->drm_fd);
+	if (!resources)
+		return;
+
+	display->n_outputs = resources->count_connectors;
+	display->outputs = calloc(display->n_outputs, sizeof(igt_output_t));
+	igt_assert_f(display->outputs,
+		     "Failed to allocate memory for %d outputs\n",
+		     display->n_outputs);
+
+	for (i = 0; i < display->n_outputs; i++) {
+		igt_output_t *output = &display->outputs[i];
+		drmModeConnector *connector;
+
+		/*
+		 * We don't assign each output a pipe unless
+		 * a pipe is set with igt_output_set_pipe().
+		 */
+		output->pending_pipe = PIPE_NONE;
+		output->id = resources->connectors[i];
+		output->display = display;
+
+		igt_output_refresh(output);
+
+		connector = output->config.connector;
+		if (connector &&
+		    (!connector->count_modes ||
+		     connector->connection == DRM_MODE_UNKNOWNCONNECTION)) {
+			output->force_reprobe = true;
+			igt_output_refresh(output);
+		}
+	}
+
+	/* Set reasonable default values for every object in the
+	 * display. */
+	igt_display_reset(display);
+
+	for_each_pipe(display, i) {
+		igt_pipe_t *pipe = &display->pipes[i];
+		igt_output_t *output;
+
+		if (!igt_pipe_has_valid_output(display, i))
+			continue;
+
+		output = igt_get_single_output_for_pipe(display, i);
+
+		if (pipe->num_primary_planes > 1) {
+			igt_plane_t *primary =
+				&pipe->planes[pipe->plane_primary];
+			igt_plane_t *assigned_primary =
+				igt_get_assigned_primary(output, pipe);
+			int assigned_primary_index = assigned_primary->index;
+
+			/*
+			 * If the driver-assigned primary plane isn't at
+			 * the pipe->plane_primary index, swap it with
+			 * the plane that's currently at the
+			 * plane_primary index and update plane->index
+			 * accordingly.
+			 *
+			 * This way, we can preserve pipe->plane_primary
+			 * as 0 so that tests that assume
+			 * pipe->plane_primary is always 0 won't break.
+			 */
+			if (assigned_primary_index != pipe->plane_primary) {
+				assigned_primary->index = pipe->plane_primary;
+				primary->index = assigned_primary_index;
+
+				igt_swap(pipe->planes[assigned_primary_index],
+					 pipe->planes[pipe->plane_primary]);
+			}
+		}
+	}
+
+	drmModeFreeResources(resources);
+}
+
+/**
  * igt_display_require:
  * @display: a pointer to an #igt_display_t structure
  * @drm_fd: a drm file descriptor
  *
  * Initialize @display and allocate the various resources required. Use
- * #igt_display_fini to release the resources when they are no longer required.
+ * #igt_display_fini to release the resources when they are no longer
+ * required.
  *
- * This function automatically skips if the kernel driver doesn't support any
- * CRTC or outputs.
+ * This function automatically skips if the kernel driver doesn't
+ * support any CRTC or outputs.
  */
 void igt_display_require(igt_display_t *display, int drm_fd)
 {
 	drmModeRes *resources;
 	drmModePlaneRes *plane_resources;
 	int i;
+	bool is_intel_dev;
 
 	memset(display, 0, sizeof(igt_display_t));
 
 	LOG_INDENT(display, "init");
 
 	display->drm_fd = drm_fd;
+	is_intel_dev = is_intel_device(drm_fd);
+
+	if (drmSetClientCap(drm_fd, DRM_CLIENT_CAP_ATOMIC, 1) == 0)
+		display->is_atomic = 1;
 
 	resources = drmModeGetResources(display->drm_fd);
 	if (!resources)
 		goto out;
 
-	/*
-	 * We cache the number of pipes, that number is a physical limit of the
-	 * hardware and cannot change of time (for now, at least).
-	 */
-	display->n_pipes = resources->count_crtcs;
-	display->pipes = calloc(sizeof(igt_pipe_t), display->n_pipes);
+#ifdef HAVE_CHAMELIUM
+	{
+		struct chamelium *chamelium;
+
+		chamelium = chamelium_init_rpc_only();
+		if (chamelium) {
+			igt_abort_on_f(!chamelium_wait_reachable(chamelium, 20),
+				       "cannot reach the configured chamelium!\n");
+			igt_abort_on_f(!chamelium_plug_all(chamelium),
+				       "failed to plug all the chamelium ports!\n");
+			igt_abort_on_f(!chamelium_wait_all_configured_ports_connected(chamelium, drm_fd),
+				       "not all configured chamelium ports are connected!\n");
+			chamelium_deinit_rpc_only(chamelium);
+		}
+	}
+#endif
+
+	igt_require_f(resources->count_crtcs <= IGT_MAX_PIPES,
+		     "count_crtcs exceeds IGT_MAX_PIPES, resources->count_crtcs=%d, IGT_MAX_PIPES=%d\n",
+		     resources->count_crtcs, IGT_MAX_PIPES);
+
+	display->n_pipes = IGT_MAX_PIPES;
+	display->pipes = calloc(display->n_pipes, sizeof(igt_pipe_t));
 	igt_assert_f(display->pipes, "Failed to allocate memory for %d pipes\n", display->n_pipes);
 
+	for (i = 0; i < resources->count_crtcs; i++) {
+		igt_pipe_t *pipe;
+		int pipe_enum = (is_intel_dev)?
+			__intel_get_pipe_from_crtc_id(drm_fd,
+						      resources->crtcs[i], i) : i;
+
+		pipe = &display->pipes[pipe_enum];
+		pipe->pipe = pipe_enum;
+
+		/* pipe is enabled/disabled */
+		pipe->enabled = true;
+		pipe->crtc_id = resources->crtcs[i];
+		/* offset of a pipe in crtcs list */
+		pipe->crtc_offset = i;
+	}
+
 	drmSetClientCap(drm_fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
-	if (drmSetClientCap(drm_fd, DRM_CLIENT_CAP_ATOMIC, 1) == 0)
-		display->is_atomic = 1;
+
+	if (drmSetClientCap(drm_fd, LOCAL_DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT, 1) == 0)
+		display->has_virt_cursor_plane = 1;
 
 	plane_resources = drmModeGetPlaneResources(display->drm_fd);
 	igt_assert(plane_resources);
 
 	display->n_planes = plane_resources->count_planes;
-	display->planes = calloc(sizeof(igt_plane_t), display->n_planes);
+	display->planes = calloc(display->n_planes, sizeof(igt_plane_t));
 	igt_assert_f(display->planes, "Failed to allocate memory for %d planes\n", display->n_planes);
 
 	for (i = 0; i < plane_resources->count_planes; ++i) {
@@ -2011,33 +3004,37 @@ void igt_display_require(igt_display_t *display, int drm_fd)
 		 */
 	}
 
+	drmModeFreePlaneResources(plane_resources);
+
 	for_each_pipe(display, i) {
 		igt_pipe_t *pipe = &display->pipes[i];
 		igt_plane_t *plane;
-		int p = 1;
+		int p = 1, crtc_mask = 0;
 		int j, type;
 		uint8_t last_plane = 0, n_planes = 0;
 
-		pipe->crtc_id = resources->crtcs[i];
 		pipe->display = display;
-		pipe->pipe = i;
 		pipe->plane_cursor = -1;
 		pipe->plane_primary = -1;
 		pipe->planes = NULL;
+		pipe->num_primary_planes = 0;
 
 		igt_fill_pipe_props(display, pipe, IGT_NUM_CRTC_PROPS, igt_crtc_prop_names);
+
+		/* Get valid crtc index from crtcs for a pipe */
+		crtc_mask = __get_crtc_mask_for_pipe(resources, pipe);
 
 		/* count number of valid planes */
 		for (j = 0; j < display->n_planes; j++) {
 			drmModePlane *drm_plane = display->planes[j].drm_plane;
 			igt_assert(drm_plane);
 
-			if (drm_plane->possible_crtcs & (1 << i))
+			if (drm_plane->possible_crtcs & crtc_mask)
 				n_planes++;
 		}
 
 		igt_assert_lt(0, n_planes);
-		pipe->planes = calloc(sizeof(igt_plane_t), n_planes);
+		pipe->planes = calloc(n_planes, sizeof(igt_plane_t));
 		igt_assert_f(pipe->planes, "Failed to allocate memory for %d planes\n", n_planes);
 		last_plane = n_planes - 1;
 
@@ -2046,7 +3043,7 @@ void igt_display_require(igt_display_t *display, int drm_fd)
 			igt_plane_t *global_plane = &display->planes[j];
 			drmModePlane *drm_plane = global_plane->drm_plane;
 
-			if (!(drm_plane->possible_crtcs & (1 << i)))
+			if (!(drm_plane->possible_crtcs & crtc_mask))
 				continue;
 
 			type = global_plane->type;
@@ -2055,12 +3052,20 @@ void igt_display_require(igt_display_t *display, int drm_fd)
 				plane = &pipe->planes[0];
 				plane->index = 0;
 				pipe->plane_primary = 0;
+				pipe->num_primary_planes++;
 			} else if (type == DRM_PLANE_TYPE_CURSOR && pipe->plane_cursor == -1) {
 				plane = &pipe->planes[last_plane];
 				plane->index = last_plane;
 				pipe->plane_cursor = last_plane;
 				display->has_cursor_plane = true;
 			} else {
+				/*
+				 * Increment num_primary_planes for any extra
+				 * primary plane found.
+				 */
+				if (type == DRM_PLANE_TYPE_PRIMARY)
+					pipe->num_primary_planes++;
+
 				plane = &pipe->planes[p];
 				plane->index = p++;
 			}
@@ -2099,60 +3104,31 @@ void igt_display_require(igt_display_t *display, int drm_fd)
 		pipe->n_planes = n_planes;
 	}
 
-	igt_fill_display_format_mod(display);
-
-	/*
-	 * The number of connectors is set, so we just initialize the outputs
-	 * array in _init(). This may change when we need dynamic connectors
-	 * (say DisplayPort MST).
-	 */
-	display->n_outputs = resources->count_connectors;
-	display->outputs = calloc(display->n_outputs, sizeof(igt_output_t));
-	igt_assert_f(display->outputs, "Failed to allocate memory for %d outputs\n", display->n_outputs);
-
-	for (i = 0; i < display->n_outputs; i++) {
-		igt_output_t *output = &display->outputs[i];
-		drmModeConnector *connector;
-
-		/*
-		 * We don't assign each output a pipe unless
-		 * a pipe is set with igt_output_set_pipe().
-		 */
-		output->pending_pipe = PIPE_NONE;
-		output->id = resources->connectors[i];
-		output->display = display;
-
-		igt_output_refresh(output);
-
-		connector = output->config.connector;
-		if (connector && (!connector->count_modes ||
-		    connector->connection == DRM_MODE_UNKNOWNCONNECTION)) {
-			output->force_reprobe = true;
-			igt_output_refresh(output);
-		}
-	}
-
-	drmModeFreePlaneResources(plane_resources);
 	drmModeFreeResources(resources);
 
-	/* Set reasonable default values for every object in the display. */
-	igt_display_reset(display);
+	igt_fill_display_format_mod(display);
+
+	igt_display_reset_outputs(display);
 
 out:
 	LOG_UNINDENT(display);
 
-	if (display->n_pipes && display->n_outputs)
+	if (display->n_pipes && display->n_outputs) {
 		igt_enable_connectors(drm_fd);
-	else
+
+		igt_handle_spurious_hpd(display);
+	}
+	else {
 		igt_skip("No KMS driver or no outputs, pipes: %d, outputs: %d\n",
 			 display->n_pipes, display->n_outputs);
+	}
 }
 
 /**
  * igt_display_get_n_pipes:
  * @display: A pointer to an #igt_display_t structure
  *
- * Returns total number of pipes for the given @display
+ * Returns: Total number of pipes for the given @display
  */
 int igt_display_get_n_pipes(igt_display_t *display)
 {
@@ -2187,15 +3163,8 @@ void igt_display_require_output(igt_display_t *display)
  */
 void igt_display_require_output_on_pipe(igt_display_t *display, enum pipe pipe)
 {
-	igt_output_t *output;
-
-	igt_skip_on_f(pipe >= igt_display_get_n_pipes(display),
-		      "Pipe %s does not exist.\n", kmstest_pipe_name(pipe));
-
-	for_each_valid_output_on_pipe(display, pipe, output)
-		return;
-
-	igt_skip("No valid connector found on pipe %s\n", kmstest_pipe_name(pipe));
+	if (!igt_pipe_has_valid_output(display, pipe))
+		igt_skip("No valid connector found on pipe %s\n", kmstest_pipe_name(pipe));
 }
 
 /**
@@ -2211,27 +3180,54 @@ void igt_display_require_output_on_pipe(igt_display_t *display, enum pipe pipe)
 igt_output_t *igt_output_from_connector(igt_display_t *display,
 					drmModeConnector *connector)
 {
-	igt_output_t *output, *found = NULL;
 	int i;
+	igt_output_t *found = NULL;
 
 	for (i = 0; i < display->n_outputs; i++) {
-		output = &display->outputs[i];
+		igt_output_t *output = &display->outputs[i];
+		bool is_mst = !!output->config.connector_path;
 
-		if (output->config.connector &&
-		    output->config.connector->connector_id ==
-		    connector->connector_id) {
-			found = output;
-			break;
+		if (is_mst) {
+			drmModePropertyBlobPtr path_blob =
+				kmstest_get_path_blob(display->drm_fd,
+						      connector->connector_id);
+			if (path_blob) {
+				bool is_same_connector =
+					strcmp(output->config.connector_path,
+					       path_blob->data) == 0;
+				drmModeFreePropertyBlob(path_blob);
+				if (is_same_connector) {
+					output->id = connector->connector_id;
+					found = output;
+					break;
+				}
+			}
+
+		} else {
+			if (output->config.connector &&
+			    output->config.connector->connector_id ==
+				    connector->connector_id) {
+				found = output;
+				break;
+			}
 		}
 	}
 
 	return found;
 }
 
-const drmModeModeInfo *igt_std_1024_mode_get(void)
+/**
+ * igt_std_1024_mode_get:
+ * @vrefresh: Required refresh rate for 1024 mode
+ *
+ * This function will create a standard drm mode with a given @vrefresh
+ *
+ * Returns: Standard 1024@vrefresh mode.
+ */
+drmModeModeInfo *igt_std_1024_mode_get(int vrefresh)
 {
-	static const drmModeModeInfo std_1024_mode = {
-		.clock = 65000,
+	const drmModeModeInfo std_1024_mode = {
+		.clock = 65000 * vrefresh / 60,
 		.hdisplay = 1024,
 		.hsync_start = 1048,
 		.hsync_end = 1184,
@@ -2242,13 +3238,36 @@ const drmModeModeInfo *igt_std_1024_mode_get(void)
 		.vsync_end = 777,
 		.vtotal = 806,
 		.vscan = 0,
-		.vrefresh = 60,
+		.vrefresh = vrefresh,
 		.flags = 0xA,
 		.type = 0x40,
 		.name = "Custom 1024x768",
 	};
 
-	return &std_1024_mode;
+	return igt_memdup(&std_1024_mode, sizeof(std_1024_mode));
+}
+
+/**
+ * igt_modeset_disable_all_outputs:
+ * @diplay: igt display structure
+ *
+ * Modeset to disable all output
+ *
+ * We need to do a modeset disabling all output to get the next
+ * HPD event on TypeC port
+ */
+void igt_modeset_disable_all_outputs(igt_display_t *display)
+{
+	int i;
+
+	for (i = 0; i < display->n_outputs; i++) {
+		igt_output_t *output = &display->outputs[i];
+
+		igt_output_set_pipe(output, PIPE_NONE);
+	}
+
+	igt_display_commit2(display, COMMIT_ATOMIC);
+
 }
 
 static void igt_pipe_fini(igt_pipe_t *pipe)
@@ -2265,6 +3284,11 @@ static void igt_output_fini(igt_output_t *output)
 	kmstest_free_connector_config(&output->config);
 	free(output->name);
 	output->name = NULL;
+
+	if (output->writeback_out_fence_fd != -1) {
+		close(output->writeback_out_fence_fd);
+		output->writeback_out_fence_fd = -1;
+	}
 }
 
 /**
@@ -2453,7 +3477,13 @@ igt_plane_t *igt_pipe_get_plane_type_index(igt_pipe_t *pipe, int plane_type,
 	return NULL;
 }
 
-static bool output_is_internal_panel(igt_output_t *output)
+/**
+ * output_is_internal_panel:
+ * @output: Target output
+ *
+ * Returns: True if the given @output type is internal else False.
+ */
+bool output_is_internal_panel(igt_output_t *output)
 {
 	switch (output->config.connector->connector_type) {
 	case DRM_MODE_CONNECTOR_LVDS:
@@ -2468,11 +3498,17 @@ static bool output_is_internal_panel(igt_output_t *output)
 
 igt_output_t **__igt_pipe_populate_outputs(igt_display_t *display, igt_output_t **chosen_outputs)
 {
-	unsigned full_pipe_mask = (1 << (display->n_pipes)) - 1, assigned_pipes = 0;
+	unsigned full_pipe_mask = 0, assigned_pipes = 0;
 	igt_output_t *output;
 	int i, j;
 
 	memset(chosen_outputs, 0, sizeof(*chosen_outputs) * display->n_pipes);
+
+	for (i = 0; i < display->n_pipes; i++) {
+		igt_pipe_t *pipe = &display->pipes[i];
+		if (pipe->enabled)
+			full_pipe_mask |= (1 << i);
+	}
 
 	/*
 	 * Try to assign all outputs to the first available CRTC for
@@ -2539,7 +3575,7 @@ igt_output_t *igt_get_single_output_for_pipe(igt_display_t *display, enum pipe p
 	igt_output_t *chosen_outputs[display->n_pipes];
 
 	igt_assert(pipe != PIPE_NONE);
-	igt_require(pipe < display->n_pipes);
+	igt_require_pipe(display, pipe);
 
 	__igt_pipe_populate_outputs(display, chosen_outputs);
 
@@ -2804,8 +3840,7 @@ static int igt_primary_plane_commit_legacy(igt_plane_t *primary,
 
 	if (!igt_plane_is_prop_changed(primary, IGT_PLANE_FB_ID) &&
 	    !(primary->changed & IGT_PLANE_COORD_CHANGED_MASK) &&
-	    !(igt_pipe_obj_is_prop_changed(primary->pipe, IGT_CRTC_MODE_ID) &&
-		primary == igt_pipe_get_plane_type(primary->pipe, DRM_PLANE_TYPE_PRIMARY)))
+	    !igt_pipe_obj_is_prop_changed(primary->pipe, IGT_CRTC_MODE_ID))
 		return 0;
 
 	crtc_id = pipe->crtc_id;
@@ -2906,6 +3941,8 @@ static int igt_plane_commit(igt_plane_t *plane,
 			    enum igt_commit_style s,
 			    bool fail_on_error)
 {
+	igt_plane_t *plane_primary = igt_pipe_get_plane_type(pipe, DRM_PLANE_TYPE_PRIMARY);
+
 	if (pipe->display->first_commit || (s == COMMIT_UNIVERSAL &&
 	     igt_plane_is_prop_changed(plane, IGT_PLANE_ROTATION))) {
 		int ret;
@@ -2916,8 +3953,7 @@ static int igt_plane_commit(igt_plane_t *plane,
 
 	if (plane->type == DRM_PLANE_TYPE_CURSOR && s == COMMIT_LEGACY) {
 		return igt_cursor_commit_legacy(plane, pipe, fail_on_error);
-	} else if (plane->type == DRM_PLANE_TYPE_PRIMARY && s == COMMIT_LEGACY &&
-		plane == igt_pipe_get_plane_type(plane->pipe, DRM_PLANE_TYPE_PRIMARY)) {
+	} else if (plane == plane_primary && s == COMMIT_LEGACY) {
 		return igt_primary_plane_commit_legacy(plane, pipe,
 						       fail_on_error);
 	} else {
@@ -3072,6 +4108,15 @@ static bool igt_mode_object_get_prop_enum_value(int drm_fd, uint32_t id, const c
 	return false;
 }
 
+/**
+ * igt_plane_try_prop_enum:
+ * @plane: Target plane.
+ * @prop: Property to check.
+ * @val: Value to set.
+ *
+ * Returns: False if the given @plane doesn't have the enum @prop or
+ * failed to set the enum property @val else True.
+ */
 bool igt_plane_try_prop_enum(igt_plane_t *plane,
 			     enum igt_atomic_plane_properties prop,
 			     const char *val)
@@ -3089,11 +4134,48 @@ bool igt_plane_try_prop_enum(igt_plane_t *plane,
 	return true;
 }
 
+/**
+ * igt_plane_set_prop_enum:
+ * @plane: Target plane.
+ * @prop: Property to check.
+ * @val: Value to set.
+ *
+ * This function tries to set given enum property @prop value @val to
+ * the given @plane, and terminate the execution if its failed.
+ */
 void igt_plane_set_prop_enum(igt_plane_t *plane,
 			     enum igt_atomic_plane_properties prop,
 			     const char *val)
 {
 	igt_assert(igt_plane_try_prop_enum(plane, prop, val));
+}
+
+/**
+ * igt_plane_check_prop_is_mutable:
+ * @plane: Target plane.
+ * @prop: Property to check.
+ *
+ * Check if a plane supports a given property and if this property is mutable.
+ *
+ * Returns true if the plane has the mutable property. False if the property is
+ * not support or it's immutable.
+ */
+bool igt_plane_check_prop_is_mutable(igt_plane_t *plane,
+				     enum igt_atomic_plane_properties igt_prop)
+{
+	drmModePropertyPtr prop;
+	uint64_t value;
+	bool has_prop;
+
+	has_prop = kmstest_get_property(plane->pipe->display->drm_fd,
+					plane->drm_plane->plane_id,
+					DRM_MODE_OBJECT_PLANE,
+				        igt_plane_prop_names[igt_prop], NULL,
+					&value, &prop);
+	if (!has_prop)
+		return false;
+
+	return !(prop->flags & DRM_MODE_PROP_IMMUTABLE);
 }
 
 /**
@@ -3147,6 +4229,15 @@ uint64_t igt_output_get_prop(igt_output_t *output, enum igt_atomic_connector_pro
 					output->id, output->props[prop]);
 }
 
+/**
+ * igt_output_try_prop_enum:
+ * @output: Target output.
+ * @prop: Property to check.
+ * @val: Value to set.
+ *
+ * Returns: False if the given @output doesn't have the enum @prop or
+ * failed to set the enum property @val else True.
+ */
 bool igt_output_try_prop_enum(igt_output_t *output,
 			      enum igt_atomic_connector_properties prop,
 			      const char *val)
@@ -3164,6 +4255,15 @@ bool igt_output_try_prop_enum(igt_output_t *output,
 	return true;
 }
 
+/**
+ * igt_output_set_prop_enum:
+ * @output: Target output.
+ * @prop: Property to check.
+ * @val: Value to set.
+ *
+ * This function tries to set given enum property @prop value @val to
+ * the given @output, and terminate the execution if its failed.
+ */
 void igt_output_set_prop_enum(igt_output_t *output,
 			      enum igt_atomic_connector_properties prop,
 			      const char *val)
@@ -3222,6 +4322,15 @@ uint64_t igt_pipe_obj_get_prop(igt_pipe_t *pipe, enum igt_atomic_crtc_properties
 					pipe->crtc_id, pipe->props[prop]);
 }
 
+/**
+ * igt_pipe_obj_try_prop_enum:
+ * @pipe_obj: Target pipe object.
+ * @prop: Property to check.
+ * @val: Value to set.
+ *
+ * Returns: False if the given @pipe_obj doesn't have the enum @prop or
+ * failed to set the enum property @val else True.
+ */
 bool igt_pipe_obj_try_prop_enum(igt_pipe_t *pipe_obj,
 				enum igt_atomic_crtc_properties prop,
 				const char *val)
@@ -3239,6 +4348,15 @@ bool igt_pipe_obj_try_prop_enum(igt_pipe_t *pipe_obj,
 	return true;
 }
 
+/**
+ * igt_pipe_obj_set_prop_enum:
+ * @pipe_obj: Target pipe object.
+ * @prop: Property to check.
+ * @val: Value to set.
+ *
+ * This function tries to set given enum property @prop value @val to
+ * the given @pipe_obj, and terminate the execution if its failed.
+ */
 void igt_pipe_obj_set_prop_enum(igt_pipe_t *pipe_obj,
 				enum igt_atomic_crtc_properties prop,
 				const char *val)
@@ -3451,6 +4569,16 @@ display_commit_changed(igt_display_t *display, enum igt_commit_style s)
 		else
 			/* no modeset in universal commit, no change to crtc. */
 			output->changed &= 1 << IGT_CONNECTOR_CRTC_ID;
+
+		if (s == COMMIT_ATOMIC) {
+			if (igt_output_is_prop_changed(output, IGT_CONNECTOR_WRITEBACK_OUT_FENCE_PTR))
+				igt_assert(output->writeback_out_fence_fd >= 0);
+
+			output->values[IGT_CONNECTOR_WRITEBACK_OUT_FENCE_PTR] = 0;
+			output->values[IGT_CONNECTOR_WRITEBACK_FB_ID] = 0;
+			igt_output_clear_prop_changed(output, IGT_CONNECTOR_WRITEBACK_FB_ID);
+			igt_output_clear_prop_changed(output, IGT_CONNECTOR_WRITEBACK_OUT_FENCE_PTR);
+		}
 	}
 
 	if (display->first_commit) {
@@ -3595,7 +4723,7 @@ void igt_display_commit_atomic(igt_display_t *display, uint32_t flags, void *use
  * This function should only be used to commit changes that are expected to
  * succeed, since any failure during the commit process will cause the IGT
  * subtest to fail.  To commit changes that are expected to fail, use
- * @igt_try_display_commit2 instead.
+ * @igt_display_try_commit2 instead.
  *
  * Returns: 0 upon success.  This function will never return upon failure
  * since igt_fail() at lower levels will longjmp out of it.
@@ -3652,7 +4780,7 @@ int igt_display_commit(igt_display_t *display)
  * @display: DRM device handle
  *
  * Nonblockingly reads all current events and drops them, for highest
- * reliablility, call igt_display_commit2() first to flush all outstanding
+ * reliability, call igt_display_commit2() first to flush all outstanding
  * events.
  *
  * This will be called on the first commit after igt_display_reset() too,
@@ -3718,6 +4846,40 @@ drmModeModeInfo *igt_output_get_mode(igt_output_t *output)
 }
 
 /**
+ * igt_output_get_highres_mode:
+ * @output: Target output
+ *
+ * Returns: A #drmModeModeInfo struct representing the highest mode, NULL otherwise.
+ */
+drmModeModeInfo *igt_output_get_highres_mode(igt_output_t *output)
+{
+	drmModeConnector *connector = output->config.connector;
+	drmModeModeInfo *highest_mode = NULL;
+
+	igt_sort_connector_modes(connector, sort_drm_modes_by_res_dsc);
+	highest_mode = &connector->modes[0];
+
+	return highest_mode;
+}
+
+/**
+ * igt_output_get_lowres_mode:
+ * @output: Target output
+ *
+ * Returns: A #drmModeModeInfo struct representing the lowest mode, NULL otherwise.
+ */
+drmModeModeInfo *igt_output_get_lowres_mode(igt_output_t *output)
+{
+	drmModeConnector *connector = output->config.connector;
+	drmModeModeInfo *lowest_mode = NULL;
+
+	igt_sort_connector_modes(connector, sort_drm_modes_by_res_asc);
+	lowest_mode = &connector->modes[0];
+
+	return lowest_mode;
+}
+
+/**
  * igt_output_override_mode:
  * @output: Output of which the mode will be overridden
  * @mode: New mode, or NULL to disable override.
@@ -3743,7 +4905,25 @@ void igt_output_override_mode(igt_output_t *output, const drmModeModeInfo *mode)
 	}
 }
 
-/*
+/**
+ * igt_output_preferred_vrefresh:
+ * @output: Output whose preferred vrefresh is queried
+ *
+ * Returns: The vertical refresh rate of @output's preferred
+ * mode. If the output reports no modes return 60Hz as
+ * a fallback.
+ */
+int igt_output_preferred_vrefresh(igt_output_t *output)
+{
+	drmModeConnector *connector = output->config.connector;
+
+	if (connector->count_modes)
+		return connector->modes[0].vrefresh;
+	else
+		return 60;
+}
+
+/**
  * igt_output_set_pipe:
  * @output: Target output for which the pipe is being set to
  * @pipe: Display pipe to set to
@@ -3797,7 +4977,106 @@ void igt_output_set_pipe(igt_output_t *output, enum pipe pipe)
 	}
 }
 
+static
+bool __override_all_active_output_modes_to_fit_bw(igt_display_t *display,
+						  igt_output_t *outputs[IGT_MAX_PIPES],
+						  const int n_outputs,
+						  int base)
+{
+	igt_output_t *output = NULL;
+
+	if (base >= n_outputs)
+		return false;
+
+	output = outputs[base];
+
+	for_each_connector_mode(output) {
+		int ret;
+
+		igt_output_override_mode(output, &output->config.connector->modes[j__]);
+
+		if (__override_all_active_output_modes_to_fit_bw(display, outputs, n_outputs, base + 1))
+			return true;
+
+		if (display->is_atomic)
+			ret = igt_display_try_commit_atomic(display,
+					DRM_MODE_ATOMIC_TEST_ONLY |
+					DRM_MODE_ATOMIC_ALLOW_MODESET,
+					NULL);
+		else
+			ret = igt_display_try_commit2(display, COMMIT_LEGACY);
+
+		if (!ret)
+			return true;
+		else if (ret != -ENOSPC && ret != -EINVAL)
+			return false;
+	}
+
+	return false;
+}
+
+/**
+ * igt_override_all_active_output_modes_to_fit_bw:
+ * @display: a pointer to an #igt_display_t structure
+ *
+ * Override the mode on all active outputs (i.e. pending_pipe != PIPE_NONE)
+ * on basis of bandwidth.
+ *
+ * Returns: True if a valid connector mode combo found, else false
+ */
+bool igt_override_all_active_output_modes_to_fit_bw(igt_display_t *display)
+{
+	int i, n_outputs = 0;
+	igt_output_t *outputs[IGT_MAX_PIPES];
+
+	for (i = 0 ; i < display->n_outputs; i++) {
+		igt_output_t *output = &display->outputs[i];
+
+		if (output->pending_pipe == PIPE_NONE)
+			continue;
+
+		/* Sort the modes in descending order by clock freq. */
+		igt_sort_connector_modes(output->config.connector,
+					 sort_drm_modes_by_clk_dsc);
+
+		outputs[n_outputs++] = output;
+	}
+	igt_require_f(n_outputs, "No active outputs found.\n");
+
+	return __override_all_active_output_modes_to_fit_bw(display, outputs, n_outputs, 0);
+}
+
 /*
+ * igt_fit_modes_in_bw :
+ * @display: a pointer to an #igt_display_t structure
+ *
+ * Tries atomic TEST_ONLY commit; if it fails, overrides
+ * output modes to fit bandwidth.
+ *
+ * Returns: true if a valid mode combination is found or the commit succeeds,
+ * false otherwise.
+ */
+bool igt_fit_modes_in_bw(igt_display_t *display)
+{
+	int ret;
+
+	ret = igt_display_try_commit_atomic(display,
+					    DRM_MODE_ATOMIC_TEST_ONLY |
+					    DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
+	if (ret != 0) {
+		bool found;
+
+		found = igt_override_all_active_output_modes_to_fit_bw(display);
+		if (!found) {
+			igt_debug("No valid mode combo found for modeset\n");
+			return false;
+		}
+	}
+
+	return true;
+}
+
+/**
  * igt_pipe_refresh:
  * @display: a pointer to an #igt_display_t structure
  * @pipe: Pipe to refresh
@@ -3823,6 +5102,17 @@ void igt_pipe_refresh(igt_display_t *display, enum pipe pipe, bool force)
 		igt_pipe_obj_set_prop_changed(pipe_obj, IGT_CRTC_MODE_ID);
 }
 
+/**
+ * igt_output_get_plane:
+ * @output: Target output
+ * @plane_idx: Plane index
+ *
+ * Finds a driving pipe for the given @output otherwise and gets the valid
+ * plane associated with that pipe for the given @plane_idx. This function
+ * will terminate the execution if driving pipe is not for a given @output.
+ *
+ * Returns: A #igt_plane_t structure that matches the requested plane index
+ */
 igt_plane_t *igt_output_get_plane(igt_output_t *output, int plane_idx)
 {
 	igt_pipe_t *pipe;
@@ -3971,7 +5261,6 @@ void igt_plane_set_fence_fd(igt_plane_t *plane, int fence_fd)
  * igt_plane_set_pipe:
  * @plane: Target plane pointer
  * @pipe: The pipe to assign the plane to
- *
  */
 void igt_plane_set_pipe(igt_plane_t *plane, igt_pipe_t *pipe)
 {
@@ -4074,17 +5363,23 @@ void igt_fb_set_size(struct igt_fb *fb, igt_plane_t *plane,
 	igt_plane_set_prop_value(plane, IGT_PLANE_SRC_H, IGT_FIXED(h, 0));
 }
 
-static const char *rotation_name(igt_rotation_t rotation)
+/**
+ * igt_plane_rotation_name:
+ * @rotation: Plane rotation value (0, 90, 180, 270)
+ *
+ * Returns: Plane rotation value as a string
+ */
+const char *igt_plane_rotation_name(igt_rotation_t rotation)
 {
 	switch (rotation & IGT_ROTATION_MASK) {
 	case IGT_ROTATION_0:
-		return "0°";
+		return "0";
 	case IGT_ROTATION_90:
-		return "90°";
+		return "90";
 	case IGT_ROTATION_180:
-		return "180°";
+		return "180";
 	case IGT_ROTATION_270:
-		return "270°";
+		return "270";
 	default:
 		igt_assert(0);
 	}
@@ -4104,9 +5399,9 @@ void igt_plane_set_rotation(igt_plane_t *plane, igt_rotation_t rotation)
 	igt_pipe_t *pipe = plane->pipe;
 	igt_display_t *display = pipe->display;
 
-	LOG(display, "%s.%d: plane_set_rotation(%s)\n",
+	LOG(display, "%s.%d: plane_set_rotation(%s°)\n",
 	    kmstest_pipe_name(pipe->pipe),
-	    plane->index, rotation_name(rotation));
+	    plane->index, igt_plane_rotation_name(rotation));
 
 	igt_plane_set_prop_value(plane, IGT_PLANE_ROTATION, rotation);
 }
@@ -4124,38 +5419,76 @@ void igt_pipe_request_out_fence(igt_pipe_t *pipe)
 }
 
 /**
- * igt_wait_for_vblank_count:
- * @drm_fd: A drm file descriptor
- * @pipe: Pipe to wait_for_vblank on
- * @count: Number of vblanks to wait on
+ * igt_output_set_writeback_fb:
+ * @output: Target output
+ * @fb: Target framebuffer
  *
- * Waits for a given number of vertical blank intervals
+ * This function sets the given @fb to be used as the target framebuffer for the
+ * writeback engine at the next atomic commit. It will also request a writeback
+ * out fence that will contain the fd number of the out fence created by KMS if
+ * the given @fb is valid.
  */
-void igt_wait_for_vblank_count(int drm_fd, enum pipe pipe, int count)
+void igt_output_set_writeback_fb(igt_output_t *output, struct igt_fb *fb)
+{
+	igt_display_t *display = output->display;
+
+	LOG(display, "%s: output_set_writeback_fb(%d)\n", output->name, fb ? fb->fb_id : 0);
+
+	igt_output_set_prop_value(output, IGT_CONNECTOR_WRITEBACK_FB_ID, fb ? fb->fb_id : 0);
+	/* only request a writeback out fence if the framebuffer is valid */
+	if (fb)
+		igt_output_set_prop_value(output, IGT_CONNECTOR_WRITEBACK_OUT_FENCE_PTR,
+					  (ptrdiff_t)&output->writeback_out_fence_fd);
+}
+
+static int __igt_vblank_wait(int drm_fd, int crtc_offset, int count)
 {
 	drmVBlank wait_vbl;
 	uint32_t pipe_id_flag;
 
 	memset(&wait_vbl, 0, sizeof(wait_vbl));
-	pipe_id_flag = kmstest_get_vbl_flag(pipe);
+	pipe_id_flag = kmstest_get_vbl_flag(crtc_offset);
 
-	wait_vbl.request.type = DRM_VBLANK_RELATIVE;
-	wait_vbl.request.type |= pipe_id_flag;
+	wait_vbl.request.type = DRM_VBLANK_RELATIVE | pipe_id_flag;
 	wait_vbl.request.sequence = count;
 
-	igt_assert(drmWaitVBlank(drm_fd, &wait_vbl) == 0);
+	return drmWaitVBlank(drm_fd, &wait_vbl);
+}
+
+/**
+ * igt_wait_for_vblank_count:
+ * @drm_fd: A drm file descriptor
+ * @crtc_offset: offset of the crtc in drmModeRes.crtcs
+ * @count: Number of vblanks to wait on
+ *
+ * Waits for a given number of vertical blank intervals
+ *
+ * In DRM, 'Pipe', as understood by DRM_IOCTL_WAIT_VBLANK,
+ * is actually an offset of crtc in drmModeRes.crtcs
+ * and it has nothing to do with a hardware concept of a pipe.
+ * They can match but don't have to in case of DRM lease or
+ * non-contiguous pipes.
+ *
+ * To make thing clear we are calling DRM_IOCTL_WAIT_VBLANK's 'pipe'
+ * a crtc_offset.
+ */
+void igt_wait_for_vblank_count(int drm_fd, int crtc_offset, int count)
+{
+	igt_assert(__igt_vblank_wait(drm_fd, crtc_offset, count) == 0);
 }
 
 /**
  * igt_wait_for_vblank:
  * @drm_fd: A drm file descriptor
- * @pipe: Pipe to wait_for_vblank on
+ * @crtc_offset: offset of a crtc in drmModeRes.crtcs
+ *
+ * See #igt_wait_for_vblank_count for more details
  *
  * Waits for 1 vertical blank intervals
  */
-void igt_wait_for_vblank(int drm_fd, enum pipe pipe)
+void igt_wait_for_vblank(int drm_fd, int crtc_offset)
 {
-	igt_wait_for_vblank_count(drm_fd, pipe, 1);
+	igt_assert(__igt_vblank_wait(drm_fd, crtc_offset, 1) == 0);
 }
 
 /**
@@ -4170,7 +5503,10 @@ void igt_wait_for_vblank(int drm_fd, enum pipe pipe)
  */
 void igt_enable_connectors(int drm_fd)
 {
+#define MAX_TRIES	10
+#define SLEEP_DURATION	50000
 	drmModeRes *res;
+	int tries;
 
 	res = drmModeGetResources(drm_fd);
 	if (!res)
@@ -4179,10 +5515,28 @@ void igt_enable_connectors(int drm_fd)
 	for (int i = 0; i < res->count_connectors; i++) {
 		drmModeConnector *c;
 
-		/* Do a probe. This may be the first action after booting */
-		c = drmModeGetConnector(drm_fd, res->connectors[i]);
-		if (!c) {
-			igt_warn("Could not read connector %u: %m\n", res->connectors[i]);
+		/*
+		 * The kernel returns the count of connectors before
+		 * they're all fully set up, so we can have a race
+		 * condition where we try to get the connector when
+		 * it's not fully set up yet.  To avoid failing here
+		 * in these cases, retry a few times.
+		 */
+		for (tries = 0; tries < MAX_TRIES; tries++) {
+			/* Do a probe. This may be the first action after booting */
+			c = drmModeGetConnector(drm_fd, res->connectors[i]);
+			if (c)
+				break;
+
+			igt_debug("Could not read connector %u: %m (try %d of %d)\n",
+				  res->connectors[i], tries + 1, MAX_TRIES);
+
+			usleep(SLEEP_DURATION);
+		}
+
+		if (tries == MAX_TRIES) {
+			igt_warn("Could not read connector %u after %d tries, skipping\n",
+				 res->connectors[i], MAX_TRIES);
 			continue;
 		}
 
@@ -4210,23 +5564,26 @@ void igt_enable_connectors(int drm_fd)
  */
 void igt_reset_connectors(void)
 {
-	/* reset the connectors stored in forced_connectors, avoiding any
+	/* reset the connectors stored in connector_attrs, avoiding any
 	 * functions that are not safe to call in signal handlers */
-	for (int i = 0; forced_connectors[i]; i++)
-		igt_sysfs_set(forced_connectors_device[i],
-			      forced_connectors[i],
-			      "detect");
+	for (int i = 0; i < ARRAY_SIZE(connector_attrs); i++) {
+		struct igt_connector_attr *c = &connector_attrs[i];
+
+		if (!c->attr)
+			continue;
+
+		c->set(c->dir, c->attr, c->reset_value);
+	}
 }
 
-#if !defined(ANDROID)
 /**
- * igt_watch_hotplug:
+ * igt_watch_uevents:
  *
- * Begin monitoring udev for sysfs hotplug events.
+ * Begin monitoring udev for sysfs uevents.
  *
- * Returns: a udev monitor for detecting hotplugs on
+ * Returns: A udev monitor for detecting uevents on
  */
-struct udev_monitor *igt_watch_hotplug(void)
+struct udev_monitor *igt_watch_uevents(void)
 {
 	struct udev *udev;
 	struct udev_monitor *mon;
@@ -4258,70 +5615,105 @@ struct udev_monitor *igt_watch_hotplug(void)
 	return mon;
 }
 
-static bool event_detected(struct udev_monitor *mon, int timeout_secs,
-			   const char *property)
+static
+bool event_detected(struct udev_monitor *mon, int timeout_secs,
+		    const char **property, int *expected_val, int num_props)
 {
 	struct udev_device *dev;
-	const char *hotplug_val;
+	const char *prop_val;
 	struct pollfd fd = {
 		.fd = udev_monitor_get_fd(mon),
 		.events = POLLIN
 	};
-	bool hotplug_received = false;
+	bool event_received = false;
+	int i;
 
-	/* Go through all of the events pending on the udev monitor. Once we
-	 * receive a hotplug, we continue going through the rest of the events
-	 * so that redundant hotplug events don't change the results of future
-	 * checks
+	/* Go through all of the events pending on the udev monitor.
+	 * Match the given set of properties and their values to
+	 * the expected values.
 	 */
-	while (!hotplug_received && poll(&fd, 1, timeout_secs * 1000)) {
+	while (!event_received && poll(&fd, 1, timeout_secs * 1000)) {
 		dev = udev_monitor_receive_device(mon);
-
-		hotplug_val = udev_device_get_property_value(dev, property);
-		if (hotplug_val && atoi(hotplug_val) == 1)
-			hotplug_received = true;
+		for (i = 0; i < num_props; i++) {
+			prop_val = udev_device_get_property_value(dev,
+								  property[i]);
+			if (!prop_val || atoi(prop_val) != expected_val[i])
+				break;
+		}
+		if (i == num_props)
+			event_received = true;
 
 		udev_device_unref(dev);
 	}
 
-	return hotplug_received;
+	return event_received;
+}
+
+/**
+ * igt_connector_event_detected:
+ * @mon: A udev monitor initialized with #igt_watch_uevents
+ * @conn_id: Connector id of the Connector for which the property change is
+ * expected.
+ * @prop_id: Property id for which the change is expected.
+ * @timeout_secs: How long to wait for a connector event to occur.
+ *
+ * Detect if a connector event is received for a given connector and property.
+ *
+ * Returns: True if the connector event was received, false if we timed out
+ */
+bool igt_connector_event_detected(struct udev_monitor *mon, uint32_t conn_id,
+				  uint32_t prop_id, int timeout_secs)
+{
+	const char *props[3] = {"HOTPLUG", "CONNECTOR", "PROPERTY"};
+	int expected_val[3] = {1, conn_id, prop_id};
+
+	return event_detected(mon, timeout_secs, props, expected_val,
+			      ARRAY_SIZE(props));
 }
 
 /**
  * igt_hotplug_detected:
- * @mon: A udev monitor initialized with #igt_watch_hotplug
+ * @mon: A udev monitor initialized with #igt_watch_uevents
  * @timeout_secs: How long to wait for a hotplug event to occur.
  *
- * Assert that a hotplug event was received since we last checked the monitor.
+ * Detect if a hotplug event was received since we last checked the monitor.
  *
- * Returns: true if a sysfs hotplug event was received, false if we timed out
+ * Returns: True if a sysfs hotplug event was received, false if we timed out
  */
 bool igt_hotplug_detected(struct udev_monitor *mon, int timeout_secs)
 {
-	return event_detected(mon, timeout_secs, "HOTPLUG");
+	const char *props[1] = {"HOTPLUG"};
+	int expected_val = 1;
+
+	return event_detected(mon, timeout_secs, props, &expected_val,
+			      ARRAY_SIZE(props));
 }
 
 /**
  * igt_lease_change_detected:
- * @mon: A udev monitor initialized with #igt_watch_hotplug
+ * @mon: A udev monitor initialized with #igt_watch_uevents
  * @timeout_secs: How long to wait for a lease change event to occur.
  *
- * Assert that a lease change event was received since we last checked the monitor.
+ * Detect if a lease change event was received since we last checked the monitor.
  *
- * Returns: true if a sysfs lease change event was received, false if we timed out
+ * Returns: True if a sysfs lease change event was received, false if we timed out
  */
 bool igt_lease_change_detected(struct udev_monitor *mon, int timeout_secs)
 {
-	return event_detected(mon, timeout_secs, "LEASE");
+	const char *props[1] = {"LEASE"};
+	int expected_val = 1;
+
+	return event_detected(mon, timeout_secs, props, &expected_val,
+			      ARRAY_SIZE(props));
 }
 
 /**
- * igt_flush_hotplugs:
- * @mon: A udev monitor initialized with #igt_watch_hotplug
+ * igt_flush_uevents:
+ * @mon: A udev monitor initialized with #igt_watch_uevents
  *
- * Get rid of any pending hotplug events
+ * Get rid of any pending uevents
  */
-void igt_flush_hotplugs(struct udev_monitor *mon)
+void igt_flush_uevents(struct udev_monitor *mon)
 {
 	struct udev_device *dev;
 
@@ -4330,12 +5722,12 @@ void igt_flush_hotplugs(struct udev_monitor *mon)
 }
 
 /**
- * igt_cleanup_hotplug:
- * @mon: A udev monitor initialized with #igt_watch_hotplug
+ * igt_cleanup_uevents:
+ * @mon: A udev monitor initialized with #igt_watch_uevents
  *
- * Cleanup the resources allocated by #igt_watch_hotplug
+ * Cleanup the resources allocated by #igt_watch_uevents
  */
-void igt_cleanup_hotplug(struct udev_monitor *mon)
+void igt_cleanup_uevents(struct udev_monitor *mon)
 {
 	struct udev *udev = udev_monitor_get_udev(mon);
 
@@ -4343,26 +5735,30 @@ void igt_cleanup_hotplug(struct udev_monitor *mon)
 	mon = NULL;
 	udev_unref(udev);
 }
-#endif /*!defined(ANDROID)*/
 
 /**
  * kmstest_get_vbl_flag:
- * @pipe_id: Pipe to convert to flag representation.
+ * @crtc_offset: CRTC offset to convert into pipe flag representation.
  *
- * Convert a pipe id into the flag representation
- * expected in DRM while processing DRM_IOCTL_WAIT_VBLANK.
+ * Convert an offset of an crtc in drmModeRes.crtcs into flag representation
+ * expected by DRM_IOCTL_WAIT_VBLANK.
+ * See #igt_wait_for_vblank_count for details
  */
-uint32_t kmstest_get_vbl_flag(uint32_t pipe_id)
+uint32_t kmstest_get_vbl_flag(int crtc_offset)
 {
-	if (pipe_id == 0)
-		return 0;
-	else if (pipe_id == 1)
-		return _DRM_VBLANK_SECONDARY;
+	uint32_t pipe_id;
+
+	if (crtc_offset == 0)
+		pipe_id = 0;
+	else if (crtc_offset == 1)
+		pipe_id = _DRM_VBLANK_SECONDARY;
 	else {
-		uint32_t pipe_flag = pipe_id << 1;
+		uint32_t pipe_flag = crtc_offset << 1;
 		igt_assert(!(pipe_flag & ~DRM_VBLANK_HIGH_CRTC_MASK));
-		return pipe_flag;
+		pipe_id = pipe_flag;
 	}
+
+	return pipe_id;
 }
 
 static inline const uint32_t *
@@ -4458,6 +5854,14 @@ static void igt_fill_plane_format_mod(igt_display_t *display, igt_plane_t *plane
 	igt_assert_eq(idx, plane->format_mod_count);
 }
 
+/**
+ * igt_plane_has_format_mod:
+ * @plane: Target plane
+ * @format: Target format
+ * @modifier: Target modifier
+ *
+ * Returns: True if @plane supports the given @format and @modifier, else false
+ */
 bool igt_plane_has_format_mod(igt_plane_t *plane, uint32_t format,
 			      uint64_t modifier)
 {
@@ -4534,6 +5938,14 @@ static void igt_fill_display_format_mod(igt_display_t *display)
 	}
 }
 
+/**
+ * igt_display_has_format_mod:
+ * @display: a pointer to an #igt_display_t structure
+ * @format: Target format
+ * @modifier: Target modifier
+ *
+ * Returns: True if @display supports the given @format and @modifier, else false
+ */
 bool igt_display_has_format_mod(igt_display_t *display, uint32_t format,
 				uint64_t modifier)
 {
@@ -4547,4 +5959,1516 @@ bool igt_display_has_format_mod(igt_display_t *display, uint32_t format,
 	}
 
 	return false;
+}
+
+/**
+ * igt_parse_connector_tile_blob:
+ * @blob: pointer to the connector's tile properties
+ * @tile: pointer to tile structure that is populated by the function
+ *
+ * Parses the connector tile blob to extract the tile information.
+ * The blob information is exposed from drm/drm_connector.c in the kernel.
+ * The format of the tile property is defined in the kernel as char tile[256]
+ * that consists of 8 integers that are ':' separated.
+ */
+void igt_parse_connector_tile_blob(drmModePropertyBlobPtr blob,
+		igt_tile_info_t *tile)
+{
+	char *blob_data = blob->data;
+
+	igt_assert(blob);
+
+	tile->tile_group_id = atoi(strtok(blob_data, ":"));
+	tile->tile_is_single_monitor = atoi(strtok(NULL, ":"));
+	tile->num_h_tile = atoi(strtok(NULL, ":"));
+	tile->num_v_tile = atoi(strtok(NULL, ":"));
+	tile->tile_h_loc = atoi(strtok(NULL, ":"));
+	tile->tile_v_loc = atoi(strtok(NULL, ":"));
+	tile->tile_h_size = atoi(strtok(NULL, ":"));
+	tile->tile_v_size = atoi(strtok(NULL, ":"));
+}
+
+/**
+ * igt_reduce_format:
+ * @format: drm fourcc
+ *
+ * Reduce @format to a base format. The aim is to allow grouping
+ * sufficiently similar formats into classes. Formats with identical
+ * component sizes, overall pixel size, chroma subsampling, etc. are
+ * considered part of the same class, no matter in which order the
+ * components appear. We arbitrarily choose one of the formats in
+ * the class as the base format. Note that the base format itself
+ * may not be supported by whatever device is being tested even if
+ * some of the other formats in the class are supported.
+ *
+ * Returns: The base format for @format
+ */
+uint32_t igt_reduce_format(uint32_t format)
+{
+	switch (format) {
+	case DRM_FORMAT_RGB332:
+	case DRM_FORMAT_BGR233:
+		return DRM_FORMAT_RGB332;
+	case DRM_FORMAT_XRGB1555:
+	case DRM_FORMAT_XBGR1555:
+	case DRM_FORMAT_ARGB1555:
+	case DRM_FORMAT_ABGR1555:
+	case DRM_FORMAT_RGBX5551:
+	case DRM_FORMAT_BGRX5551:
+	case DRM_FORMAT_RGBA5551:
+	case DRM_FORMAT_BGRA5551:
+		return DRM_FORMAT_XRGB1555;
+	case DRM_FORMAT_RGB565:
+	case DRM_FORMAT_BGR565:
+		return DRM_FORMAT_RGB565;
+	case DRM_FORMAT_XRGB8888:
+	case DRM_FORMAT_XBGR8888:
+	case DRM_FORMAT_ARGB8888:
+	case DRM_FORMAT_ABGR8888:
+	case DRM_FORMAT_RGBX8888:
+	case DRM_FORMAT_BGRX8888:
+	case DRM_FORMAT_RGBA8888:
+	case DRM_FORMAT_BGRA8888:
+		return DRM_FORMAT_XRGB8888;
+	case DRM_FORMAT_XRGB2101010:
+	case DRM_FORMAT_XBGR2101010:
+	case DRM_FORMAT_ARGB2101010:
+	case DRM_FORMAT_ABGR2101010:
+	case DRM_FORMAT_RGBX1010102:
+	case DRM_FORMAT_BGRX1010102:
+	case DRM_FORMAT_RGBA1010102:
+	case DRM_FORMAT_BGRA1010102:
+		return DRM_FORMAT_XRGB2101010;
+	case DRM_FORMAT_XRGB16161616F:
+	case DRM_FORMAT_XBGR16161616F:
+	case DRM_FORMAT_ARGB16161616F:
+	case DRM_FORMAT_ABGR16161616F:
+		return DRM_FORMAT_XRGB16161616F;
+	case DRM_FORMAT_YUYV:
+	case DRM_FORMAT_UYVY:
+	case DRM_FORMAT_YVYU:
+	case DRM_FORMAT_VYUY:
+		return DRM_FORMAT_YUYV;
+	case DRM_FORMAT_NV12:
+	case DRM_FORMAT_NV21:
+		return DRM_FORMAT_NV12;
+	case DRM_FORMAT_NV16:
+	case DRM_FORMAT_NV61:
+		return DRM_FORMAT_NV16;
+	case DRM_FORMAT_NV24:
+	case DRM_FORMAT_NV42:
+		return DRM_FORMAT_NV24;
+	case DRM_FORMAT_P010:
+	case DRM_FORMAT_P012:
+	case DRM_FORMAT_P016:
+		return DRM_FORMAT_P010;
+	case DRM_FORMAT_Y210:
+	case DRM_FORMAT_Y212:
+	case DRM_FORMAT_Y216:
+		return DRM_FORMAT_Y210;
+	case DRM_FORMAT_XYUV8888:
+	case DRM_FORMAT_AYUV:
+		return DRM_FORMAT_XYUV8888;
+	case DRM_FORMAT_XVYU2101010:
+	case DRM_FORMAT_Y410:
+		return DRM_FORMAT_XVYU2101010;
+	case DRM_FORMAT_XVYU12_16161616:
+	case DRM_FORMAT_XVYU16161616:
+	case DRM_FORMAT_Y412:
+	case DRM_FORMAT_Y416:
+		return DRM_FORMAT_XVYU12_16161616;
+	default:
+		return format;
+	}
+}
+
+/**
+ * igt_dump_connectors_fd:
+ * @drmfd: handle to open drm device.
+ *
+ * Iterates through list of connectors and
+ * dumps their list of modes.
+ */
+void igt_dump_connectors_fd(int drmfd)
+{
+	int i, j;
+
+	drmModeRes *mode_resources = drmModeGetResources(drmfd);
+
+	if (!mode_resources) {
+		igt_warn("drmModeGetResources failed: %s\n", strerror(errno));
+		return;
+	}
+
+	igt_info("Connectors:\n");
+	igt_info("id\tencoder\tstatus\t\ttype\tsize (mm)\tmodes\n");
+	for (i = 0; i < mode_resources->count_connectors; i++) {
+		drmModeConnector *connector;
+
+		connector = drmModeGetConnectorCurrent(drmfd,
+				mode_resources->connectors[i]);
+		if (!connector) {
+			igt_warn("Could not get connector %i: %s\n",
+				 mode_resources->connectors[i],
+				 strerror(errno));
+			continue;
+		}
+
+		igt_info("%d\t%d\t%s\t%s\t%dx%d\t\t%d\n",
+			 connector->connector_id,
+			 connector->encoder_id,
+			 kmstest_connector_status_str(connector->connection),
+			 kmstest_connector_type_str(connector->connector_type),
+			 connector->mmWidth,
+			 connector->mmHeight,
+			 connector->count_modes);
+
+		if (!connector->count_modes)
+			continue;
+
+		igt_info("  Modes:\n");
+		igt_info("  name refresh (Hz) hdisp hss hse htot vdisp ""vss vse vtot flags type clock\n");
+		for (j = 0; j < connector->count_modes; j++) {
+			igt_info("[%d]", j);
+			kmstest_dump_mode(&connector->modes[j]);
+		}
+
+		drmModeFreeConnector(connector);
+	}
+	igt_info("\n");
+
+	drmModeFreeResources(mode_resources);
+}
+
+/**
+ * igt_dump_crtcs_fd:
+ * @drmfd: handle to open drm device.
+ *
+ * Iterates through the list of crtcs and
+ * dumps out the mode and basic information
+ * for each of them.
+ */
+void igt_dump_crtcs_fd(int drmfd)
+{
+	int i;
+	drmModeRes *mode_resources;
+
+	mode_resources = drmModeGetResources(drmfd);
+	if (!mode_resources) {
+		igt_warn("drmModeGetResources failed: %s\n", strerror(errno));
+		return;
+	}
+
+	igt_info("CRTCs:\n");
+	igt_info("id\tfb\tpos\tsize\n");
+	for (i = 0; i < mode_resources->count_crtcs; i++) {
+		drmModeCrtc *crtc;
+
+		crtc = drmModeGetCrtc(drmfd, mode_resources->crtcs[i]);
+		if (!crtc) {
+			igt_warn("Could not get crtc %i: %s\n",
+					mode_resources->crtcs[i],
+					strerror(errno));
+			continue;
+		}
+		igt_info("%d\t%d\t(%d,%d)\t(%dx%d)\n",
+			 crtc->crtc_id,
+			 crtc->buffer_id,
+			 crtc->x,
+			 crtc->y,
+			 crtc->width,
+			 crtc->height);
+
+		kmstest_dump_mode(&crtc->mode);
+
+		drmModeFreeCrtc(crtc);
+	}
+	igt_info("\n");
+
+	drmModeFreeResources(mode_resources);
+}
+
+/**
+ * igt_get_i915_edp_lobf_status
+ * @drmfd: A drm file descriptor
+ * @connector_name: Name of the libdrm connector we're going to use
+ *
+ * Return: True if its enabled.
+ */
+bool igt_get_i915_edp_lobf_status(int drmfd, char *connector_name)
+{
+	char buf[24];
+	int fd, res;
+
+	fd = igt_debugfs_connector_dir(drmfd, connector_name, O_RDONLY);
+	igt_assert(fd >= 0);
+
+	res = igt_debugfs_simple_read(fd, "i915_edp_lobf_info", buf, sizeof(buf));
+	igt_require(res > 0);
+
+	close(fd);
+
+	return strstr(buf, "LOBF status: enabled");
+}
+
+/**
+ * igt_get_output_max_bpc:
+ * @drmfd: A drm file descriptor
+ * @connector_name: Name of the libdrm connector we're going to use
+ *
+ * Returns: The maximum bpc from the connector debugfs.
+ */
+unsigned int igt_get_output_max_bpc(int drmfd, char *connector_name)
+{
+	char buf[24];
+	char *start_loc;
+	int fd, res;
+	unsigned int maximum;
+
+	fd = igt_debugfs_connector_dir(drmfd, connector_name, O_RDONLY);
+	igt_assert(fd >= 0);
+
+	res = igt_debugfs_simple_read(fd, "output_bpc", buf, sizeof(buf));
+	igt_require(res > 0);
+
+	close(fd);
+
+	igt_assert(start_loc = strstr(buf, "Maximum: "));
+	igt_assert_eq(sscanf(start_loc, "Maximum: %u", &maximum), 1);
+
+	return maximum;
+}
+
+/**
+ * igt_get_pipe_current_bpc:
+ * @drmfd: A drm file descriptor
+ * @pipe: Display pipe
+ *
+ * Returns: The current bpc from the crtc debugfs.
+ */
+unsigned int igt_get_pipe_current_bpc(int drmfd, enum pipe pipe)
+{
+	char buf[24];
+	char debugfs_name[24];
+	char *start_loc;
+	int fd, res;
+	unsigned int current;
+
+	fd = igt_debugfs_pipe_dir(drmfd, pipe, O_RDONLY);
+	igt_assert(fd >= 0);
+
+	if (is_intel_device(drmfd))
+		strcpy(debugfs_name, "i915_current_bpc");
+	else if (is_amdgpu_device(drmfd))
+		strcpy(debugfs_name, "amdgpu_current_bpc");
+
+	res = igt_debugfs_simple_read(fd, debugfs_name, buf, sizeof(buf));
+	igt_require(res > 0);
+
+	close(fd);
+
+	igt_assert(start_loc = strstr(buf, "Current: "));
+	igt_assert_eq(sscanf(start_loc, "Current: %u", &current), 1);
+
+	return current;
+}
+
+static unsigned int get_current_bpc(int drmfd, enum pipe pipe,
+				    char *output_name, unsigned int bpc)
+{
+	unsigned int maximum = igt_get_output_max_bpc(drmfd, output_name);
+	unsigned int current = igt_get_pipe_current_bpc(drmfd, pipe);
+
+	igt_require_f(maximum >= bpc,
+		      "Monitor doesn't support %u bpc, max is %u\n", bpc,
+		      maximum);
+
+	return current;
+}
+
+/**
+ * igt_assert_output_bpc_equal:
+ * @drmfd: A drm file descriptor
+ * @pipe: Display pipe
+ * @output_name: Name of the libdrm connector we're going to use
+ * @bpc: BPC to compare with max & current bpc
+ *
+ * Assert if crtc's current bpc is not matched with the requested one.
+ */
+void igt_assert_output_bpc_equal(int drmfd, enum pipe pipe,
+				 char *output_name, unsigned int bpc)
+{
+	unsigned int current = get_current_bpc(drmfd, pipe, output_name, bpc);
+
+	igt_assert_eq(current, bpc);
+}
+
+/**
+ * igt_check_output_bpc_equal:
+ * @drmfd: A drm file descriptor
+ * @pipe: Display pipe
+ * @output_name: Name of the libdrm connector we're going to use
+ * @bpc: BPC to compare with max & current bpc
+ *
+ * This is similar to igt_assert_output_bpc_equal, instead of assert
+ * it'll return True if crtc has the correct requested bpc, else False.
+ *
+ * Returns: True if crtc's current bpc is matched with the requested bpc,
+ * else False.
+ */
+bool igt_check_output_bpc_equal(int drmfd, enum pipe pipe,
+				char *output_name, unsigned int bpc)
+{
+	unsigned int current = get_current_bpc(drmfd, pipe, output_name, bpc);
+
+	return (current == bpc);
+}
+
+/**
+ * igt_max_bpc_constraint:
+ * @display: a pointer to an #igt_display_t structure
+ * @pipe: Display pipe
+ * @output: Target output
+ * @bpc: BPC to compare with max & current bpc
+ *
+ * The "max bpc" property only ensures that the bpc will not go beyond
+ * the value set through this property. It does not guarantee that the
+ * same bpc will be used for the given mode.
+ *
+ * So, if we really want a particular bpc set, try reducing the resolution
+ * till we get the bpc that we set in max bpc property.
+ *
+ * Returns: True if suitable mode found to use requested bpc, else False.
+ */
+bool igt_max_bpc_constraint(igt_display_t *display, enum pipe pipe,
+			    igt_output_t *output, int bpc)
+{
+	drmModeConnector *connector = output->config.connector;
+
+	igt_sort_connector_modes(connector, sort_drm_modes_by_clk_dsc);
+
+	for_each_connector_mode(output) {
+		igt_output_override_mode(output, &connector->modes[j__]);
+
+		if (is_intel_device(display->drm_fd) &&
+		    !igt_check_bigjoiner_support(display))
+			continue;
+
+		igt_display_commit2(display, display->is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY);
+
+		if (!igt_check_output_bpc_equal(display->drm_fd, pipe,
+						output->name, bpc))
+			continue;
+
+		return true;
+	}
+
+	igt_output_override_mode(output, NULL);
+	return false;
+}
+
+static int read_and_parse_cdclk_debugfs(int fd, const char *check_str)
+{
+	char buf[4096];
+	char *s;
+	int dir, res, clk = 0;
+	drmModeRes *resources;
+
+	if (!is_intel_device(fd))
+		return 0;
+
+	/* If there is no display, then no point to check further. */
+	resources = drmModeGetResources(fd);
+	if (!resources)
+		return 0;
+
+	drmModeFreeResources(resources);
+
+	dir = igt_debugfs_dir(fd);
+	igt_require(dir != -1);
+
+	/*
+	 * Display specific clock frequency info is moved to i915_cdclk_info,
+	 * On older kernels if this debugfs is not found, fallback to read from
+	 * i915_frequency_info.
+	 */
+	res = igt_debugfs_simple_read(dir, "i915_cdclk_info",
+				      buf, sizeof(buf));
+	if (res <= 0)
+		res = igt_debugfs_simple_read(dir, "i915_frequency_info",
+					      buf, sizeof(buf));
+	close(dir);
+
+	igt_require(res > 0);
+
+	igt_assert(s = strstr(buf, check_str));
+	s += strlen(check_str);
+	igt_assert_eq(sscanf(s, "%d kHz", &clk), 1);
+
+	return clk;
+}
+
+/**
+ * igt_get_max_dotclock:
+ * @fd: A drm file descriptor
+ *
+ * Get the Max pixel clock frequency from intel specific debugfs
+ * "i915_frequency_info"/"i915_cdclk_info".
+ *
+ * Returns: Max pixel clock frequency, otherwise 0.
+ */
+int igt_get_max_dotclock(int fd)
+{
+	int max_dotclock = read_and_parse_cdclk_debugfs(fd, "Max pixel clock frequency:");
+
+	/* 100 Mhz to 5 GHz seem like reasonable values to expect */
+	if (max_dotclock > 0) {
+		igt_assert_lt(max_dotclock, 5000000);
+		igt_assert_lt(100000, max_dotclock);
+	}
+
+	return max_dotclock > 0 ? max_dotclock : 0;
+}
+
+/**
+ * igt_get_max_cdclk:
+ * @fd: A drm file descriptor
+ *
+ * Get the max CD clock frequency from intel specific debugfs
+ * "i915_frequency_info"/"i915_cdclk_info".
+ *
+ * Returns: Max CD clk frequency, otherwise 0.
+ */
+int igt_get_max_cdclk(int fd)
+{
+	return read_and_parse_cdclk_debugfs(fd, "Max CD clock frequency:");
+}
+
+/**
+ * igt_get_current_cdclk:
+ * @fd: A drm file descriptor
+ *
+ * Get the current CD clock frequency from intel specific debugfs
+ * "i915_frequency_info"/"i915_cdclk_info".
+ *
+ * Returns: Current CD clock frequency, otherwise 0.
+ */
+int igt_get_current_cdclk(int fd)
+{
+	return read_and_parse_cdclk_debugfs(fd, "Current CD clock frequency:");
+}
+
+/**
+ * get_max_hdisplay:
+ * @drm_fd: drm file descriptor
+ *
+ * Returns: The maximum hdisplay supported per pipe.
+ */
+static int get_max_pipe_hdisplay(int drm_fd)
+{
+	int dev_id = intel_get_drm_devid(drm_fd);
+
+	return (intel_display_ver(dev_id) >= 30) ? HDISPLAY_6K_PER_PIPE :
+						   HDISPLAY_5K_PER_PIPE;
+}
+
+/**
+ * igt_bigjoiner_possible:
+ * @drm_fd: drm file descriptor
+ * @mode: libdrm mode
+ * @max_dotclock: Max pixel clock frequency
+ *
+ * Bigjoiner will come into the picture, when the requested
+ * mode resolution > 5K or mode clock > max_dotclock.
+ *
+ * Returns: True if mode requires Bigjoiner, else False.
+ */
+bool igt_bigjoiner_possible(int drm_fd, drmModeModeInfo *mode, int max_dotclock)
+{
+	return (mode->hdisplay > get_max_pipe_hdisplay(drm_fd) ||
+		mode->clock > max_dotclock);
+}
+
+/**
+ * bigjoiner_mode_found:
+ * @drm_fd: drm file descriptor
+ * @connector: libdrm connector
+ * @max_dot_clock: max dot clock frequency
+ * @mode: libdrm mode to be filled
+ *
+ * Bigjoiner will come in to the picture when the
+ * resolution > 5K or clock > max-dot-clock.
+ *
+ * Returns: True if big joiner found in connector modes
+ */
+bool bigjoiner_mode_found(int drm_fd, drmModeConnector *connector,
+			  int max_dotclock, drmModeModeInfo *mode)
+{
+	bool found = false;
+
+	for (int i=0; i< connector->count_modes; i++) {
+		if (igt_bigjoiner_possible(drm_fd, &connector->modes[i], max_dotclock) &&
+		    !igt_ultrajoiner_possible(drm_fd, &connector->modes[i], max_dotclock)) {
+			*mode = connector->modes[i];
+			found = true;
+			break;
+		}
+	}
+	return found;
+}
+
+/**
+ * max_non_joiner_mode_found:
+ * @drm_fd: drm file descriptor
+ * @connector: libdrm connector
+ * @max_dot_clock: max dot clock frequency
+ * @mode: libdrm mode to be filled
+ *
+ * Finds the highest possible display mode that does
+ * not require a big joiner.
+ *
+ * Returns: True if a valid non-joiner mode is found,
+ * false otherwise.
+ */
+bool max_non_joiner_mode_found(int drm_fd, drmModeConnector *connector,
+			   int max_dotclock, drmModeModeInfo *mode)
+{
+	int max_hdisplay = get_max_pipe_hdisplay(drm_fd);
+
+	for (int i = 0; i < connector->count_modes; i++) {
+		drmModeModeInfo *current_mode = &connector->modes[i];
+
+		if (current_mode->hdisplay == max_hdisplay &&
+		    current_mode->clock < max_dotclock) {
+			*mode = *current_mode;
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/* TODO: Move these lib functions to the joiner-specific library file
+ *	 once those patches are merged.
+ */
+
+/**
+ * igt_is_joiner_enabled_for_pipe:
+ * @drmfd: A drm file descriptor
+ * @pipe: display pipe
+ *
+ * Returns: True if joiner is enabled, false otherwise.
+ */
+bool igt_is_joiner_enabled_for_pipe(int drmfd, enum pipe pipe)
+{
+	char buf[16384], master_str[64], slave_str[64];
+	int dir, res;
+	unsigned  int pipe_mask = (1 << 0) | (1 << 1);
+
+	dir = igt_debugfs_dir(drmfd);
+	igt_assert(dir >= 0);
+
+	res = igt_debugfs_simple_read(dir, "i915_display_info",
+					    buf, sizeof(buf));
+	close(dir);
+	igt_assert(res >= 0);
+	pipe_mask <<= pipe;
+
+	snprintf(master_str, sizeof(master_str),
+		 "Linked to 0x%x pipes as a master", pipe_mask);
+	snprintf(slave_str, sizeof(slave_str),
+		 "Linked to 0x%x pipes as a slave", pipe_mask);
+
+	return (strstr(buf, master_str) && strstr(buf, slave_str));
+}
+
+/**
+ * igt_ultrajoiner_possible:
+ * @mode: libdrm mode
+ * @max_dotclock: Max pixel clock frequency
+ *
+ * Ultrajoiner will come into the picture, when the requested
+ * mode resolution > 10K or mode clock > 2 * max_dotclock.
+ *
+ * Returns: True if mode requires Ultrajoiner, else False.
+ */
+bool igt_ultrajoiner_possible(int drm_fd, drmModeModeInfo *mode, int max_dotclock)
+{
+	return (mode->hdisplay > 2 * get_max_pipe_hdisplay(drm_fd) ||
+		mode->clock > 2 * max_dotclock);
+}
+
+/**
+ * Ultrajoiner_mode_found:
+ * @drm_fd: drm file descriptor
+ * @connector: libdrm connector
+ * @max_dot_clock: max dot clock frequency
+ * @mode: libdrm mode to be filled
+ *
+ * Ultrajoiner will come in to the picture when the
+ * resolution > 10K or clock > 2 * max-dot-clock.
+ *
+ * Returns: True if ultra joiner found in connector modes
+ */
+bool ultrajoiner_mode_found(int drm_fd, drmModeConnector *connector,
+			  int max_dotclock, drmModeModeInfo *mode)
+{
+	bool found = false;
+
+	for (int i = 0; i < connector->count_modes; i++) {
+		if (igt_ultrajoiner_possible(drm_fd, &connector->modes[i], max_dotclock)) {
+			*mode = connector->modes[i];
+			found = true;
+			break;
+		}
+	}
+
+	return found;
+}
+
+/**
+ * is_joiner_mode:
+ * @drm_fd: drm file descriptor
+ * @output: pointer to the output structure
+ *
+ * Checks if the current configuration requires Big Joiner or Ultra Joiner mode
+ * based on the maximum dot clock and connector settings.
+ *
+ * Returns: True if joiner mode is required, otherwise False.
+ */
+bool is_joiner_mode(int drm_fd, igt_output_t *output)
+{
+	bool is_joiner = false;
+	bool is_ultra_joiner = false;
+	int max_dotclock;
+	drmModeModeInfo mode;
+
+        if (!is_intel_device(drm_fd))
+                return false;
+
+	max_dotclock = igt_get_max_dotclock(drm_fd);
+	is_joiner = bigjoiner_mode_found(drm_fd,
+					 output->config.connector,
+					 max_dotclock, &mode);
+	is_ultra_joiner = ultrajoiner_mode_found(drm_fd,
+						 output->config.connector,
+						 max_dotclock, &mode);
+
+	if (is_joiner || is_ultra_joiner)
+		return true;
+
+	return false;
+}
+
+/**
+ * igt_has_force_joiner_debugfs
+ * @drmfd: A drm file descriptor
+ * @conn_name: Name of the connector
+ *
+ * Checks if the force big joiner debugfs is available
+ * for a specific connector.
+ *
+ * Returns:
+ *  true if the debugfs is available, false otherwise.
+ */
+bool igt_has_force_joiner_debugfs(int drmfd, char *conn_name)
+{
+	char buf[512];
+	int debugfs_fd, ret;
+
+	/*
+	 * bigjoiner is supported on display<= 12 with DSC only
+	 * and only on Pipe A for Display 11
+	 * For simplicity avoid Display 11 and 12, check for >= 13
+	 */
+	if (intel_display_ver(intel_get_drm_devid(drmfd)) < 13)
+		return false;
+
+	igt_assert_f(conn_name, "Connector name cannot be NULL\n");
+	debugfs_fd = igt_debugfs_connector_dir(drmfd, conn_name, O_RDONLY);
+	if (debugfs_fd < 0)
+		return false;
+
+	ret = igt_debugfs_simple_read(debugfs_fd, "i915_joiner_force_enable", buf, sizeof(buf));
+	close(debugfs_fd);
+
+	return ret >= 0;
+}
+
+/**
+ * igt_check_force_joiner_status
+ * @drmfd: file descriptor of the DRM device.
+ * @connector_name: connector to check.
+ *
+ * Checks if the force big joiner is enabled.
+ *
+ * Returns: True if the force big joiner is enabled, False otherwise.
+ */
+bool igt_check_force_joiner_status(int drmfd, char *connector_name)
+{
+	char buf[512];
+	int debugfs_fd, ret;
+
+	if (!connector_name)
+		return false;
+
+	debugfs_fd = igt_debugfs_connector_dir(drmfd, connector_name, O_RDONLY);
+	if (debugfs_fd < 0) {
+		igt_debug("Could not open debugfs for connector: %s\n", connector_name);
+		return false;
+	}
+
+	ret = igt_debugfs_simple_read(debugfs_fd, "i915_bigjoiner_force_enable", buf, sizeof(buf));
+	close(debugfs_fd);
+
+	if (ret < 0) {
+		igt_debug("Could not read i915_bigjoiner_force_enable for connector: %s\n", connector_name);
+		return false;
+	}
+
+	return strstr(buf, "Y");
+}
+
+/**
+ * igt_check_bigjoiner_support:
+ * @display: a pointer to an #igt_display_t structure
+ *
+ * Get all active pipes from connected outputs (i.e. pending_pipe != PIPE_NONE)
+ * and check those pipes supports the selected mode(s).
+ *
+ * Example:
+ *  * Pipe-D can't support mode > 5K
+ *  * To use 8K mode on a pipe then consecutive pipe must be free.
+ *
+ * Returns: True if a valid crtc/connector mode combo found, else false
+ */
+bool igt_check_bigjoiner_support(igt_display_t *display)
+{
+	uint8_t i, total_pipes = 0, pipes_in_use = 0;
+	enum pipe p;
+	igt_output_t *output;
+	struct {
+		enum pipe idx;
+		drmModeModeInfo *mode;
+		igt_output_t *output;
+		bool force_joiner;
+	} pipes[IGT_MAX_PIPES];
+	int max_dotclock;
+
+	/* Get total enabled pipes. */
+	for_each_pipe(display, p)
+		total_pipes++;
+
+	/*
+	 * Get list of pipes in use those were set by igt_output_set_pipe()
+	 * just before calling this function.
+	 */
+	for_each_connected_output(display, output) {
+		if (output->pending_pipe == PIPE_NONE)
+			continue;
+
+		pipes[pipes_in_use].idx = output->pending_pipe;
+		pipes[pipes_in_use].mode = igt_output_get_mode(output);
+		pipes[pipes_in_use].output = output;
+		pipes[pipes_in_use].force_joiner = igt_check_force_joiner_status(display->drm_fd, output->name);
+		pipes_in_use++;
+	}
+
+	if (!pipes_in_use) {
+		igt_info("We must set at least one output to pipe.\n");
+		return true;
+	}
+
+	max_dotclock = igt_get_max_dotclock(display->drm_fd);
+
+	/*
+	 * if force joiner (or) mode resolution > 5K (or) mode.clock > max dot-clock,
+	 * then ignore
+	 *  - if the consecutive pipe is not available
+	 *  - last crtc in single/multi-connector config
+	 *  - consecutive crtcs in multi-connector config
+	 *
+	 * in multi-connector config ignore if
+	 *  - previous crtc (force joiner or mode resolution > 5K or mode.clock > max dot-clock) and
+	 *  - current & previous crtcs are consecutive
+	 */
+	for (i = 0; i < pipes_in_use; i++) {
+		if (pipes[i].force_joiner ||
+		    igt_bigjoiner_possible(display->drm_fd, pipes[i].mode, max_dotclock)) {
+			igt_info("pipe-%s-%s: (Max dot-clock: %d KHz), force joiner: %s\n",
+				 kmstest_pipe_name(pipes[i].idx),
+				 igt_output_name(pipes[i].output),
+				 max_dotclock, pipes[i].force_joiner ? "Yes" : "No");
+			kmstest_dump_mode(pipes[i].mode);
+
+			if (pipes[i].idx >= (total_pipes - 1)) {
+				igt_info("pipe-%s: Last pipe couldn't be used as a Bigjoiner Primary.\n",
+					 kmstest_pipe_name(pipes[i].idx));
+				return false;
+			}
+
+			for (int j = 0; j < pipes_in_use; j++) {
+				if (pipes[j].idx == pipes[i].idx + 1) {
+					igt_info("pipe-%s: Next pipe is already assigned to another output.\n",
+						 kmstest_pipe_name(pipes[j].idx));
+					return false;
+				}
+			}
+
+			if (!display->pipes[pipes[i].idx + 1].enabled) {
+				igt_info("Consecutive pipe-%s: Fused-off, couldn't be used as a Bigjoiner Secondary.\n",
+					 kmstest_pipe_name(display->pipes[pipes[i].idx + 1].pipe));
+				return false;
+			}
+
+			if ((i < (pipes_in_use - 1)) &&
+			    (abs(pipes[i + 1].idx - pipes[i].idx) <= 1)) {
+				igt_info("Consecutive pipe-%s: Not free to use it as a Bigjoiner Secondary.\n",
+					 kmstest_pipe_name(pipes[i + 1].idx));
+				return false;
+			}
+		}
+
+		if ((i > 0) && (pipes[i - 1].force_joiner ||
+				igt_bigjoiner_possible(display->drm_fd, pipes[i - 1].mode, max_dotclock))) {
+			igt_info("pipe-%s-%s: (Max dot-clock: %d KHz), force joiner: %s\n",
+				 kmstest_pipe_name(pipes[i - 1].idx),
+				 igt_output_name(pipes[i - 1].output),
+				 max_dotclock, pipes[i - 1].force_joiner ? "Yes" : "No");
+			kmstest_dump_mode(pipes[i - 1].mode);
+
+			if (!display->pipes[pipes[i - 1].idx + 1].enabled) {
+				igt_info("Consecutive pipe-%s: Fused-off, couldn't be used as a Bigjoiner Secondary.\n",
+					 kmstest_pipe_name(display->pipes[pipes[i - 1].idx + 1].pipe));
+				return false;
+			}
+
+			if (abs(pipes[i].idx - pipes[i - 1].idx) <= 1) {
+				igt_info("Consecutive pipe-%s: Not free to use it as a Bigjoiner Secondary.\n",
+					 kmstest_pipe_name(pipes[i].idx));
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
+/**
+ * igt_parse_mode_string:
+ * @mode_string: modeline string
+ * @mode: a pointer to a drm mode structure
+ *
+ * Parse mode string and populate mode
+ *
+ * Format: clock(MHz),hdisp,hsync-start,hsync-end,htotal,vdisp,vsync-start,
+ * vsync-end,vtotal
+ *
+ * Returns: True if the correct number of arguments are entered, else false.
+ */
+bool igt_parse_mode_string(const char *mode_string, drmModeModeInfo *mode)
+{
+	float force_clock;
+
+	if (sscanf(mode_string, "%f,%hu,%hu,%hu,%hu,%hu,%hu,%hu,%hu",
+	   &force_clock, &mode->hdisplay, &mode->hsync_start, &mode->hsync_end, &mode->htotal,
+	   &mode->vdisplay, &mode->vsync_start, &mode->vsync_end, &mode->vtotal) != 9)
+		return false;
+
+	mode->clock = force_clock * 1000;
+
+	return true;
+}
+
+/**
+ * intel_pipe_output_combo_valid:
+ * @display: a pointer to an #igt_display_t structure
+ *
+ * Every individual test must use igt_output_set_pipe() before calling this
+ * helper, so that this function will get all active pipes from connected
+ * outputs (i.e. pending_pipe != PIPE_NONE) and check the selected combo is
+ * valid or not.
+ *
+ * This helper is supposed to be a superset of all constraints of pipe/output
+ * combo.
+ *
+ * Example:
+ *  * Pipe-D can't support mode > 5K
+ *  * To use 8K mode on a pipe then consecutive pipe must be free.
+ *  * MSO is supported only on PIPE_A/PIPE_B.
+ *
+ * Returns: True if a valid pipe/output mode combo found, else false
+ */
+bool intel_pipe_output_combo_valid(igt_display_t *display)
+{
+	int combo = 0;
+	igt_output_t *output;
+
+	for_each_connected_output(display, output) {
+		if (output->pending_pipe == PIPE_NONE)
+			continue;
+
+		if (!igt_pipe_connector_valid(output->pending_pipe, output)) {
+			igt_info("Output %s is disconnected (or) pipe-%s & %s cannot be used together\n",
+				 igt_output_name(output),
+				 kmstest_pipe_name(output->pending_pipe),
+				 igt_output_name(output));
+			return false;
+		}
+
+		combo++;
+	}
+
+	if (!combo) {
+		igt_info("At least one pipe/output combo needed.\n");
+		return false;
+	}
+
+	if (!is_intel_device(display->drm_fd))
+		return true;
+
+	/*
+	 * Check the given pipe/output combo is valid for Bigjoiner.
+	 *
+	 * TODO: Update this helper to support other features like MSO.
+	 */
+	return igt_check_bigjoiner_support(display);
+}
+
+/**
+ * igt_check_output_is_dp_mst:
+ * @output: Target output
+ *
+ * Returns: True if output is dp-mst, else false.
+ */
+bool igt_check_output_is_dp_mst(igt_output_t *output)
+{
+	return !!output->config.connector_path;
+}
+
+static int parse_path_connector(char *connector_path)
+{
+	int connector_id;
+	char *encoder;
+	char *connector_path_copy = strdup(connector_path);
+
+	encoder = strtok(connector_path_copy, ":");
+	igt_assert_f(!strcmp(encoder, "mst"), "PATH connector property expected to have 'mst'\n");
+	connector_id = atoi(strtok(NULL, "-"));
+	free(connector_path_copy);
+
+	return connector_id;
+}
+
+/**
+ * igt_get_dp_mst_connector_id:
+ * @output: Target output
+ *
+ * Returns: Connector id if output is dp-mst, else -EINVAL.
+ */
+int igt_get_dp_mst_connector_id(igt_output_t *output)
+{
+	int connector_id;
+
+	if (!igt_check_output_is_dp_mst(output))
+		return -EINVAL;
+
+	connector_id = parse_path_connector(output->config.connector_path);
+
+	return connector_id;
+}
+
+/**
+ * get_num_scalers:
+ * @display: the display
+ * @pipe: display pipe
+ *
+ * Returns: Number of scalers supported per pipe.
+ */
+int get_num_scalers(igt_display_t *display, enum pipe pipe)
+{
+	char buf[8120];
+	char *start_loc1, *start_loc2;
+	int dir, res;
+	int num_scalers = 0;
+	int drm_fd = display->drm_fd;
+	char dest[20] = ":pipe ";
+
+	strcat(dest, kmstest_pipe_name(pipe));
+
+	if (is_intel_device(drm_fd) &&
+	    intel_display_ver(intel_get_drm_devid(drm_fd)) >= 9) {
+
+		dir = igt_debugfs_dir(drm_fd);
+		igt_assert(dir >= 0);
+
+		res = igt_debugfs_simple_read(dir, "i915_display_info", buf, sizeof(buf));
+		close(dir);
+		igt_require(res > 0);
+
+		start_loc1 = strstr(buf, dest);
+
+		if ((start_loc1 = strstr(buf, dest))) {
+			igt_assert(start_loc2 = strstr(start_loc1, "num_scalers="));
+			igt_assert_eq(sscanf(start_loc2, "num_scalers=%d", &num_scalers), 1);
+		}
+	} else if (is_msm_device(drm_fd)) {
+		igt_plane_t *plane;
+
+		/*
+		 * msm devices have dma pipes (no csc, no scaling), rgb
+		 * pipes (no csc, has scaling), and vid pipes (has csc,
+		 * has scaling), but not all devices have rgb pipes.
+		 * We can use the # of pipes that support YUV formats
+		 * as a rough approximation of the # of scalars.. it may
+		 * undercount on some hw, but it will not overcount
+		 */
+		for_each_plane_on_pipe(display, pipe, plane) {
+			for (unsigned i = 0; i < plane->format_mod_count; i++) {
+				if (igt_format_is_yuv(plane->formats[i])) {
+					num_scalers++;
+					break;
+				}
+			}
+		}
+	}
+
+	return num_scalers;
+}
+
+/**
+ * igt_parse_marked_value:
+ * @buf: Buffer containing the content to parse
+ * @marked_char: The character marking the value to parse
+ * @result: Pointer to store the parsed value
+ *
+ * Finds the integer value in the buffer that is marked by the given character.
+ *
+ * Returns: 0 on success, -1 on failure
+ */
+static int igt_parse_marked_value(const char *buf, char marked_char, int *result)
+{
+	char *marked_ptr, *val_ptr;
+
+	/*
+	 * Look for the marked character
+	 */
+	marked_ptr = strchr(buf, marked_char);
+
+	if (marked_ptr) {
+		val_ptr = marked_ptr - 1;
+		while (val_ptr > buf && isdigit(*val_ptr))
+			val_ptr--;
+		val_ptr++;
+		if (sscanf(val_ptr, "%d", result) == 1)
+			return 0;
+	}
+	return -1;
+}
+
+/**
+ * igt_debugfs_read_connector_file:
+ * @drm_fd: A drm file descriptor
+ * @conn_name: Name of the output connector
+ * @filename: The file to read from in the connector's directory
+ * @buf: Buffer to store the read content
+ * @buf_size: Size of the buffer
+ *
+ * Reads from a specific file in the connector's debugfs directory.
+ *
+ * Returns: 0 on success, -1 on failure.
+ */
+static int igt_debugfs_read_connector_file(int drm_fd, char *conn_name,
+				    const char *filename, char *buf,
+				    size_t buf_size)
+{
+	int dir, res;
+
+	dir = igt_debugfs_connector_dir(drm_fd, conn_name, O_RDONLY);
+	igt_assert_f(dir >= 0, "Failed to open debugfs dir for connector %s\n", conn_name);
+
+	res = igt_debugfs_simple_read(dir, filename, buf, buf_size);
+	close(dir);
+
+	if (res < 0)
+		return -1;
+
+	return 0;
+}
+
+/**
+ * igt_debugfs_write_connector_file:
+ * @drm_fd: A drm file descriptor
+ * @conn_name: Name of the output connector
+ * @filename: The file to write to in the connector's directory
+ * @data: Data to write to the file
+ * @data_size: Size of the data to write
+ *
+ * Writes to a specific file in the connector's debugfs directory.
+ *
+ * Returns: 0 on success, -1 on failure.
+ */
+static int igt_debugfs_write_connector_file(int drm_fd, char *conn_name,
+				     const char *filename, const char *data,
+				     size_t data_size)
+{
+	int dir, res;
+
+	dir = igt_debugfs_connector_dir(drm_fd, conn_name, O_RDONLY);
+	igt_assert_f(dir >= 0, "Failed to open debugfs dir for connector %s\n",
+		     conn_name);
+
+	res = igt_sysfs_write(dir, filename, data, data_size);
+	close(dir);
+
+	if (res < 0)
+		return -1;
+
+	return 0;
+}
+
+/**
+ * igt_get_current_link_rate:
+ * @drm_fd: A drm file descriptor
+ * @output: Target output
+ *
+ * Returns: link_rate if set for output else -1
+ */
+int igt_get_current_link_rate(int drm_fd, igt_output_t *output)
+{
+	char buf[512];
+	int res, ret;
+
+	res = igt_debugfs_read_connector_file(drm_fd, output->name,
+					       "i915_dp_force_link_rate",
+					       buf, sizeof(buf));
+	igt_assert_f(res == 0, "Unable to read %s/i915_dp_force_link_rate\n",
+			       output->name);
+	res = igt_parse_marked_value(buf, '*', &ret);
+	igt_assert_f(res == 0, "Output %s not enabled\n", output->name);
+	return ret;
+}
+
+/**
+ * igt_get_current_lane_count:
+ * @drm_fd: A drm file descriptor
+ * @output: Target output
+ *
+ * Returns: lane_count if set for output else -1
+ */
+int igt_get_current_lane_count(int drm_fd, igt_output_t *output)
+{
+	char buf[512];
+	int res, ret;
+
+	res = igt_debugfs_read_connector_file(drm_fd, output->name,
+					      "i915_dp_force_lane_count",
+					      buf, sizeof(buf));
+	igt_assert_f(res == 0, "Unable to read %s/i915_dp_force_lane_count\n",
+			       output->name);
+	res = igt_parse_marked_value(buf, '*', &ret);
+	igt_assert_f(res == 0, "Output %s not enabled\n", output->name);
+	return ret;
+}
+
+/**
+ * igt_get_max_link_rate:
+ * @drm_fd: A drm file descriptor
+ * @output: Target output
+ *
+ * Returns: max_link_rate
+ */
+int igt_get_max_link_rate(int drm_fd, igt_output_t *output)
+{
+	char buf[512];
+	int res, ret;
+
+	res = igt_debugfs_read_connector_file(drm_fd, output->name,
+					       "i915_dp_max_link_rate",
+					       buf, sizeof(buf));
+	igt_assert_f(res == 0, "Unable to read %s/i915_dp_max_link_rate\n",
+		     output->name);
+
+	sscanf(buf, "%d", &ret);
+	return ret;
+}
+
+/**
+ * igt_get_max_link_rate:
+ * @drm_fd: A drm file descriptor
+ * @output: Target output
+ *
+ * Returns: max_link_rate
+ */
+int igt_get_max_lane_count(int drm_fd, igt_output_t *output)
+{
+	char buf[512];
+	int res, ret;
+
+	res = igt_debugfs_read_connector_file(drm_fd, output->name,
+					       "i915_dp_max_lane_count",
+					       buf, sizeof(buf));
+	igt_assert_f(res == 0, "Unable to read %s/i915_dp_max_lane_count\n",
+		     output->name);
+
+	sscanf(buf, "%d", &ret);
+	return ret;
+}
+
+/**
+ * igt_force_link_retrain:
+ * @drm_fd: A drm file descriptor
+ * @output: Target output
+ * @retrain_count: number of retraining required
+ *
+ * Force link retrain on the output.
+ */
+void igt_force_link_retrain(int drm_fd, igt_output_t *output, int retrain_count)
+{
+	char value[2];
+	int res;
+
+	snprintf(value, sizeof(value), "%d", retrain_count);
+	res = igt_debugfs_write_connector_file(drm_fd, output->name,
+					       "i915_dp_force_link_retrain",
+					       value, strlen(value));
+	igt_assert_f(res == 0, "Unable to write to %s/i915_dp_force_link_retrain\n",
+			  output->name);
+}
+
+/**
+ * igt_force_lt_failure:
+ * @drm_fd: A drm file descriptor
+ * @output: Target output
+ * @failure_count: 1 for same link param and
+ *		   2 for reduced link params
+ *
+ * Force link training failure on the output.
+ * @failure_count: 1 for retraining with same link params
+ *		   2 for retraining with reduced link params
+ */
+void igt_force_lt_failure(int drm_fd, igt_output_t *output, int failure_count)
+{
+	char value[2];
+	int res;
+
+	snprintf(value, sizeof(value), "%d", failure_count);
+	res = igt_debugfs_write_connector_file(drm_fd, output->name,
+					       "i915_dp_force_link_training_failure",
+					       value, strlen(value));
+	igt_assert_f(res == 0, "Unable to write to %s/i915_dp_force_link_training_failure\n",
+			  output->name);
+}
+
+/**
+ * igt_get_dp_link_retrain_disabled:
+ * @drm_fd: A drm file descriptor
+ * @output: Target output
+ *
+ * Returns: True if link retrain disabled, false otherwise
+ */
+bool igt_get_dp_link_retrain_disabled(int drm_fd, igt_output_t *output)
+{
+	char buf[512];
+	int res;
+
+	res = igt_debugfs_read_connector_file(drm_fd, output->name,
+					      "i915_dp_link_retrain_disabled",
+					      buf, sizeof(buf));
+	igt_assert_f(res == 0, "Unable to read %s/i915_dp_link_retrain_disabled\n",
+			       output->name);
+	return strstr(buf, "yes");
+}
+
+/**
+ * Checks if the force link training failure debugfs
+ * is available for a specific output.
+ *
+ * @drmfd: file descriptor of the DRM device.
+ * @output: output to check.
+ * Returns:
+ *  true if the debugfs is available, false otherwise.
+ */
+bool igt_has_force_link_training_failure_debugfs(int drmfd, igt_output_t *output)
+{
+	char buf[512];
+	int res;
+
+	res = igt_debugfs_read_connector_file(drmfd, output->name,
+					      "i915_dp_link_retrain_disabled",
+					      buf, sizeof(buf));
+	return res == 0;
+}
+
+/**
+ * igt_get_dp_pending_lt_failures:
+ * @drm_fd: A drm file descriptor
+ * @output: Target output
+ *
+ * Returns: Number of pending link training failures.
+ */
+int igt_get_dp_pending_lt_failures(int drm_fd, igt_output_t *output)
+{
+	char buf[512];
+	int res, ret;
+
+	res = igt_debugfs_read_connector_file(drm_fd, output->name,
+					      "i915_dp_force_link_training_failure",
+					      buf, sizeof(buf));
+	igt_assert_f(res == 0, "Unable to read %s/i915_dp_force_link_training_failure\n",
+			       output->name);
+	sscanf(buf, "%d", &ret);
+	return ret;
+}
+
+/**
+ * igt_dp_pending_retrain:
+ * @drm_fd: A drm file descriptor
+ * @output: Target output
+ *
+ * Returns: Number of pending link retrains.
+ */
+int igt_get_dp_pending_retrain(int drm_fd, igt_output_t *output)
+{
+	char buf[512];
+	int res, ret;
+
+	res = igt_debugfs_read_connector_file(drm_fd, output->name,
+					      "i915_dp_force_link_retrain",
+					      buf, sizeof(buf));
+	igt_assert_f(res == 0, "Unable to read %s/i915_dp_force_link_retrain\n",
+			       output->name);
+	sscanf(buf, "%d", &ret);
+	return ret;
+}
+
+/**
+ * igt_reset_link_params:
+ * @drm_fd: A drm file descriptor
+ * @output: Target output
+ *
+ * Reset link rate and lane count to auto, also installs exit handler
+ * to set link rate and lane count to auto on exit
+ */
+void igt_reset_link_params(int drm_fd, igt_output_t *output)
+{
+	bool valid;
+	drmModeConnector *temp;
+
+	valid = true;
+	valid = valid && connector_attr_set_debugfs(drm_fd, output->config.connector,
+						    "i915_dp_force_link_rate",
+						    "auto", "auto", true);
+	valid = valid && connector_attr_set_debugfs(drm_fd, output->config.connector,
+						    "i915_dp_force_lane_count",
+						    "auto", "auto", true);
+	igt_assert_f(valid, "Unable to set attr or install exit handler\n");
+	dump_connector_attrs();
+	igt_install_exit_handler(reset_connectors_at_exit);
+
+	/*
+	 * To allow callers to always use GetConnectorCurrent we need to force a
+	 * redetection here.
+	 */
+	temp = drmModeGetConnector(drm_fd, output->config.connector->connector_id);
+	drmModeFreeConnector(temp);
+}
+
+/**
+ * igt_set_link_params:
+ * @drm_fd: A drm file descriptor
+ * @output: Target output
+ *
+ * set link rate and lane count to given value, also installs exit handler
+ * to set link rate and lane count to auto on exit
+ */
+void igt_set_link_params(int drm_fd, igt_output_t *output,
+			   char *link_rate, char *lane_count)
+{
+	bool valid;
+	drmModeConnector *temp;
+
+	valid = true;
+	valid = valid && connector_attr_set_debugfs(drm_fd, output->config.connector,
+						    "i915_dp_force_link_rate",
+						    link_rate, "auto", true);
+	valid = valid && connector_attr_set_debugfs(drm_fd, output->config.connector,
+						    "i915_dp_force_lane_count",
+						    lane_count, "auto", true);
+	igt_assert_f(valid, "Unable to set attr or install exit handler\n");
+	dump_connector_attrs();
+	igt_install_exit_handler(reset_connectors_at_exit);
+
+	/*
+	 * To allow callers to always use GetConnectorCurrent we need to force a
+	 * redetection here.
+	 */
+	temp = drmModeGetConnector(drm_fd, output->config.connector->connector_id);
+	drmModeFreeConnector(temp);
+}
+
+/**
+ * igt_backlight_read:
+ * @result:	Pointer to store the result
+ * @fname:	Name of the file to read
+ * @context:	Pointer to the context structure
+ */
+int igt_backlight_read(int *result, const char *fname, igt_backlight_context_t *context)
+{
+	int fd;
+	char full[PATH_MAX];
+	char dst[64];
+	int r, e;
+
+	igt_assert(snprintf(full, PATH_MAX, "%s/%s/%s",
+			    context->backlight_dir_path,
+			    context->path,
+			    fname) < PATH_MAX);
+
+	fd = open(full, O_RDONLY);
+	if (fd == -1)
+		return -errno;
+
+	r = read(fd, dst, sizeof(dst));
+	e = errno;
+	close(fd);
+
+	if (r < 0)
+		return -e;
+
+	errno = 0;
+	*result = strtol(dst, NULL, 10);
+	return errno;
+}
+
+/**
+ * igt_backlight_write:
+ * @value:		Value to write
+ * @fname:		Name of the file to write
+ * @context:	Pointer to the context structure
+ */
+int igt_backlight_write(int value, const char *fname, igt_backlight_context_t *context)
+{
+	int fd;
+	char full[PATH_MAX];
+	char src[64];
+	int len;
+
+	igt_assert(snprintf(full, PATH_MAX, "%s/%s/%s",
+			    context->backlight_dir_path,
+			    context->path,
+			    fname) < PATH_MAX);
+
+	fd = open(full, O_WRONLY);
+	if (fd == -1)
+		return -errno;
+
+	len = snprintf(src, sizeof(src), "%i", value);
+	len = write(fd, src, len);
+	close(fd);
+
+	if (len < 0)
+		return len;
+
+	return 0;
 }

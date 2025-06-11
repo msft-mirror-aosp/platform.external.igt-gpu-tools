@@ -25,6 +25,8 @@
 #ifndef __IGT_SYSRQ_H__
 #define __IGT_SYSRQ_H__
 
-void igt_sysrq_reboot(void) __attribute__((noreturn));
+#include "igt_core.h"
+
+__noreturn void igt_sysrq_reboot(void);
 
 #endif /* __IGT_SYSRQ_H__ */

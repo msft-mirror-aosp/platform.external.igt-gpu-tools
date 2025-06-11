@@ -35,20 +35,18 @@
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+
 #include "drm.h"
+#include "drmtest.h"
+#include "i915/gem_create.h"
+#include "i915/gem_mman.h"
+#include "igt_debugfs.h"
 #include "intel_reg.h"
 #include "ioctl_wrappers.h"
-#include "igt_debugfs.h"
-#include "drmtest.h"
-#include "i915/gem_mman.h"
-
-#define LOCAL_I915_EXEC_NO_RELOC (1<<11)
-#define LOCAL_I915_EXEC_HANDLE_LUT (1<<12)
 
 #define SKIP_RELOC 0x1
 #define NO_RELOC 0x2
 #define CYCLE_BATCH 0x4
-#define FAULT 0x8
 #define LUT 0x10
 #define SEQUENTIAL_OFFSET 0x20
 #define REVERSE_OFFSET 0x40
@@ -82,9 +80,9 @@ static int run(unsigned batch_size,
 	struct drm_i915_gem_relocation_entry *mem_reloc = NULL;
 	int *target;
 
-	gem_exec = calloc(sizeof(*gem_exec), num_objects + 1);
-	mem_reloc = calloc(sizeof(*mem_reloc), num_relocs);
-	target = calloc(sizeof(*target), num_relocs);
+	gem_exec = calloc(num_objects + 1, sizeof(*gem_exec));
+	mem_reloc = calloc(num_relocs, sizeof(*mem_reloc));
+	target = calloc(num_relocs, sizeof(*target));
 
 	fd = drm_open_driver(DRIVER_INTEL);
 
@@ -121,11 +119,7 @@ static int run(unsigned batch_size,
 		memcpy(reloc, mem_reloc, sizeof(*mem_reloc)*num_relocs);
 		munmap(reloc, size);
 
-		if (flags & FAULT) {
-			igt_disable_prefault();
-			reloc = __gem_mmap__cpu(fd, reloc_handle, 0, size, PROT_READ | PROT_WRITE);
-		} else
-			reloc = mem_reloc;
+		reloc = mem_reloc;
 	}
 
 	gem_exec[num_objects].relocation_count = num_relocs;
@@ -136,9 +130,9 @@ static int run(unsigned batch_size,
 	execbuf.buffers_ptr = (uintptr_t)objects;
 	execbuf.buffer_count = num_objects + 1;
 	if (flags & LUT)
-		execbuf.flags |= LOCAL_I915_EXEC_HANDLE_LUT;
+		execbuf.flags |= I915_EXEC_HANDLE_LUT;
 	if (flags & NO_RELOC)
-		execbuf.flags |= LOCAL_I915_EXEC_NO_RELOC;
+		execbuf.flags |= I915_EXEC_NO_RELOC;
 
 	for (n = 0; n < num_relocs; n++) {
 		target[n] = hars_petruska_f54_1_random() % num_objects;
@@ -162,20 +156,10 @@ static int run(unsigned batch_size,
 					gem_exec[num_objects].handle = cycle[c];
 				}
 			}
-			if (flags & FAULT && reloc) {
-				munmap(reloc, size);
-				reloc = __gem_mmap__cpu(fd, reloc_handle, 0, size, PROT_READ | PROT_WRITE);
-				gem_exec[num_objects].relocs_ptr = (uintptr_t)reloc;
-			}
 			gem_execbuf(fd, &execbuf);
 		}
 		gettimeofday(&end, NULL);
 		printf("%.3f\n", ELAPSED(&start, &end));
-	}
-
-	if (flags & FAULT && reloc) {
-		munmap(reloc, size);
-		igt_enable_prefault();
 	}
 
 	return 0;
@@ -208,8 +192,6 @@ int main(int argc, char **argv)
 				flags |= 0;
 			} else if (strcmp(optarg, "cyclic") == 0) {
 				flags |= CYCLE_BATCH;
-			} else if (strcmp(optarg, "fault") == 0) {
-				flags |= FAULT;
 			} else if (strcmp(optarg, "skip") == 0) {
 				flags |= SKIP_RELOC;
 			} else if (strcmp(optarg, "none") == 0) {

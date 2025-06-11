@@ -26,10 +26,22 @@
 #include "igt_debugfs.h"
 #include "igt_sysfs.h"
 
+#include <poll.h>
 #include <sys/mman.h>
-#include <sys/poll.h>
 #include <sys/stat.h>
 #include <dirent.h>
+/**
+ * TEST: vgem slow
+ * Description: Extended sanity check of Virtual GEM module (vGEM).
+ * Category: Core
+ * Mega feature: General Core features
+ * Sub-category: DRM
+ * Functionality: mock device
+ * Feature: vgem
+ * Test category: GEM_Legacy
+ *
+ * SUBTEST: nohang
+ */
 
 IGT_TEST_DESCRIPTION("Extended sanity check of Virtual GEM module (vGEM).");
 
@@ -85,6 +97,6 @@ igt_main
 		test_nohang(fd);
 
 	igt_fixture {
-		close(fd);
+		drm_close_driver(fd);
 	}
 }

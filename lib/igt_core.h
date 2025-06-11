@@ -31,6 +31,9 @@
 #define IGT_CORE_H
 
 #include <assert.h>
+#ifdef __linux__
+#include <byteswap.h>
+#endif
 #include <setjmp.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -42,8 +45,8 @@
 #include <getopt.h>
 #include <unistd.h>
 
-#ifdef __cplusplus
-extern "C" {
+#ifdef __FreeBSD__
+#include "igt_freebsd.h"
 #endif
 
 #ifndef IGT_LOG_DOMAIN
@@ -83,9 +86,16 @@ extern "C" {
 #define igt_assume(e) BUILD_BUG_ON_INVALID(e)
 #endif
 
+#ifndef __noreturn
+#define __noreturn __attribute__((noreturn))
+#endif
+#define __maybe_unused __attribute__((unused))
+
 extern const char* __igt_test_description __attribute__((weak));
 extern bool __igt_plain_output;
 extern char *igt_frame_dump_path;
+
+struct _GKeyFile *igt_load_igtrc(void);
 
 /**
  * IGT_TEST_DESCRIPTION:
@@ -125,9 +135,19 @@ extern char *igt_frame_dump_path;
  */
 #define IGT_EXIT_FAILURE 98
 
+/**
+ * IGT_EXIT_ABORT
+ *
+ * Exit status indicating a severe test/environment failure, any continued
+ * testing past this point can yield unexpected results and is not recommended
+ */
+#define IGT_EXIT_ABORT 112
+
+void __igt_assert_in_outer_scope(void);
+
 bool __igt_fixture(void);
 void __igt_fixture_complete(void);
-void __igt_fixture_end(void) __attribute__((noreturn));
+__noreturn void __igt_fixture_end(void);
 /**
  * igt_fixture:
  *
@@ -138,16 +158,17 @@ void __igt_fixture_end(void) __attribute__((noreturn));
  * enumeration (e.g. when enumerating on systems without an intel gpu) such
  * blocks should be annotated with igt_fixture.
  */
-#define igt_fixture for (volatile int igt_tokencat(__tmpint,__LINE__) = 0; \
-			 igt_tokencat(__tmpint,__LINE__) < 1 && \
+#define igt_fixture for (volatile int igt_unique(__tmpint) = 0; \
+			 igt_unique(__tmpint) < 1 && \
 			 (STATIC_ANALYSIS_BUILD || \
 			 (__igt_fixture() && \
 			 (sigsetjmp(igt_subtest_jmpbuf, 1) == 0))); \
-			 igt_tokencat(__tmpint,__LINE__) ++, \
+			 igt_unique(__tmpint) ++, \
 			 __igt_fixture_complete())
 
 /* subtest infrastructure */
 extern jmp_buf igt_subtest_jmpbuf;
+extern jmp_buf igt_dynamic_jmpbuf;
 typedef int (*igt_opt_handler_t)(int opt, int opt_index, void *data);
 #define IGT_OPT_HANDLER_SUCCESS 0
 #define IGT_OPT_HANDLER_ERROR -2
@@ -179,6 +200,8 @@ int igt_subtest_init_parse_opts(int *argc, char **argv,
 	igt_subtest_init_parse_opts(&argc, argv, NULL, NULL, NULL, NULL, NULL);
 
 bool __igt_run_subtest(const char *subtest_name, const char *file, const int line);
+bool __igt_enter_dynamic_container(void);
+bool __igt_run_dynamic_subtest(const char *dynamic_subtest_name);
 #define __igt_tokencat2(x, y) x ## y
 
 /**
@@ -190,6 +213,16 @@ bool __igt_run_subtest(const char *subtest_name, const char *file, const int lin
  * them.
  */
 #define igt_tokencat(x, y) __igt_tokencat2(x, y)
+
+/**
+ * igt_unique:
+ * @prefix: local identifier
+ *
+ * C preprocessor helper to generate a custom 'unique' token by appending
+ * the line number onto the token.
+ */
+#define igt_unique(prefix) \
+	igt_tokencat(igt_tokencat(__igt_unique__, prefix), __LINE__)
 
 /**
  * igt_subtest:
@@ -226,9 +259,130 @@ bool __igt_run_subtest(const char *subtest_name, const char *file, const int lin
  * static string.
  */
 #define igt_subtest_f(f...) \
-	__igt_subtest_f(igt_tokencat(__tmpchar, __LINE__), f)
+	__igt_subtest_f(igt_unique(__tmpchar), f)
+
+/**
+ * igt_subtest_with_dynamic:
+ * @name: name of the subtest
+ *
+ * This is a magic control flow block which denotes a subtest code
+ * block that contains dynamic subsubtests. The _f variant accepts a
+ * printf format string, which is useful for constructing
+ * combinatorial tests.
+ *
+ * See igt_subtest_with_dynamic_f() for documentation.
+ */
+#define igt_subtest_with_dynamic(name) for (; __igt_run_subtest((name), __FILE__, __LINE__) && \
+							 __igt_enter_dynamic_container() && \
+							 (sigsetjmp(igt_subtest_jmpbuf, 1) == 0); \
+						 igt_success())
+#define __igt_subtest_with_dynamic_f(tmp, format...) \
+	for (char tmp [256]; \
+	     snprintf( tmp , sizeof( tmp ), \
+		      format), \
+	       __igt_run_subtest(tmp, __FILE__, __LINE__ ) && \
+	     __igt_enter_dynamic_container() && \
+	     (sigsetjmp(igt_subtest_jmpbuf, 1) == 0); \
+	     igt_success())
+
+/**
+ * igt_subtest_with_dynamic_f:
+ * @...: format string and optional arguments
+ *
+ * This is a magic control flow block which denotes a subtest code
+ * block that contains dynamic subsubtests. The _f variant accepts a
+ * printf format string, which is useful for constructing
+ * combinatorial tests.
+ *
+ * Dynamic subsubtests are to be used when reporting several aspects
+ * of something separately is desired, but knowing the full possible
+ * set beforehand is either too big of a set or just plain
+ * impossible. Otherwise, use normal subtests. An easy example is
+ * performing an operation separately for each KMS pipe: A subtest per
+ * pipe requires iterating through all possible pipe identifiers,
+ * checking if the pipe exists for the tested device and skipping if
+ * does not, and then performing the operation. With dynamic
+ * subsubtests instead, there would be a single subtest for the
+ * operation that loops over the pipes available, enters a dynamic
+ * subsubtest for each pipe and performs the operation for that pipe
+ * in there.
+ *
+ * The result of a subtest igt_subtest_with_dynamic will be
+ * * SKIP, if no dynamic subsubtests are entered
+ * * PASS, if _all_ dynamic subsubtests PASS
+ * * FAIL, if _any_ dynamic subsubtests FAIL
+ *
+ * Within a igt_subtest_with_dynamic block, explicit
+ * failure (e.g. igt_assert) is not allowed, only dynamic subsubtests
+ * themselves will produce test results. igt_skip()/igt_require() is
+ * allowed. Example:
+ *
+ * |[<!-- language="C" -->
+ * igt_main
+ * {
+ *     igt_subtest_with_dynamic("engine-tests") {
+ *               igt_require(is_awesome(fd)); // requires ok here
+ *
+ *               for_each_engine(fd, e) {
+ *                       igt_dynamic_subtest_f("%s", e->name) {
+ *                               igt_assert(works(e)); // asserts ok here
+ *                       }
+ *               }
+ *       }
+ * }
+ * ]|
+ *
+ * Like igt_subtest_with_dynamic(), but also accepts a printf
+ * format string instead of a static string.
+ */
+#define igt_subtest_with_dynamic_f(f...) \
+	__igt_subtest_with_dynamic_f(igt_unique(__tmpchar), f)
+
+/**
+ * igt_dynamic:
+ * @name: name of the dynamic subtest
+ *
+ * This is a magic control flow block which denotes a dynamic
+ * subtest-of-a-subtest code block. Within that code block
+ * igt_skip|success will only bail out of the dynamic subtest. The _f
+ * variant accepts a printf format string, which is useful for
+ * constructing combinatorial tests.
+ *
+ * See igt_subtest_with_dynamic_f() for documentation on
+ * dynamic subsubtests.
+ */
+#define igt_dynamic(name) for (; __igt_run_dynamic_subtest((name)) && \
+					  (sigsetjmp(igt_dynamic_jmpbuf, 1) == 0); \
+				  igt_success())
+#define __igt_dynamic_f(tmp, format...) \
+	for (char tmp [256]; \
+	     snprintf( tmp , sizeof( tmp ), \
+		      format), \
+	     __igt_run_dynamic_subtest( tmp ) && \
+	     (sigsetjmp(igt_dynamic_jmpbuf, 1) == 0); \
+	     igt_success())
+
+/**
+ * igt_dynamic_f:
+ * @...: format string and optional arguments
+ *
+ * This is a magic control flow block which denotes a dynamic
+ * subtest-of-a-subtest code block. Within that code block
+ * igt_skip|success will only bail out of the dynamic subtest. The _f
+ * variant accepts a printf format string, which is useful for
+ * constructing combinatorial tests.
+ *
+ * See igt_subtest_with_dynamic_f() for documentation on
+ * dynamic subsubtests.
+ *
+ * Like igt_dynamic(), but also accepts a printf format string
+ * instead of a static string.
+ */
+#define igt_dynamic_f(f...) \
+	__igt_dynamic_f(igt_unique(__tmpchar), f)
 
 const char *igt_subtest_name(void);
+const char *igt_dynamic_subtest_name(void);
 bool igt_only_list_subtests(void);
 
 void __igt_subtest_group_save(int *, int *);
@@ -248,15 +402,15 @@ void __igt_subtest_group_restore(int, int);
  * clauses. If any common setup in a fixture fails, only the subtests in this
  * group will fail or skip. Subtest groups can be arbitrarily nested.
  */
-#define igt_subtest_group for (int igt_tokencat(__tmpint,__LINE__) = 0, \
-			       igt_tokencat(__save,__LINE__) = 0, \
-			       igt_tokencat(__desc,__LINE__) = 0; \
-			       igt_tokencat(__tmpint,__LINE__) < 1 && \
-			       (__igt_subtest_group_save(& igt_tokencat(__save,__LINE__), \
-							 & igt_tokencat(__desc,__LINE__) ), true); \
-			       igt_tokencat(__tmpint,__LINE__) ++, \
-			       __igt_subtest_group_restore(igt_tokencat(__save,__LINE__), \
-							   igt_tokencat(__desc,__LINE__)))
+#define igt_subtest_group for (int igt_unique(__tmpint) = 0, \
+			       igt_unique(__save) = 0, \
+			       igt_unique(__desc) = 0; \
+			       igt_unique(__tmpint) < 1 && \
+			       (__igt_subtest_group_save(& igt_unique(__save), \
+							 & igt_unique(__desc) ), true); \
+			       igt_unique(__tmpint) ++, \
+			       __igt_subtest_group_restore(igt_unique(__save), \
+							   igt_unique(__desc)))
 
 /**
  * igt_main_args:
@@ -272,15 +426,15 @@ void __igt_subtest_group_restore(int, int);
  * #igt_subtest_init_parse_opts.
  */
 #define igt_main_args(short_opts, long_opts, help_str, opt_handler, handler_data) \
-	static void igt_tokencat(__real_main, __LINE__)(void); \
+	static void igt_unique(__real_main)(void); \
 	int main(int argc, char **argv) { \
 		igt_subtest_init_parse_opts(&argc, argv, \
 					    short_opts, long_opts, help_str, \
 					    opt_handler, handler_data); \
-		igt_tokencat(__real_main, __LINE__)(); \
+		igt_unique(__real_main)(); \
 		igt_exit(); \
 	} \
-	static void igt_tokencat(__real_main, __LINE__)(void) \
+	static void igt_unique(__real_main)(void) \
 
 
 /**
@@ -328,15 +482,15 @@ void igt_simple_init_parse_opts(int *argc, char **argv,
  * #igt_simple_init_parse_opts.
  */
 #define igt_simple_main_args(short_opts, long_opts, help_str, opt_handler, handler_data) \
-	static void igt_tokencat(__real_main, __LINE__)(void); \
+	static void igt_unique(__real_main)(void); \
 	int main(int argc, char **argv) { \
 		igt_simple_init_parse_opts(&argc, argv, \
 					   short_opts, long_opts, help_str, \
 					   opt_handler, handler_data);	\
-		igt_tokencat(__real_main, __LINE__)(); \
+		igt_unique(__real_main)(); \
 		igt_exit(); \
 	} \
-	static void igt_tokencat(__real_main, __LINE__)(void) \
+	static void igt_unique(__real_main)(void) \
 
 
 /**
@@ -358,28 +512,31 @@ void igt_simple_init_parse_opts(int *argc, char **argv,
  */
 #define igt_constructor \
 	__attribute__((constructor)) \
-	static void igt_tokencat(__igt_constructor_l, __LINE__)(void)
+	static void igt_unique(__igt_constructor_l)(void)
 
-__attribute__((format(printf, 1, 2)))
-void igt_skip(const char *f, ...) __attribute__((noreturn));
-__attribute__((format(printf, 5, 6)))
+__noreturn __attribute__((format(printf, 1, 2)))
+void igt_skip(const char *f, ...);
+__noreturn __attribute__((format(printf, 5, 6)))
 void __igt_skip_check(const char *file, const int line,
 		      const char *func, const char *check,
-		      const char *format, ...) __attribute__((noreturn));
+		      const char *format, ...);
 #define igt_skip_check(E, F...) \
 	__igt_skip_check(__FILE__, __LINE__, __func__, E, F)
 void igt_success(void);
 
 bool igt_can_fail(void);
 
-void igt_fail(int exitcode) __attribute__((noreturn));
-__attribute__((format(printf, 6, 7)))
+__noreturn void igt_fail(int exitcode);
+__noreturn __attribute__((format(printf, 6, 7)))
 void __igt_fail_assert(const char *domain, const char *file,
 		       const int line, const char *func, const char *assertion,
-		       const char *format, ...)
-	__attribute__((noreturn));
-void igt_exit(void) __attribute__((noreturn));
-void igt_fatal_error(void) __attribute__((noreturn));
+		       const char *format, ...);
+__noreturn __attribute__((format(printf, 6, 7)))
+void __igt_abort(const char *domain, const char *file,
+		 const int line, const char *func, const char *expression,
+		 const char *f, ...);
+__noreturn void igt_exit(void);
+__noreturn void igt_fatal_error(void);
 
 /**
  * igt_ignore_warn:
@@ -762,6 +919,15 @@ void igt_describe_f(const char *fmt, ...);
 #define igt_assert_lte(n1, n2) igt_assert_cmpint(n1, <=, >, n2)
 
 /**
+ * igt_assert_lte_u32:
+ * @n1: first integer
+ * @n2: second integer
+ *
+ * Like igt_assert_lte(), but for uint32_t.
+ */
+#define igt_assert_lte_u32(n1, n2) igt_assert_cmpuint(n1, <=, >, n2)
+
+/**
  * igt_assert_lte_u64:
  * @n1: first integer
  * @n2: second integer
@@ -801,6 +967,15 @@ void igt_describe_f(const char *fmt, ...);
 #define igt_assert_lt(n1, n2) igt_assert_cmpint(n1, <, >=, n2)
 
 /**
+ * igt_assert_lt_u32:
+ * @n1: first integer
+ * @n2: second integer
+ *
+ * Like igt_assert_lt(), but for uint32_t.
+ */
+#define igt_assert_lt_u32(n1, n2) igt_assert_cmpuint(n1, <, >=, n2)
+
+/**
  * igt_assert_lt_u64:
  * @n1: first integer
  * @n2: second integer
@@ -827,13 +1002,25 @@ void igt_describe_f(const char *fmt, ...);
 #define igt_assert_lt_s64(n1, n2) igt_assert_cmps64(n1, <, >=, n2)
 
 /**
+ * igt_assert_lt_double:
+ * @n1: first double
+ * @n2: second double
+ *
+ * Fails (sub-)test if the second double is smaller than or equal to the first.
+ *
+ * Like igt_assert(), but displays the values being compared on failure instead
+ * of simply printing the stringified expression.
+ */
+#define igt_assert_lt_double(n1, n2) igt_assert_cmpdouble(n1, <, >=, n2)
+
+/**
  * igt_assert_fd:
  * @fd: file descriptor
  *
  * Fails (sub-) test if the given file descriptor is invalid.
  *
- * Like igt_assert(), but displays the values being compared on failure instead
- * of simply printing the stringified expression.
+ * Like igt_assert(), but displays the stringified identifier that was supposed
+ * to contain a valid fd on failure.
  */
 #define igt_assert_fd(fd) \
 	igt_assert_f(fd >= 0, "file descriptor " #fd " failed\n");
@@ -888,6 +1075,18 @@ void igt_describe_f(const char *fmt, ...);
 } while (0)
 
 /**
+ * igt_require_fd:
+ * @fd: file descriptor
+ *
+ * Skips (sub-) test if the given file descriptor is invalid.
+ *
+ * Like igt_require(), but displays the stringified identifier that was supposed
+ * to contain a valid fd on failure.
+ */
+#define igt_require_fd(fd) \
+	igt_require_f(fd >= 0, "file descriptor " #fd " failed\n");
+
+/**
  * igt_skip_on_f:
  * @expr: condition to test
  * @...: format string and optional arguments
@@ -905,6 +1104,22 @@ void igt_describe_f(const char *fmt, ...);
 	if ((expr)) igt_skip_check("!("#expr")", f); \
 	else igt_debug("Test requirement passed: !(%s)\n", #expr); \
 } while (0)
+
+
+/**
+ * igt_abort_on_f:
+ * @expr: condition to test
+ * @...: format string and optional arguments
+ *
+ * Aborts current execution if a condition is met.
+ *
+ * Should be used only when there is a serious issue with the environment and
+ * any further testing may be affected by it.
+ */
+#define igt_abort_on_f(expr, f...) \
+	do { if ((expr)) \
+		__igt_abort(IGT_LOG_DOMAIN, __FILE__, __LINE__, __func__, #expr , f); \
+	} while (0)
 
 /* fork support code */
 bool __igt_fork(void);
@@ -930,6 +1145,28 @@ bool __igt_fork(void);
 int __igt_waitchildren(void);
 void igt_waitchildren(void);
 void igt_waitchildren_timeout(int seconds, const char *reason);
+void igt_kill_children(int signal);
+
+bool __igt_multi_fork(void);
+/**
+ * igt_multi_fork:
+ * @child: name of the int variable with the child number
+ * @num_children: number of children to fork
+ *
+ * This is a magic control flow block which spawns parallel processes
+ * with fork() expecting there will runs without skips.
+ *
+ * The test children execute in parallel to the main test process.
+ * Joining all test threads should be done with igt_waitchildren.
+ * After multi_fork one can use igt_fork once to run more children.
+ *
+ * Like in igt_fork() any igt_skip() will cause test fail.
+ */
+#define igt_multi_fork(child, num_children) \
+	for (int child = 0; child < (num_children); child++) \
+		for (; __igt_multi_fork(); exit(0))
+
+int __igt_multi_wait(void);
 
 /**
  * igt_helper_process:
@@ -991,13 +1228,13 @@ void igt_install_exit_handler(igt_exit_handler_t fn);
 bool igt_run_in_simulation(void);
 /**
  * SLOW_QUICK:
- * @slow: value in simulation mode
- * @quick: value in normal mode
+ * @sim: value in simulation mode
+ * @hw: value in normal mode
  *
  * Simple macro to select between two values (e.g. number of test rounds or test
  * buffer size) depending upon whether i-g-t is run in simulation mode or not.
  */
-#define SLOW_QUICK(slow,quick) (igt_run_in_simulation() ? (quick) : (slow))
+#define SLOW_QUICK(hw, sim) (igt_run_in_simulation() ? (sim) : (hw))
 
 void igt_skip_on_simulation(void);
 
@@ -1111,6 +1348,58 @@ extern enum igt_log_level igt_log_level;
 		ret__; \
 	})
 
+/**
+ * igt_debug_on:
+ * @condition: condition to test
+ *
+ * Print a IGT_LOG_DEBUG level message if a condition is met.
+ *
+ * Should be used when something fails in a function that doesn't perform
+ * a long jump in that case, and either performs several operations that
+ * can fail that way or doesn't return unambiguous error codes on failures.
+ * This is useful to streamline the test logic since it allows for
+ * replacing open conding with function calls without loosing ability to
+ * provide debug output with failure details.
+ *
+ * This macro also returns the value of @condition.
+ */
+#define igt_debug_on(condition) ({ \
+		typeof(condition) ret__ = (condition); \
+		if (ret__) \
+			igt_debug("Condition %s occurred in function %s, file %s:%i\n", \
+				  #condition, __func__, __FILE__, __LINE__); \
+		ret__; \
+	})
+
+/**
+ * igt_debug_on_f:
+ * @condition: condition to test
+ * @...: format string and optional arguments
+ *
+ * Print a IGT_LOG_DEBUG level message if a condition is met.
+ *
+ * Should be used when something fails in a function that doesn't perform
+ * a long jump in that case, and performs one or more operations in a
+ * loop, each time with different values of parameters.  This is useful
+ * to streamline the test logic since it allows for replacing open conding
+ * with function calls without loosing ability to provide debug output
+ * with failure details.
+ *
+ * In addition to the plain igt_debug_on() helper this allows to print
+ * additional debug information to help debugging operation failures.
+ *
+ * It also returns the value of @condition.
+ */
+#define igt_debug_on_f(condition, f...) ({ \
+		typeof(condition) ret__ = (condition); \
+		if (ret__) {\
+			igt_debug("condition %s occurred in function %s, file %s:%i\n", \
+				  #condition, __func__, __FILE__, __LINE__); \
+			igt_debug(f); \
+		} \
+		ret__; \
+	})
+
 void igt_set_timeout(unsigned int seconds,
 		     const char *op);
 
@@ -1192,6 +1481,17 @@ int igt_system_quiet(const char *command);
 		free(buf); \
 	} while (0)
 
+void igt_srandom(void);
+
+/**
+ * igt_trace:
+ * @format: printf-style format string with optional args
+ *
+ * Writes a message into the kernel trace log.
+ */
+__attribute__((format(printf, 1, 2)))
+void igt_trace(const char *format, ...);
+
 /**
  * igt_kmsg:
  * @format: printf-style format string with optional args
@@ -1209,21 +1509,96 @@ void igt_kmsg(const char *format, ...);
 #define KMSG_INFO	"<6>[IGT] "
 #define KMSG_DEBUG	"<7>[IGT] "
 
-#ifdef __cplusplus
-extern "C++" {
-#include <type_traits>
-#define READ_ONCE(x) (*(volatile std::remove_reference<decltype(x)>::type *)(&(x)))
-}
-#else
 #define READ_ONCE(x) (*(volatile typeof(x) *)(&(x)))
+#define WRITE_ONCE(x, v) do *(volatile typeof(x) *)(&(x)) = (v); while (0)
+
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#define cpu_to_le32(x)  bswap_32(x)
+#define le32_to_cpu(x)  bswap_32(x)
+#else
+#define cpu_to_le32(x)  (x)
+#define le32_to_cpu(x)  (x)
 #endif
 
-#define MSEC_PER_SEC (1000)
-#define USEC_PER_SEC (1000*MSEC_PER_SEC)
-#define NSEC_PER_SEC (1000*USEC_PER_SEC)
-
-#ifdef __cplusplus
-}
+#ifndef __WORDSIZE
+#define __WORDSIZE (__SIZEOF_LONG__ * 8)
 #endif
 
+#if __WORDSIZE == 64
+#define MSEC_PER_SEC (1000ul)
+#define USEC_PER_MSEC (1000ul)
+#define NSEC_PER_USEC (1000ul)
+#else
+#define MSEC_PER_SEC (1000ull)
+#define USEC_PER_MSEC (1000ull)
+#define NSEC_PER_USEC (1000ull)
+#endif
+
+#define USEC_PER_SEC (1000u * MSEC_PER_SEC)
+#define USEC_PER_DECISEC (100u * MSEC_PER_SEC)
+#define NSEC_PER_SEC (1000u * USEC_PER_SEC)
+#define NSEC_PER_MSEC (1000u * USEC_PER_MSEC)
+
+#define for_if(expr__) if (!(expr__)) {} else
+
+#define __assert_within_epsilon(x, ref, tol_up, tol_down, debug_data) \
+	igt_assert_f((double)(x) <= (1.0 + (tol_up)) * (double)(ref) && \
+		     (double)(x) >= (1.0 - (tol_down)) * (double)(ref), \
+		     "'%s' != '%s' (%f not within +%.1f%%/-%.1f%% tolerance of %f)\n%s\n",\
+		     #x, #ref, (double)(x), \
+		     (tol_up) * 100.0, (tol_down) * 100.0, \
+		     (double)(ref), debug_data)
+
+#define assert_within_epsilon(x, ref, tolerance) \
+	__assert_within_epsilon(x, ref, tolerance, tolerance, "\0")
+
+#define assert_within_epsilon_up_down(x, ref, tol_up, tol_down) \
+	__assert_within_epsilon(x, ref, tol_up, tol_down, "\0")
+
+#define assert_within_epsilon_debug(x, ref, tolerance, debug_data) \
+	__assert_within_epsilon(x, ref, tolerance, tolerance, debug_data)
+
+/**
+ * igt_pci_system_init:
+ * IGT wrapper around pci_system_init()
+ *
+ * Runs pci_system_init() and installs igt_pci_system_cleanup() as IGT exit handler when
+ * called first per thread, subsequent calls are noop. Tests should use this wrapper
+ * instead of pci_system_init() to avoid memory leaking which happens each time a call
+ * to pci_system_init() is repeated not preceded by pci_system_cleanup() (may easily
+ * happen in consequence of long jumps performed by IGT flow control functions).
+ *
+ * Return:
+ * Return value of pci_system_init() or 0 if pci system is already initialized.
+ */
+int igt_pci_system_init(void);
+
+/**
+ * igt_pci_system_reinit:
+ * Reinitialize libpciaccess global data.
+ *
+ * Executes igt_pci_system_cleanup() and igt_pci_system_init() to refresh
+ * the PCI system state, typically needed after PCI devices are added or
+ * removed.
+ *
+ * Note: All previously obtained handles (pci_dev, mmio) become invalid
+ * after this call. Do not use old handles post-reinitialization.
+ *
+ * Return: Outcome of igt_pci_system_init().
+ */
+int igt_pci_system_reinit(void);
+
+/**
+ * igt_pci_system_cleanup():
+ * IGT wrapper around pci_system_cleanup()
+ *
+ * Runs pci_system_cleanup() if igt_pci_system_init() was successfully called
+ * before. This allows to refresh the libpciaccess global data when followed
+ * by igt_pci_system_init(), see igt_pci_system_reinit().
+ */
+void igt_pci_system_cleanup(void);
+
+void igt_emit_ignore_dmesg_regex(const char *ignore_dmesg_regex);
+
+unsigned int igt_measured_usleep(unsigned int usec);
 #endif /* IGT_CORE_H */

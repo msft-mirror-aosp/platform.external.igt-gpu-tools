@@ -24,9 +24,14 @@
 #ifndef IGT_PM_H
 #define IGT_PM_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
+#include "igt_kms.h"
+
 void igt_pm_enable_audio_runtime_pm(void);
-int8_t *igt_pm_enable_sata_link_power_management(void);
-void igt_pm_restore_sata_link_power_management(int8_t *pm_data);
+void igt_pm_enable_sata_link_power_management(void);
+void igt_pm_restore_sata_link_power_management(void);
 
 /**
  * igt_runtime_pm_status:
@@ -46,9 +51,52 @@ enum igt_runtime_pm_status {
 	IGT_RUNTIME_PM_STATUS_UNKNOWN,
 };
 
-bool igt_setup_runtime_pm(void);
+/* PCI ACPI firmware node real state */
+enum igt_acpi_d_state {
+	IGT_ACPI_D0,
+	IGT_ACPI_D1,
+	IGT_ACPI_D2,
+	IGT_ACPI_D3Hot,
+	IGT_ACPI_D3Cold,
+	IGT_ACPI_UNKNOWN_STATE,
+};
+
+struct	igt_pm_pci_dev_pwrattr {
+	struct pci_device *pci_dev;
+	char control[64];
+	bool autosuspend_supported;
+	char autosuspend_delay[64];
+};
+
+struct igt_device_card;
+
+bool igt_setup_runtime_pm(int device);
+void igt_disable_runtime_pm(void);
 void igt_restore_runtime_pm(void);
 enum igt_runtime_pm_status igt_get_runtime_pm_status(void);
 bool igt_wait_for_pm_status(enum igt_runtime_pm_status status);
+bool igt_pm_dmc_loaded(int debugfs);
+bool igt_pm_pc8_plus_residencies_enabled(int msr_fd);
+bool i915_output_is_lpsp_capable(int drm_fd, igt_output_t *output);
+int igt_pm_get_pcie_acpihp_slot(struct pci_device *pci_dev);
+bool igt_pm_acpi_d3cold_supported(struct pci_device *pci_dev);
+enum igt_acpi_d_state
+igt_pm_get_acpi_real_d_state(struct pci_device *pci_dev);
+int igt_pm_get_autosuspend_delay(struct pci_device *pci_dev);
+void igt_pm_set_autosuspend_delay(struct pci_device *pci_dev, int delay_ms);
+void igt_pm_enable_pci_card_runtime_pm(struct pci_device *root,
+				       struct pci_device *i915);
+void igt_pm_get_d3cold_allowed(const char *pci_slot_name, uint32_t *value);
+void igt_pm_set_d3cold_allowed(const char *pci_slot_name, uint32_t value);
+void igt_pm_setup_pci_card_runtime_pm(struct pci_device *pci_dev);
+void igt_pm_restore_pci_card_runtime_pm(void);
+void igt_pm_print_pci_card_runtime_status(void);
+bool i915_is_slpc_enabled_gt(int drm_fd, int gt);
+bool i915_is_slpc_enabled(int drm_fd);
+uint64_t igt_pm_get_runtime_suspended_time(struct pci_device *pci_dev);
+uint64_t igt_pm_get_runtime_active_time(struct pci_device *pci_dev);
+int igt_pm_get_runtime_usage(struct pci_device *pci_dev);
+void igt_pm_ignore_slpc_efficient_freq(int i915, int gtfd, bool val);
+bool igt_has_pci_pm_capability(struct pci_device *pci_dev);
 
 #endif /* IGT_PM_H */

@@ -35,10 +35,16 @@
 
 static uint32_t display_base;
 static uint32_t devid;
+static unsigned int sr_sleep;
 
 static uint32_t read_reg(uint32_t addr)
 {
 	return INREG(display_base + addr);
+}
+
+static void write_reg(uint32_t addr, uint32_t val)
+{
+	OUTREG(display_base + addr, val);
 }
 
 struct gmch_wm {
@@ -87,10 +93,13 @@ static const char * const plane_name[] = {
 	NAME(SPR_F),
 };
 
+struct ilk_plane {
+	bool enabled, trickle_feed_dis;
+};
+
 struct ilk_wm_level {
 	int primary, sprite, cursor, latency, fbc;
 	bool enabled, sprite_enabled;
-	bool primary_trickle_feed_dis, sprite_trickle_feed_dis;
 };
 
 struct ilk_wm {
@@ -125,11 +134,25 @@ static char endis_ast(bool enabled)
 	return enabled ? '*' : ' ';
 }
 
+static bool is_cursor(int plane)
+{
+	return plane == 0;
+}
+
+static int skl_num_pipes(uint32_t d)
+{
+	return intel_display_ver(d) >= 12 ? 4 : 3;
+}
+
 static int skl_num_planes(uint32_t d, int pipe)
 {
-	if (IS_GEN11(d))
+	int gen = intel_display_ver(d);
+
+	if (gen >= 13 || IS_ALDERLAKE_S(d) || IS_ROCKETLAKE(d))
+		return 6;
+	else if (gen >= 11)
 		return 8;
-	else if (IS_GEN10(d) || IS_GEMINILAKE(d))
+	else if (gen == 10 || IS_GEMINILAKE(d))
 		return 5;
 	else if (IS_BROXTON(d))
 		return pipe == 2 ? 4 : 5;
@@ -139,117 +162,176 @@ static int skl_num_planes(uint32_t d, int pipe)
 
 static int skl_max_planes(uint32_t d)
 {
-	if (IS_GEN11(d))
+	int gen = intel_display_ver(d);
+
+	if (gen >= 13 || IS_ALDERLAKE_S(d) || IS_ROCKETLAKE(d))
+		return 6;
+	else if (gen >= 11)
 		return 8;
-	else if (IS_GEN10(d) || IS_GEMINILAKE(d) || IS_BROXTON(d))
+	else if (gen == 10 || IS_GEMINILAKE(d) || IS_BROXTON(d))
 		return 5;
 	else
 		return 4;
 }
 
-static const char *skl_plane_name(int pipe, int plane)
+static bool skl_has_sagv_wm(uint32_t d)
+{
+	return intel_display_ver(d) >= 13;
+}
+
+static bool skl_has_nv12_buf_cfg(uint32_t d)
+{
+	return intel_display_ver(d) < 11;
+}
+
+static int skl_num_wm_levels(uint32_t d)
+{
+	if (skl_has_sagv_wm(d))
+		return 6;
+	else
+		return 8;
+}
+
+static const char *skl_plane_name(int plane)
 {
 	static char name[32];
 
-	if (plane == 0)
+	if (is_cursor(plane))
 		snprintf(name, sizeof(name), "CURSOR");
 	else
-		snprintf(name, sizeof(name), "PLANE_%1d%c",
-			 plane, pipe_name(pipe));
+		snprintf(name, sizeof(name), "PLANE_%1d", plane);
 
 	return name;
 }
 
-static const char *skl_wm_linetime_reg_name(int pipe)
+static const char *skl_wm_linetime_reg_name(void)
 {
 	static char reg_name[32];
 
-	snprintf(reg_name, sizeof(reg_name), "WM_LINETIME_%c",
-		 pipe_name(pipe));
+	snprintf(reg_name, sizeof(reg_name), "WM_LINETIME");
 
 	return reg_name;
 }
 
-static const char *skl_plane_ctl_reg_name(int pipe, int plane)
+static const char *skl_plane_ctl_reg_name(int plane)
 {
 	static char reg_name[32];
 
-	if (plane == 0)
-		snprintf(reg_name, sizeof(reg_name), "CUR_CTL_%c",
-			 pipe_name(pipe));
+	if (is_cursor(plane))
+		snprintf(reg_name, sizeof(reg_name), "CUR_CTL");
 	else
-		snprintf(reg_name, sizeof(reg_name), "PLANE_CTL_%1d_%c",
-			 plane, pipe_name(pipe));
+		snprintf(reg_name, sizeof(reg_name), "PLANE_CTL_%1d", plane);
 
 	return reg_name;
 }
 
-static const char *skl_wm_reg_name(int pipe, int plane, int level)
+static const char *skl_wm_reg_name(int plane, int level)
 {
 	static char reg_name[32];
 
-	if (plane == 0)
-		snprintf(reg_name, sizeof(reg_name), "CUR_WM_%c_%1d",
-			 pipe_name(pipe), level);
+	if (is_cursor(plane))
+		snprintf(reg_name, sizeof(reg_name), "CUR_WM_%1d", level);
 	else
-		snprintf(reg_name, sizeof(reg_name), "PLANE_WM_%1d_%c_%1d",
-			 plane, pipe_name(pipe), level);
+		snprintf(reg_name, sizeof(reg_name), "PLANE_WM_%1d_%1d", plane, level);
 
 	return reg_name;
 }
 
-static const char *skl_wm_trans_reg_name(int pipe, int plane)
+static const char *skl_wm_trans_reg_name(int plane)
 {
 	static char reg_name[32];
 
-	if (plane == 0)
-		snprintf(reg_name, sizeof(reg_name), "CUR_WM_TRANS_%c",
-			 pipe_name(pipe));
+	if (is_cursor(plane))
+		snprintf(reg_name, sizeof(reg_name), "CUR_WM_TRANS");
 	else
-		snprintf(reg_name, sizeof(reg_name), "PLANE_WM_TRANS_%1d_%c",
-			 plane, pipe_name(pipe));
+		snprintf(reg_name, sizeof(reg_name), "PLANE_WM_TRANS_%1d", plane);
+
 	return reg_name;
 }
 
-static const char *skl_buf_cfg_reg_name(int pipe, int plane)
+static const char *skl_wm_sagv_reg_name(int plane)
 {
 	static char reg_name[32];
 
-	if (plane == 0)
-		snprintf(reg_name, sizeof(reg_name), "CUR_BUF_CFG_%c",
-			 pipe_name(pipe));
+	if (is_cursor(plane))
+		snprintf(reg_name, sizeof(reg_name), "CUR_WM_SAGV");
 	else
-		snprintf(reg_name, sizeof(reg_name), "PLANE_BUF_CFG_%1d_%c",
-			 plane, pipe_name(pipe));
+		snprintf(reg_name, sizeof(reg_name), "PLANE_WM_SAGV_%1d", plane);
 
 	return reg_name;
 }
 
-static const char *skl_nv12_buf_cfg_reg_name(int pipe, int plane)
+static const char *skl_wm_sagv_trans_reg_name(int plane)
 {
 	static char reg_name[32];
 
-	snprintf(reg_name, sizeof(reg_name), "PLANE_NV12_BUF_CFG_%1d_%c",
-		 plane, pipe_name(pipe));
+	if (is_cursor(plane))
+		snprintf(reg_name, sizeof(reg_name), "CUR_WM_SAGV_TRANS");
+	else
+		snprintf(reg_name, sizeof(reg_name), "PLANE_WM_SAGV_TRANS_%1d", plane);
 
 	return reg_name;
+}
+
+static const char *skl_buf_cfg_reg_name(int plane)
+{
+	static char reg_name[32];
+
+	if (is_cursor(plane))
+		snprintf(reg_name, sizeof(reg_name), "CUR_BUF_CFG");
+	else
+		snprintf(reg_name, sizeof(reg_name), "PLANE_BUF_CFG_%1d", plane);
+
+	return reg_name;
+}
+
+static const char *skl_nv12_buf_cfg_reg_name(int plane)
+{
+	static char reg_name[32];
+
+	snprintf(reg_name, sizeof(reg_name), "PLANE_NV12_BUF_CFG_%1d", plane);
+
+	return reg_name;
+}
+
+static void hsw_wm_sr_cnt(void)
+{
+	if (sr_sleep) {
+		uint32_t pre, post;
+
+		pre = read_reg(0x45264);
+		sleep(sr_sleep);
+		post = read_reg(0x45264);
+
+		printf("WM_SR_CNT: 0x%08x->0x%08x\n", pre, post);
+		printf("SR residency: %u%%\n", ((post - pre) * 8 / (sr_sleep * 10000)));
+	} else {
+		printf("WM_SR_CNT: 0x%08x\n", read_reg(0x45264));
+	}
 }
 
 static void skl_wm_dump(void)
 {
+	struct intel_mmio_data mmio_data;
 	int pipe, plane, level;
-	int num_pipes = 3;
+	int num_pipes = skl_num_pipes(devid);
 	int max_planes = skl_max_planes(devid);
-	int num_levels = 8;
+	int num_levels = skl_num_wm_levels(devid);
 	uint32_t base_addr = 0x70000, addr, wm_offset;
 	uint32_t wm[num_levels][num_pipes][max_planes];
 	uint32_t wm_trans[num_pipes][max_planes];
+	uint32_t wm_sagv[num_pipes][max_planes];
+	uint32_t wm_sagv_trans[num_pipes][max_planes];
 	uint32_t buf_cfg[num_pipes][max_planes];
 	uint32_t nv12_buf_cfg[num_pipes][max_planes];
 	uint32_t plane_ctl[num_pipes][max_planes];
 	uint32_t wm_linetime[num_pipes];
+	uint32_t arb_ctl, arb_ctl2, wm_dbg;
 
-	intel_register_access_init(intel_get_pci_device(), 0, -1);
+	intel_register_access_init(&mmio_data, intel_get_pci_device(), 0);
+
+	arb_ctl = read_reg(0x45000);
+	arb_ctl2 = read_reg(0x45004);
 
 	for (pipe = 0; pipe < num_pipes; pipe++) {
 		int num_planes = skl_num_planes(devid, pipe);
@@ -262,7 +344,7 @@ static void skl_wm_dump(void)
 			plane_ctl[pipe][plane] = read_reg(addr + 0x80);
 			wm_trans[pipe][plane] = read_reg(addr + 0x00168);
 			buf_cfg[pipe][plane] = read_reg(addr + 0x0017C);
-			if (plane != 0 && intel_gen(devid) < 11)
+			if (!is_cursor(plane) && skl_has_nv12_buf_cfg(devid))
 				nv12_buf_cfg[pipe][plane] = read_reg(addr + 0x00178);
 			else
 				nv12_buf_cfg[pipe][plane] = 0;
@@ -270,24 +352,31 @@ static void skl_wm_dump(void)
 				wm_offset = addr + 0x00140 + level * 0x4;
 				wm[level][pipe][plane] = read_reg(wm_offset);
 			}
+
+			if (skl_has_sagv_wm(devid)) {
+				wm_sagv[pipe][plane] = read_reg(addr + 0x00158);
+				wm_sagv_trans[pipe][plane] = read_reg(addr + 0x0015c);
+			}
 		}
 	}
 
-	for (pipe = 0; pipe < num_pipes; pipe++) {
-		printf("%18s 0x%08x\t",
-		       skl_wm_linetime_reg_name(pipe),
-		       wm_linetime[pipe]);
-	}
+	printf("%21c\t", '\0');
+	for (pipe = 0; pipe < num_pipes; pipe++)
+		printf("PIPE_%-5c\t", pipe_name(pipe));
+	printf("\n\n");
+
+	printf("%21s\t", skl_wm_linetime_reg_name());
+	for (pipe = 0; pipe < num_pipes; pipe++)
+		printf("0x%08x\t", wm_linetime[pipe]);
 	printf("\n\n");
 
 	for (plane = 0; plane < max_planes; plane++) {
+		printf("%21s\t", skl_plane_ctl_reg_name(plane));
+
 		for (pipe = 0; pipe < num_pipes; pipe++) {
 			if (plane >= skl_num_planes(devid, pipe))
 				break;
-
-			printf("%18s 0x%08x\t" ,
-			       skl_plane_ctl_reg_name(pipe, plane),
-			       plane_ctl[pipe][plane]);
+			printf("0x%08x\t" , plane_ctl[pipe][plane]);
 		}
 		printf("\n");
 	}
@@ -295,13 +384,12 @@ static void skl_wm_dump(void)
 
 	for (plane = 0; plane < max_planes; plane++) {
 		for (level = 0; level < num_levels; level++) {
+			printf("%21s\t", skl_wm_reg_name(plane, level));
+
 			for (pipe = 0; pipe < num_pipes; pipe++) {
 				if (plane >= skl_num_planes(devid, pipe))
 					break;
-
-				printf("%18s 0x%08x\t" ,
-				       skl_wm_reg_name(pipe, plane, level),
-				       wm[level][pipe][plane]);
+				printf("0x%08x\t", wm[level][pipe][plane]);
 			}
 			printf("\n");
 		}
@@ -309,44 +397,83 @@ static void skl_wm_dump(void)
 	}
 
 	for (plane = 0; plane < max_planes; plane++) {
+		printf("%21s\t", skl_wm_trans_reg_name(plane));
+
 		for (pipe = 0; pipe < num_pipes; pipe++) {
 			if (plane >= skl_num_planes(devid, pipe))
 				break;
-
-			printf("%18s 0x%08x\t",
-			       skl_wm_trans_reg_name(pipe, plane),
-			       wm_trans[pipe][plane]);
+			printf("0x%08x\t", wm_trans[pipe][plane]);
 		}
 		printf("\n");
 	}
 	printf("\n");
 
+	if (skl_has_sagv_wm(devid)) {
+		for (plane = 0; plane < max_planes; plane++) {
+			printf("%21s\t", skl_wm_sagv_reg_name(plane));
+
+			for (pipe = 0; pipe < num_pipes; pipe++) {
+				if (plane >= skl_num_planes(devid, pipe))
+					break;
+				printf("0x%08x\t", wm_sagv[pipe][plane]);
+			}
+			printf("\n");
+		}
+		printf("\n");
+
+		for (plane = 0; plane < max_planes; plane++) {
+			printf("%21s\t", skl_wm_sagv_trans_reg_name(plane));
+
+			for (pipe = 0; pipe < num_pipes; pipe++) {
+				if (plane >= skl_num_planes(devid, pipe))
+					break;
+				printf("0x%08x\t", wm_sagv_trans[pipe][plane]);
+			}
+			printf("\n");
+		}
+		printf("\n");
+	}
+
 	for (plane = 0; plane < max_planes; plane++) {
-		for (pipe = 0; pipe < num_pipes; pipe++) {
-			if (plane >= skl_num_planes(devid, pipe))
-				break;
-
-			printf("%18s 0x%08x\t",
-			       skl_buf_cfg_reg_name(pipe, plane),
-			       buf_cfg[pipe][plane]);
-		}
-		printf("\n");
-
-		if (intel_gen(devid) >= 11)
-			continue;
-
-		if (plane == 0)
-			continue;
+		printf("%21s\t", skl_buf_cfg_reg_name(plane));
 
 		for (pipe = 0; pipe < num_pipes; pipe++) {
 			if (plane >= skl_num_planes(devid, pipe))
 				break;
-
-			printf("%18s 0x%08x\t",
-			       skl_nv12_buf_cfg_reg_name(pipe, plane),
-			       nv12_buf_cfg[pipe][plane]);
+			printf("0x%08x\t", buf_cfg[pipe][plane]);
 		}
 		printf("\n");
+
+		if (!skl_has_nv12_buf_cfg(devid))
+			continue;
+
+		if (is_cursor(plane))
+			continue;
+
+		printf("%21s\t", skl_nv12_buf_cfg_reg_name(plane));
+
+		for (pipe = 0; pipe < num_pipes; pipe++) {
+			if (plane >= skl_num_planes(devid, pipe))
+				break;
+			printf("0x%08x\t", nv12_buf_cfg[pipe][plane]);
+		}
+		printf("\n");
+	}
+	printf("\n");
+
+	if (intel_display_ver(devid) >= 13) {
+		printf(" ARB_LP_CTL 0x%08x\n", arb_ctl);
+		printf(" ARB_HP_CTL 0x%08x\n", arb_ctl2);
+	} else if (intel_display_ver(devid) >= 12) {
+		printf("        ARB_CTL 0x%08x\n", arb_ctl);
+		printf("  ARB_CTL_ABOX1 0x%08x\n", read_reg(0x45800));
+		printf("  ARB_CTL_ABOX2 0x%08x\n", read_reg(0x45808));
+		printf("       ARB_CTL2 0x%08x\n", arb_ctl2);
+		printf(" ARB_CTL2_ABOX1 0x%08x\n", read_reg(0x45804));
+		printf(" ARB_CTL2_ABOX2 0x%08x\n", read_reg(0x4580c));
+	} else {
+		printf("  ARB_CTL 0x%08x\n", arb_ctl);
+		printf(" ARB_CTL2 0x%08x\n", arb_ctl2);
 	}
 	printf("\n");
 
@@ -361,23 +488,23 @@ static void skl_wm_dump(void)
 		linetime = REG_DECODE1(wm_linetime[pipe], 0, 9);
 		printf("LINETIME: %d (%.3f usec)\n", linetime, linetime* 0.125f);
 
-		printf("LEVEL");
+		printf("     LEVEL");
 		for (plane = 0; plane < num_planes; plane++) {
-			if (plane == 0)
+			if (is_cursor(plane))
 				enable = REG_DECODE1(plane_ctl[pipe][plane], 0, 3) ||
 					REG_DECODE1(plane_ctl[pipe][plane], 5, 1);
 			else
 				enable = REG_DECODE1(plane_ctl[pipe][plane], 31, 1);
-			printf("%9s%c", skl_plane_name(pipe, plane),
+			printf("%9s%c", skl_plane_name(plane),
 			       endis_ast(enable));
 		}
 		printf("\n");
 
 		for (level = 0; level < num_levels; level++) {
-			printf("%5d", level);
+			printf("%10d", level);
 			for (plane = 0; plane < num_planes; plane++) {
-				blocks = REG_DECODE1(wm[level][pipe][plane], 0, 11);
-				lines = REG_DECODE1(wm[level][pipe][plane], 14, 5);
+				blocks = REG_DECODE1(wm[level][pipe][plane], 0, 12);
+				lines = REG_DECODE1(wm[level][pipe][plane], 14, 13);
 				enable = REG_DECODE1(wm[level][pipe][plane], 31, 1);
 
 				printf("%5d%c", blocks, endis_ast(enable));
@@ -389,10 +516,10 @@ static void skl_wm_dump(void)
 			printf("\n");
 		}
 
-		printf("TRANS");
+		printf("     TRANS");
 		for (plane = 0; plane < num_planes; plane++) {
-			blocks = REG_DECODE1(wm_trans[pipe][plane], 0, 11);
-			lines = REG_DECODE1(wm_trans[pipe][plane], 14, 5);
+			blocks = REG_DECODE1(wm_trans[pipe][plane], 0, 12);
+			lines = REG_DECODE1(wm_trans[pipe][plane], 14, 13);
 			enable = REG_DECODE1(wm_trans[pipe][plane], 31, 1);
 
 			printf("%5d%c", blocks, endis_ast(enable));
@@ -402,48 +529,76 @@ static void skl_wm_dump(void)
 				printf("(--)");
 		}
 
+		if (skl_has_sagv_wm(devid)) {
+			printf("\n      SAGV");
+			for (plane = 0; plane < num_planes; plane++) {
+				blocks = REG_DECODE1(wm_sagv[pipe][plane], 0, 12);
+				lines = REG_DECODE1(wm_sagv[pipe][plane], 14, 13);
+				enable = REG_DECODE1(wm_sagv[pipe][plane], 31, 1);
+
+				printf("%5d%c", blocks, endis_ast(enable));
+				if (!REG_DECODE1(wm_sagv[pipe][plane], 30, 1))
+					printf("(%2d)", lines);
+				else
+					printf("(--)");
+			}
+
+			printf("\nSAGV TRANS");
+			for (plane = 0; plane < num_planes; plane++) {
+				blocks = REG_DECODE1(wm_sagv_trans[pipe][plane], 0, 12);
+				lines = REG_DECODE1(wm_sagv_trans[pipe][plane], 14, 13);
+				enable = REG_DECODE1(wm_sagv_trans[pipe][plane], 31, 1);
+
+				printf("%5d%c", blocks, endis_ast(enable));
+				if (!REG_DECODE1(wm_sagv_trans[pipe][plane], 30, 1))
+					printf("(%2d)", lines);
+				else
+					printf("(--)");
+			}
+		}
+
 		printf("\nDDB allocation:");
 
 		printf("\nstart");
 		for (plane = 0; plane < num_planes; plane++) {
-			start = REG_DECODE1(buf_cfg[pipe][plane], 0, 11);
+			start = REG_DECODE1(buf_cfg[pipe][plane], 0, 12);
 			printf("%10d", start);
 		}
 
 		printf("\n  end");
 		for (plane = 0; plane < num_planes; plane++) {
-			end = REG_DECODE1(buf_cfg[pipe][plane], 16, 11);
+			end = REG_DECODE1(buf_cfg[pipe][plane], 16, 12);
 			printf("%10d", end);
 		}
 
 		printf("\n size");
 		for (plane = 0; plane < num_planes; plane++) {
-			start = REG_DECODE1(buf_cfg[pipe][plane], 0, 11);
-			end =  REG_DECODE1(buf_cfg[pipe][plane], 16, 11);
+			start = REG_DECODE1(buf_cfg[pipe][plane], 0, 12);
+			end =  REG_DECODE1(buf_cfg[pipe][plane], 16, 12);
 			size = end - start + 1;
 			printf("%10d", (end == 0 && size == 1) ? 0 : size);
 		}
 		printf("\n");
 
-		if (intel_gen(devid) < 11) {
+		if (skl_has_nv12_buf_cfg(devid)) {
 			printf("\nNV12 DDB allocation:");
 
 			printf("\nstart");
 			for (plane = 0; plane < num_planes; plane++) {
-				start = REG_DECODE1(nv12_buf_cfg[pipe][plane], 0, 11);
+				start = REG_DECODE1(nv12_buf_cfg[pipe][plane], 0, 12);
 				printf("%10d", start);
 			}
 
 			printf("\n  end");
 			for (plane = 0; plane < num_planes; plane++) {
-				end = REG_DECODE1(nv12_buf_cfg[pipe][plane], 16, 11);
+				end = REG_DECODE1(nv12_buf_cfg[pipe][plane], 16, 12);
 				printf("%10d", end);
 			}
 
 			printf("\n size");
 			for (plane = 0; plane < num_planes; plane++) {
-				start = REG_DECODE1(nv12_buf_cfg[pipe][plane], 0, 11);
-				end =  REG_DECODE1(nv12_buf_cfg[pipe][plane], 16, 11);
+				start = REG_DECODE1(nv12_buf_cfg[pipe][plane], 0, 12);
+				end =  REG_DECODE1(nv12_buf_cfg[pipe][plane], 16, 12);
 				size = end - start + 1;
 				printf("%10d", (end == 0 && size == 1) ? 0 : size);
 			}
@@ -452,31 +607,61 @@ static void skl_wm_dump(void)
 		printf("\n\n\n");
 	}
 
+	if (intel_display_ver(devid) < 13)
+		printf("FBC watermark: %s\n", endis(!REG_DECODE1(arb_ctl, 15, 1)));
+	printf("IPC: %s\n", endis(REG_DECODE1(arb_ctl2, 3, 1)));
+
+	printf("\n");
+
 	printf("* plane watermark enabled\n");
 	printf("(x) line watermark if enabled\n");
+
+	hsw_wm_sr_cnt();
+
+	wm_dbg = read_reg(0x45280);
+	printf("WM_DBG: 0x%08x\n", wm_dbg);
+	printf(" LP used:");
+	for (level = 1; level < num_levels; level++) {
+		if (wm_dbg & (1 << (23 + level)))
+			printf(" LP%d", level);
+	}
+	if (skl_has_sagv_wm(devid) && wm_dbg & (1 << 29))
+		printf(" SAGV");
+	printf("\n");
+	/* clear the sticky bits */
+	write_reg(0x45280, wm_dbg);
+
+	intel_register_access_fini(&mmio_data);
 }
 
 static void ilk_wm_dump(void)
 {
+	struct intel_mmio_data mmio_data;
 	int i;
 	uint32_t dspcntr[3];
-	uint32_t spcntr[3];
+	uint32_t sprcntr[3];
+	uint32_t curcntr[3];
 	uint32_t wm_pipe[3];
 	uint32_t wm_linetime[3];
 	uint32_t wm_lp[3];
 	uint32_t wm_lp_spr[3];
 	uint32_t arb_ctl, arb_ctl2, wm_misc = 0;
-	int num_pipes = intel_gen(devid) >= 7 ? 3 : 2;
+	int num_pipes = intel_display_ver(devid) >= 7 ? 3 : 2;
+	struct ilk_plane primary[3] = {}, sprite[3] = {}, cursor[3] = {};
 	struct ilk_wm wm = {};
 
-	intel_register_access_init(intel_get_pci_device(), 0, -1);
+	intel_register_access_init(&mmio_data, intel_get_pci_device(), 0);
 
 	for (i = 0; i < num_pipes; i++) {
 		dspcntr[i] = read_reg(0x70180 + i * 0x1000);
-		if (intel_gen(devid) >= 7)
-			spcntr[i] = read_reg(0x70280 + i * 0x1000);
+		if (intel_display_ver(devid) >= 7)
+			sprcntr[i] = read_reg(0x70280 + i * 0x1000);
 		else
-			spcntr[i] = read_reg(0x72180 + i * 0x1000);
+			sprcntr[i] = read_reg(0x72180 + i * 0x1000);
+		if (intel_display_ver(devid) >= 7)
+			curcntr[i] = read_reg(0x70080 + i * 0x1000);
+		else
+			curcntr[i] = read_reg(0x70080 + i * 0x40);
 	}
 
 	wm_pipe[0] = read_reg(0x45100);
@@ -495,7 +680,7 @@ static void ilk_wm_dump(void)
 	wm_lp[2] = read_reg(0x45110);
 
 	wm_lp_spr[0] = read_reg(0x45120);
-	if (intel_gen(devid) >= 7) {
+	if (intel_display_ver(devid) >= 7) {
 		wm_lp_spr[1] = read_reg(0x45124);
 		wm_lp_spr[2] = read_reg(0x45128);
 	}
@@ -505,7 +690,11 @@ static void ilk_wm_dump(void)
 	if (IS_BROADWELL(devid) || IS_HASWELL(devid))
 		wm_misc = read_reg(0x45260);
 
-	intel_register_access_fini();
+	for (i = 0; i < num_pipes; i++) {
+		printf("    DSPCNTR_%c = 0x%08x\n", pipe_name(i), dspcntr[i]);
+		printf("    SPRCNTR_%c = 0x%08x\n", pipe_name(i), sprcntr[i]);
+		printf("    CURCNTR_%c = 0x%08x\n", pipe_name(i), curcntr[i]);
+	}
 
 	for (i = 0; i < num_pipes; i++)
 		printf("    WM_PIPE_%c = 0x%08x\n", pipe_name(i), wm_pipe[i]);
@@ -517,7 +706,7 @@ static void ilk_wm_dump(void)
 	printf("       WM_LP2 = 0x%08x\n", wm_lp[1]);
 	printf("       WM_LP3 = 0x%08x\n", wm_lp[2]);
 	printf("   WM_LP1_SPR = 0x%08x\n", wm_lp_spr[0]);
-	if (intel_gen(devid) >= 7) {
+	if (intel_display_ver(devid) >= 7) {
 		printf("   WM_LP2_SPR = 0x%08x\n", wm_lp_spr[1]);
 		printf("   WM_LP3_SPR = 0x%08x\n", wm_lp_spr[2]);
 	}
@@ -525,6 +714,21 @@ static void ilk_wm_dump(void)
 	printf("     ARB_CTL2 = 0x%08x\n", arb_ctl2);
 	if (IS_BROADWELL(devid) || IS_HASWELL(devid))
 		printf("      WM_MISC = 0x%08x\n", wm_misc);
+
+	for (i = 0 ; i < num_pipes; i++) {
+		primary[i].enabled = REG_DECODE1(dspcntr[i], 31, 1);
+		sprite[i].enabled = REG_DECODE1(sprcntr[i], 31, 1);
+		cursor[i].enabled = REG_DECODE1(curcntr[i], 0, 3) ||
+			REG_DECODE1(curcntr[i], 5, 1);
+
+		primary[i].trickle_feed_dis = REG_DECODE1(dspcntr[i], 14, 1);
+
+		if (IS_GEN5(devid))
+			continue;
+
+		sprite[i].trickle_feed_dis = REG_DECODE1(sprcntr[i], 14, 1);
+		cursor[i].trickle_feed_dis = REG_DECODE1(curcntr[i], 14, 1);
+	}
 
 	for (i = 0 ; i < num_pipes; i++) {
 		wm.pipe[i].primary = REG_DECODE1(wm_pipe[i], 16, 8);
@@ -535,12 +739,6 @@ static void ilk_wm_dump(void)
 			wm.linetime[i].linetime = REG_DECODE1(wm_linetime[i], 0, 9);
 			wm.linetime[i].ips = REG_DECODE1(wm_linetime[i], 16, 9);
 		}
-
-		wm.pipe[i].primary_trickle_feed_dis =
-			REG_DECODE1(dspcntr[i], 14, 1);
-		if (!IS_GEN5(devid))
-			wm.pipe[i].sprite_trickle_feed_dis =
-				REG_DECODE1(spcntr[i], 14, 1);
 	}
 
 	for (i = 0; i < 3; i++) {
@@ -553,8 +751,8 @@ static void ilk_wm_dump(void)
 		wm.lp[i].primary = REG_DECODE1(wm_lp[i], 8, 11);
 		wm.lp[i].cursor = REG_DECODE1(wm_lp[i], 0, 8);
 
-		if (i == 0 || intel_gen(devid) >= 7) {
-			if (intel_gen(devid) < 7)
+		if (i == 0 || intel_display_ver(devid) >= 7) {
+			if (intel_display_ver(devid) < 7)
 				wm.lp[i].sprite_enabled = REG_DECODE1(wm_lp_spr[i], 31, 1);
 			wm.lp[i].sprite = REG_DECODE1(wm_lp_spr[i], 0, 11);
 		}
@@ -572,7 +770,7 @@ static void ilk_wm_dump(void)
 			       wm.linetime[i].ips, wm.linetime[i].ips * 0.125f);
 		}
 	}
-	if (intel_gen(devid) >= 7) {
+	if (intel_display_ver(devid) >= 7) {
 		for (i = 0; i < 3; i++) {
 			printf("WM_LP%d: %s, latency=%d, fbc=%d, primary=%d, cursor=%d, sprite=%d\n",
 			       i + 1, endis(wm.lp[i].enabled), wm.lp[i].latency, wm.lp[i].fbc,
@@ -591,25 +789,71 @@ static void ilk_wm_dump(void)
 		}
 	}
 	for (i = 0; i < num_pipes; i++) {
-		printf("Primary %c trickle feed = %s\n",
-		       pipe_name(i), endis(!wm.pipe[i].primary_trickle_feed_dis));
-		if (!IS_GEN5(devid))
-			printf("Sprite %c trickle feed = %s\n",
-			       pipe_name(i), endis(!wm.pipe[i].sprite_trickle_feed_dis));
+		printf("Primary %c: %s, trickle feed = %s\n",
+		       pipe_name(i), endis(primary[i].enabled),
+		       endis(!primary[i].trickle_feed_dis));
+		printf("Sprite %c: %s, trickle feed = %s\n",
+		       pipe_name(i), endis(sprite[i].enabled),
+		       IS_GEN5(devid) ? "n/a" :
+		       endis(!sprite[i].trickle_feed_dis));
+		printf("Cursor %c: %s, trickle feed = %s\n",
+		       pipe_name(i), endis(cursor[i].enabled),
+		       IS_GEN5(devid) ? "n/a" :
+		       endis(!cursor[i].trickle_feed_dis));
 	}
 	if (IS_BROADWELL(devid) || IS_HASWELL(devid)) {
 		printf("DDB partitioning = %s\n",
 		       REG_DECODE1(wm_misc, 0, 1) ? "5/6" : "1/2");
-	} else if (intel_gen(devid) >= 7) {
+	} else if (intel_display_ver(devid) >= 7) {
 		printf("DDB partitioning = %s\n",
 		       REG_DECODE1(arb_ctl2, 6, 1) ? "5/6" : "1/2");
 	}
 	printf("FBC watermark = %s\n",
 	       endis(!REG_DECODE1(arb_ctl, 15, 1)));
+
+	if (IS_BROADWELL(devid) || IS_HASWELL(devid)) {
+		uint32_t wm_dbg;
+
+		hsw_wm_sr_cnt();
+
+		wm_dbg = read_reg(0x45280);
+		printf("WM_DBG: 0x%08x\n", wm_dbg);
+		if (wm_dbg & (1 << 31))
+			printf(" Full maxfifo used\n");
+		if (wm_dbg & (1 << 30))
+			printf(" Sprite maxfifo used\n");
+		printf(" LP used:");
+		for (i = 1; i < 4; i++) {
+			if (wm_dbg & (1 << (23+i)))
+				printf(" LP%d", i);
+		}
+		printf("\n");
+		/* clear the sticky bits */
+		write_reg(0x45280, wm_dbg);
+	} else if (IS_IVYBRIDGE(devid)) {
+		uint32_t fpga_dbg;
+
+		fpga_dbg = read_reg(0x42300);
+		printf("FPGA_DBG: 0x%08x\n", fpga_dbg);
+		printf(" LP used:");
+		if (fpga_dbg & (1 << 18))
+			printf(" LP0.5");
+		for (i = 1; i < 4; i++) {
+			if (fpga_dbg & (1 << (18+i)))
+				printf(" LP%d", i);
+		}
+		printf("\n");
+		/* clear the sticky LP bits */
+		fpga_dbg &= 1 << 21 | 1 << 20 | 1 << 19 | 1 << 18;
+		write_reg(0x42300, fpga_dbg);
+	}
+
+	intel_register_access_fini(&mmio_data);
 }
 
 static void vlv_wm_dump(void)
 {
+	struct intel_mmio_data mmio_data;
 	int i;
 	unsigned int num_pipes = IS_CHERRYVIEW(devid) ? 3 : 2;
 	uint32_t dsparb, dsparb2, dsparb3;
@@ -619,7 +863,7 @@ static void vlv_wm_dump(void)
 	uint32_t dsp_ss_pm, ddr_setup2;
 	struct gmch_wm wms[MAX_PLANE] = {};
 
-	intel_register_access_init(intel_get_pci_device(), 0, -1);
+	intel_register_access_init(&mmio_data, intel_get_pci_device(), 0);
 
 	dsparb = read_reg(0x70030);
 	dsparb2 = read_reg(0x70060);
@@ -650,13 +894,13 @@ static void vlv_wm_dump(void)
 
 		ddl3 = read_reg(0x70058);
 
-		intel_punit_read(0x36, &dsp_ss_pm);
-		intel_punit_read(0x139, &ddr_setup2);
+		intel_punit_read(&mmio_data, 0x36, &dsp_ss_pm);
+		intel_punit_read(&mmio_data, 0x139, &ddr_setup2);
 	} else {
 		fw7 = read_reg(0x7007c);
 	}
 
-	intel_register_access_fini();
+	intel_register_access_fini(&mmio_data);
 
 	printf("        FW1 = 0x%08x\n", fw1);
 	printf("        FW2 = 0x%08x\n", fw2);
@@ -827,6 +1071,7 @@ static void vlv_wm_dump(void)
 
 static void g4x_wm_dump(void)
 {
+	struct intel_mmio_data mmio_data;
 	int i;
 	uint32_t dspacntr, dspbcntr;
 	uint32_t dsparb;
@@ -835,7 +1080,7 @@ static void g4x_wm_dump(void)
 	uint32_t mi_arb_state;
 	struct gmch_wm wms[MAX_PLANE] = {};
 
-	intel_register_access_init(intel_get_pci_device(), 0, -1);
+	intel_register_access_init(&mmio_data, intel_get_pci_device(), 0);
 
 	dspacntr = read_reg(0x70180);
 	dspbcntr = read_reg(0x71180);
@@ -846,7 +1091,7 @@ static void g4x_wm_dump(void)
 	mi_display_power_down = read_reg(0x20e0);
 	mi_arb_state = read_reg(0x20e4);
 
-	intel_register_access_fini();
+	intel_register_access_fini(&mmio_data);
 
 	printf("             DSPACNTR = 0x%08x\n", dspacntr);
 	printf("             DSPBCNTR = 0x%08x\n", dspbcntr);
@@ -913,6 +1158,7 @@ static void g4x_wm_dump(void)
 
 static void gen4_wm_dump(void)
 {
+	struct intel_mmio_data mmio_data;
 	int i;
 	int totalsize = IS_CRESTLINE(devid) ? 128 : 96;
 	uint32_t dsparb;
@@ -921,7 +1167,7 @@ static void gen4_wm_dump(void)
 	uint32_t mi_arb_state;
 	struct gmch_wm wms[MAX_PLANE] = {};
 
-	intel_register_access_init(intel_get_pci_device(), 0, -1);
+	intel_register_access_init(&mmio_data, intel_get_pci_device(), 0);
 
 	dsparb = read_reg(0x70030);
 	fw1 = read_reg(0x70034);
@@ -930,7 +1176,7 @@ static void gen4_wm_dump(void)
 	mi_display_power_down = read_reg(0x20e0);
 	mi_arb_state = read_reg(0x20e4);
 
-	intel_register_access_fini();
+	intel_register_access_fini(&mmio_data);
 
 	printf("                  FW1 = 0x%08x\n", fw1);
 	printf("                  FW2 = 0x%08x\n", fw2);
@@ -983,6 +1229,7 @@ static void gen4_wm_dump(void)
 
 static void pnv_wm_dump(void)
 {
+	struct intel_mmio_data mmio_data;
 	int i;
 	int totalsize = 96; /* FIXME? */
 	uint32_t dsparb;
@@ -992,7 +1239,7 @@ static void pnv_wm_dump(void)
 	uint32_t cbr;
 	struct gmch_wm wms[MAX_PLANE] = {};
 
-	intel_register_access_init(intel_get_pci_device(), 0, -1);
+	intel_register_access_init(&mmio_data, intel_get_pci_device(), 0);
 
 	dsparb = read_reg(0x70030);
 	fw1 = read_reg(0x70034);
@@ -1002,7 +1249,7 @@ static void pnv_wm_dump(void)
 	mi_display_power_down = read_reg(0x20e0);
 	mi_arb_state = read_reg(0x20e4);
 
-	intel_register_access_fini();
+	intel_register_access_fini(&mmio_data);
 
 	printf("               DSPARB = 0x%08x\n", dsparb);
 	printf("                  FW1 = 0x%08x\n", fw1);
@@ -1073,6 +1320,7 @@ static void pnv_wm_dump(void)
 
 static void gen3_wm_dump(void)
 {
+	struct intel_mmio_data mmio_data;
 	int i;
 	int totalsize = IS_945GM(devid) ? 128 : 96; /* FIXME? */
 	uint32_t dsparb;
@@ -1082,7 +1330,7 @@ static void gen3_wm_dump(void)
 	uint32_t mi_arb_state;
 	struct gmch_wm wms[MAX_PLANE] = {};
 
-	intel_register_access_init(intel_get_pci_device(), 0, -1);
+	intel_register_access_init(&mmio_data, intel_get_pci_device(), 0);
 
 	dsparb = read_reg(0x70030);
 	instpm = read_reg(0x20c0);
@@ -1090,7 +1338,7 @@ static void gen3_wm_dump(void)
 	fw_blc_self = read_reg(0x20e0);
 	mi_arb_state = read_reg(0x20e4);
 
-	intel_register_access_fini();
+	intel_register_access_fini(&mmio_data);
 
 	printf("      DSPARB = 0x%08x\n", dsparb);
 	printf("      FW_BLC = 0x%016" PRIx64 "\n", fw_blc);
@@ -1142,6 +1390,7 @@ static void gen3_wm_dump(void)
 
 static void gen2_wm_dump(void)
 {
+	struct intel_mmio_data mmio_data;
 	int i;
 	int totalsize;
 	uint32_t dsparb;
@@ -1151,7 +1400,7 @@ static void gen2_wm_dump(void)
 	uint32_t mi_state;
 	struct gmch_wm wms[MAX_PLANE] = {};
 
-	intel_register_access_init(intel_get_pci_device(), 0, -1);
+	intel_register_access_init(&mmio_data, intel_get_pci_device(), 0);
 
 	dsparb = read_reg(0x70030);
 	mem_mode = read_reg(0x20cc);
@@ -1159,7 +1408,7 @@ static void gen2_wm_dump(void)
 	fw_blc_self = read_reg(0x20e0);
 	mi_state = read_reg(0x20e4);
 
-	intel_register_access_fini();
+	intel_register_access_fini(&mmio_data);
 
 	printf("     DSPARB = 0x%08x\n", dsparb);
 	printf("   MEM_MODE = 0x%08x\n", mem_mode);
@@ -1224,16 +1473,44 @@ static void gen2_wm_dump(void)
 	}
 }
 
+static void __attribute__((noreturn)) usage(const char *name)
+{
+	fprintf(stderr, "Usage: %s [options]\n"
+		" -s,--sr-sleep <seconds>\n",
+		name);
+	exit(1);
+}
+
 int main(int argc, char *argv[])
 {
 	devid = intel_get_pci_device()->device_id;
 
-	if (intel_gen(devid) >= 9) {
+	for (;;) {
+		static const struct option long_options[] = {
+			{ .name = "sr-sleep", .has_arg = required_argument, },
+			{}
+		};
+
+		int opt = getopt_long(argc, argv, "s:", long_options, NULL);
+		if (opt == -1)
+			break;
+
+		switch (opt) {
+		case 's':
+			sr_sleep = atoi(optarg);
+			break;
+		default:
+			usage(argv[0]);
+			break;
+		}
+	}
+
+	if (intel_display_ver(devid) >= 9) {
 		skl_wm_dump();
 	} else if (IS_VALLEYVIEW(devid) || IS_CHERRYVIEW(devid)) {
 		display_base = 0x180000;
 		vlv_wm_dump();
-	} else if (intel_gen(devid) >= 5) {
+	} else if (intel_display_ver(devid) >= 5) {
 		ilk_wm_dump();
 	} else if (IS_G4X(devid)) {
 		g4x_wm_dump();

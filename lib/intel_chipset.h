@@ -31,13 +31,21 @@
 #include <pciaccess.h>
 #include <stdbool.h>
 
+#include "intel_cmds_info.h"
+
 #define BIT(x) (1ul <<(x))
 
 struct pci_device *intel_get_pci_device(void);
+uint32_t intel_get_drm_devid(int fd);
 
 struct intel_device_info {
-	unsigned gen;
+	unsigned graphics_ver;
+	unsigned graphics_rel;
+	unsigned display_ver;
 	unsigned gt; /* 0 if unknown */
+	bool has_4tile : 1;
+	bool has_flatccs : 1;
+	bool has_oam : 1;
 	bool is_mobile : 1;
 	bool is_whitney : 1;
 	bool is_almador : 1;
@@ -70,21 +78,34 @@ struct intel_device_info {
 	bool is_cometlake : 1;
 	bool is_cannonlake : 1;
 	bool is_icelake : 1;
+	bool is_elkhartlake : 1;
+	bool is_jasperlake : 1;
 	bool is_tigerlake : 1;
+	bool is_rocketlake : 1;
+	bool is_dg1 : 1;
+	bool is_dg2 : 1;
+	bool is_alderlake_s : 1;
+	bool is_raptorlake_s : 1;
+	bool is_alderlake_p : 1;
+	bool is_alderlake_n : 1;
+	bool is_meteorlake : 1;
+	bool is_pontevecchio : 1;
+	bool is_lunarlake : 1;
+	bool is_battlemage : 1;
+	bool is_pantherlake : 1;
+
+	const struct intel_cmds_info *cmds_info;
 	const char *codename;
 };
 
 const struct intel_device_info *intel_get_device_info(uint16_t devid) __attribute__((pure));
 
-#ifdef ANDROID
-static inline uint32_t intel_get_drm_devid(int __attribute__((unused)) fd) { return 0U; }
-static inline unsigned intel_gen(uint16_t __attribute__((unused)) devid) { return false; }
-#else
-uint32_t intel_get_drm_devid(int fd);
+const struct intel_cmds_info *intel_get_cmds_info(uint16_t devid) __attribute__((pure));
 unsigned intel_gen(uint16_t devid) __attribute__((pure));
-#endif
+unsigned intel_graphics_ver(uint16_t devid) __attribute__((pure));
+unsigned intel_display_ver(uint16_t devid) __attribute__((pure));
 
-unsigned intel_gt(uint16_t devid) __attribute__((pure));
+extern enum pch_type intel_pch;
 
 enum pch_type {
 	PCH_NONE,
@@ -93,13 +114,13 @@ enum pch_type {
 	PCH_LPT,
 };
 
-extern enum pch_type intel_pch;
-
 void intel_check_pch(void);
 
 #define HAS_IBX (intel_pch == PCH_IBX)
 #define HAS_CPT (intel_pch == PCH_CPT)
 #define HAS_LPT (intel_pch == PCH_LPT)
+
+#define IP_VER(ver, rel)		((ver) << 8 | (rel))
 
 /* Exclude chipset #defines, they just add noise */
 #ifndef __GTK_DOC_IGNORE__
@@ -177,9 +198,20 @@ void intel_check_pch(void);
 #define IS_CANNONLAKE(devid)	(intel_get_device_info(devid)->is_cannonlake)
 #define IS_ICELAKE(devid)	(intel_get_device_info(devid)->is_icelake)
 #define IS_TIGERLAKE(devid)	(intel_get_device_info(devid)->is_tigerlake)
+#define IS_ROCKETLAKE(devid)	(intel_get_device_info(devid)->is_rocketlake)
+#define IS_DG1(devid)		(intel_get_device_info(devid)->is_dg1)
+#define IS_DG2(devid)		(intel_get_device_info(devid)->is_dg2)
+#define IS_ALDERLAKE_S(devid)	(intel_get_device_info(devid)->is_alderlake_s)
+#define IS_RAPTORLAKE_S(devid)	(intel_get_device_info(devid)->is_raptorlake_s)
+#define IS_ALDERLAKE_P(devid)	(intel_get_device_info(devid)->is_alderlake_p)
+#define IS_ALDERLAKE_N(devid)	(intel_get_device_info(devid)->is_alderlake_n)
+#define IS_METEORLAKE(devid)	(intel_get_device_info(devid)->is_meteorlake)
+#define IS_PONTEVECCHIO(devid)	(intel_get_device_info(devid)->is_pontevecchio)
+#define IS_LUNARLAKE(devid)	(intel_get_device_info(devid)->is_lunarlake)
+#define IS_BATTLEMAGE(devid)	(intel_get_device_info(devid)->is_battlemage)
+#define IS_PANTHERLAKE(devid)  (intel_get_device_info(devid)->is_pantherlake)
 
-#define IS_GEN(devid, x)	(intel_get_device_info(devid)->gen & (1u << ((x)-1)))
-#define AT_LEAST_GEN(devid, x)	(intel_get_device_info(devid)->gen & -(1u << ((x)-1)))
+#define IS_GEN(devid, x)	(intel_get_device_info(devid)->graphics_ver == x)
 
 #define IS_GEN2(devid)		IS_GEN(devid, 2)
 #define IS_GEN3(devid)		IS_GEN(devid, 3)
@@ -194,14 +226,20 @@ void intel_check_pch(void);
 #define IS_GEN12(devid)		IS_GEN(devid, 12)
 
 #define IS_MOBILE(devid)	(intel_get_device_info(devid)->is_mobile)
-#define IS_965(devid)		AT_LEAST_GEN(devid, 4)
+#define IS_965(devid)		(intel_gen(devid) >= 4)
 
-#define HAS_BSD_RING(devid)	AT_LEAST_GEN(devid, 5)
-#define HAS_BLT_RING(devid)	AT_LEAST_GEN(devid, 6)
+#define HAS_BSD_RING(devid)	(intel_gen(devid) >= 5)
+#define HAS_BLT_RING(devid)	(intel_gen(devid) >= 6)
 
-#define HAS_PCH_SPLIT(devid)	(AT_LEAST_GEN(devid, 5) && \
+#define HAS_PCH_SPLIT(devid)	(intel_gen(devid) >= 5 && \
 				 !(IS_VALLEYVIEW(devid) || \
 				   IS_CHERRYVIEW(devid) || \
 				   IS_BROXTON(devid)))
+
+#define HAS_4TILE(devid)	(intel_get_device_info(devid)->has_4tile)
+
+#define HAS_FLATCCS(devid)	(intel_get_device_info(devid)->has_flatccs)
+
+#define HAS_OAM(devid)		(intel_get_device_info(devid)->has_oam)
 
 #endif /* _INTEL_CHIPSET_H */

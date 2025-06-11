@@ -29,7 +29,7 @@
 
 #include "igt_tests_common.h"
 
-static void invalid_subtest_name(void)
+__noreturn static void invalid_subtest_name(void)
 {
 	char prog[] = "igt_no_exit";
 	char *fake_argv[] = {prog};
@@ -44,7 +44,7 @@ static void invalid_subtest_name(void)
 	igt_exit();
 }
 
-static void nonexisting_subtest(void)
+__noreturn static void nonexisting_subtest(void)
 {
 	char prog[] = "igt_no_exit";
 	char arg1[] = "--run-subtest";
@@ -58,24 +58,6 @@ static void nonexisting_subtest(void)
 		;
 
 	igt_exit();
-}
-
-static int do_fork(void (*test_to_run)(void))
-{
-	int pid, status;
-
-	switch (pid = fork()) {
-	case -1:
-		internal_assert(0);
-	case 0:
-		test_to_run();
-	default:
-		while (waitpid(pid, &status, 0) == -1 &&
-		       errno == EINTR)
-			;
-
-		return status;
-	}
 }
 
 int main(int argc, char **argv)

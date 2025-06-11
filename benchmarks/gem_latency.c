@@ -27,7 +27,6 @@
 
 #include <pthread.h>
 
-#include "igt.h"
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -37,15 +36,16 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <errno.h>
+#include <poll.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
-#include <sys/poll.h>
 #include <sys/resource.h>
-#include "drm.h"
 
-#define LOCAL_I915_EXEC_FENCE_IN              (1<<16)
-#define LOCAL_I915_EXEC_FENCE_OUT             (1<<17)
+#include "drm.h"
+#include "i915/gem_create.h"
+#include "igt.h"
+#include "igt_device.h"
 
 #define CONTEXT		0x1
 #define REALTIME	0x2
@@ -55,6 +55,7 @@
 static int done;
 static int fd;
 static volatile uint32_t *timestamp_reg;
+static struct intel_mmio_data mmio_data;
 
 #define REG(x) (volatile uint32_t *)((volatile char *)igt_global_mmio + x)
 #define REG_OFFSET(x) ((volatile char *)(x) - (volatile char *)igt_global_mmio)
@@ -139,7 +140,6 @@ struct producer {
 	struct consumer *consumers;
 };
 
-#define LOCAL_EXEC_NO_RELOC (1<<11)
 #define COPY_BLT_CMD		(2<<29|0x53<<22|0x6)
 #define BLT_WRITE_ALPHA		(1<<21)
 #define BLT_WRITE_RGB		(1<<20)
@@ -193,7 +193,7 @@ static void setup_workload(struct producer *p, int gen,
 	struct drm_i915_gem_relocation_entry *reloc;
 	int offset;
 
-	reloc = calloc(sizeof(*reloc), 2*factor);
+	reloc = calloc(2*factor, sizeof(*reloc));
 
 	p->workload_dispatch.exec[0].handle = scratch;
 	p->workload_dispatch.exec[1].relocation_count = 2*factor;
@@ -225,7 +225,7 @@ static void setup_workload(struct producer *p, int gen,
 	eb->buffer_count = 2;
 	if (flags & CMDPARSER)
 		eb->batch_len = 4096;
-	eb->flags = I915_EXEC_BLT | LOCAL_EXEC_NO_RELOC;
+	eb->flags = I915_EXEC_BLT | I915_EXEC_NO_RELOC;
 	eb->rsvd1 = p->ctx;
 }
 
@@ -241,7 +241,7 @@ static void setup_latency(struct producer *p, int gen, unsigned flags)
 	if (gem_has_llc(fd))
 		map = gem_mmap__cpu(fd, handle, 0, 4096, PROT_WRITE);
 	else
-		map = gem_mmap__gtt(fd, handle, 4096, PROT_WRITE);
+		map = gem_mmap__device_coherent(fd, handle, 0, 4096, PROT_WRITE);
 
 	p->latency_dispatch.exec[0].relocation_count = 1;
 	p->latency_dispatch.exec[0].relocs_ptr =
@@ -271,9 +271,9 @@ static void setup_latency(struct producer *p, int gen, unsigned flags)
 	eb->buffer_count = 1;
 	if (flags & CMDPARSER)
 		eb->batch_len = sizeof(*map) * ((i + 1) & ~1);
-	eb->flags = I915_EXEC_BLT | LOCAL_EXEC_NO_RELOC;
+	eb->flags = I915_EXEC_BLT | I915_EXEC_NO_RELOC;
 	if (flags & FENCE_OUT)
-		eb->flags |= LOCAL_I915_EXEC_FENCE_OUT;
+		eb->flags |= I915_EXEC_FENCE_OUT;
 	eb->rsvd1 = p->ctx;
 }
 
@@ -299,7 +299,7 @@ static void setup_nop(struct producer *p, uint32_t batch, unsigned flags)
 	eb->buffer_count = 1;
 	if (flags & CMDPARSER)
 		eb->batch_len = 8;
-	eb->flags = I915_EXEC_BLT | LOCAL_EXEC_NO_RELOC;
+	eb->flags = I915_EXEC_BLT | I915_EXEC_NO_RELOC;
 	eb->rsvd1 = p->ctx;
 }
 
@@ -311,7 +311,7 @@ static void fence_wait(int fence)
 
 static void measure_latency(struct producer *p, struct igt_mean *mean)
 {
-	if (!(p->latency_dispatch.execbuf.flags & LOCAL_I915_EXEC_FENCE_OUT))
+	if (!(p->latency_dispatch.execbuf.flags & I915_EXEC_FENCE_OUT))
 		gem_sync(fd, p->latency_dispatch.exec[0].handle);
 	else
 		fence_wait(p->latency_dispatch.execbuf.rsvd2 >> 32);
@@ -347,7 +347,7 @@ static void *producer(void *arg)
 		/* Finally, execute a batch that just reads the current
 		 * TIMESTAMP so we can measure the latency.
 		 */
-		if (p->latency_dispatch.execbuf.flags & LOCAL_I915_EXEC_FENCE_OUT)
+		if (p->latency_dispatch.execbuf.flags & I915_EXEC_FENCE_OUT)
 			gem_execbuf_wr(fd, &p->latency_dispatch.execbuf);
 		else
 			gem_execbuf(fd, &p->latency_dispatch.execbuf);
@@ -373,7 +373,7 @@ static void *producer(void *arg)
 
 		p->complete++;
 
-		if (p->latency_dispatch.execbuf.flags & LOCAL_I915_EXEC_FENCE_OUT)
+		if (p->latency_dispatch.execbuf.flags & I915_EXEC_FENCE_OUT)
 			close(p->latency_dispatch.execbuf.rsvd2 >> 32);
 	}
 
@@ -456,7 +456,8 @@ static int run(int seconds,
 	if (gen < 6)
 		return IGT_EXIT_SKIP; /* Needs BCS timestamp */
 
-	intel_register_access_init(intel_get_pci_device(), false, fd);
+	intel_register_access_init(&mmio_data,
+				   igt_device_get_pci_device(fd), false);
 
 	if (gen == 6)
 		timestamp_reg = REG(RCS_TIMESTAMP);
@@ -547,6 +548,7 @@ static int run(int seconds,
 	}
 
 	getrusage(RUSAGE_SELF, &rused);
+	intel_register_access_fini(&mmio_data);
 
 	switch ((flags >> 8) & 0xf) {
 	default:

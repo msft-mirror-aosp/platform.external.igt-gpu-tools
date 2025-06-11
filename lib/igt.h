@@ -26,9 +26,8 @@
 
 #include "drmtest.h"
 #include "i915_3d.h"
-#include "i915_pciids.h"
 #include "igt_aux.h"
-#include "igt_core.h"
+#include "igt_configfs.h"
 #include "igt_core.h"
 #include "igt_debugfs.h"
 #include "igt_draw.h"
@@ -37,8 +36,12 @@
 #include "igt_frame.h"
 #include "igt_gt.h"
 #include "igt_kms.h"
+#include "igt_params.h"
+#include "igt_pipe_crc.h"
 #include "igt_pm.h"
+#include "igt_sizes.h"
 #include "igt_stats.h"
+#include "igt_dsc.h"
 #ifdef HAVE_CHAMELIUM
 #include "igt_alsa.h"
 #include "igt_audio.h"

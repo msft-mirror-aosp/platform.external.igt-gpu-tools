@@ -33,8 +33,8 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
+#include <poll.h>
 #include <sys/stat.h>
-#include <sys/poll.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
 #include <time.h>
@@ -45,15 +45,10 @@
 #include "intel_chipset.h"
 #include "intel_reg.h"
 #include "igt_stats.h"
+#include "i915/gem_create.h"
 #include "i915/gem_mman.h"
 
-#define LOCAL_I915_EXEC_NO_RELOC (1<<11)
-#define LOCAL_I915_EXEC_HANDLE_LUT (1<<12)
-
-#define LOCAL_I915_EXEC_BSD_SHIFT      (13)
-#define LOCAL_I915_EXEC_BSD_MASK       (3 << LOCAL_I915_EXEC_BSD_SHIFT)
-
-#define ENGINE_FLAGS  (I915_EXEC_RING_MASK | LOCAL_I915_EXEC_BSD_MASK)
+#define ENGINE_FLAGS  (I915_EXEC_RING_MASK | I915_EXEC_BSD_MASK)
 
 #define WRITE 0x1
 #define IDLE 0x2
@@ -62,12 +57,9 @@
 #define SYNC 0x10
 #define SYNCOBJ 0x20
 
-#define LOCAL_I915_EXEC_FENCE_ARRAY (1 << 19)
 struct local_gem_exec_fence {
 	uint32_t handle;
 	uint32_t flags;
-#define LOCAL_EXEC_FENCE_WAIT (1 << 0)
-#define LOCAL_EXEC_FENCE_SIGNAL (1 << 1)
 };
 
 static void gem_busy(int fd, uint32_t handle)
@@ -122,13 +114,10 @@ static int sync_merge(int fd1, int fd2)
 
 static uint32_t __syncobj_create(int fd)
 {
-	struct local_syncobj_create {
-		uint32_t handle, flags;
-	} arg;
-#define LOCAL_IOCTL_SYNCOBJ_CREATE        DRM_IOWR(0xBF, struct local_syncobj_create)
+	struct drm_syncobj_create arg;
 
 	memset(&arg, 0, sizeof(arg));
-	ioctl(fd, LOCAL_IOCTL_SYNCOBJ_CREATE, &arg);
+	ioctl(fd, DRM_IOCTL_SYNCOBJ_CREATE, &arg);
 
 	return arg.handle;
 }
@@ -142,22 +131,10 @@ static uint32_t syncobj_create(int fd)
 	return ret;
 }
 
-#define LOCAL_SYNCOBJ_WAIT_FLAGS_WAIT_ALL (1 << 0)
-#define LOCAL_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT (1 << 1)
-struct local_syncobj_wait {
-       __u64 handles;
-       /* absolute timeout */
-       __s64 timeout_nsec;
-       __u32 count_handles;
-       __u32 flags;
-       __u32 first_signaled; /* only valid when not waiting all */
-       __u32 pad;
-};
-#define LOCAL_IOCTL_SYNCOBJ_WAIT	DRM_IOWR(0xC3, struct local_syncobj_wait)
-static int __syncobj_wait(int fd, struct local_syncobj_wait *args)
+static int __syncobj_wait(int fd, struct drm_syncobj_wait *args)
 {
 	int err = 0;
-	if (drmIoctl(fd, LOCAL_IOCTL_SYNCOBJ_WAIT, args))
+	if (drmIoctl(fd, DRM_IOCTL_SYNCOBJ_WAIT, args))
 		err = -errno;
 	return err;
 }
@@ -185,10 +162,7 @@ static int loop(unsigned ring, int reps, int ncpus, unsigned flags)
 	if (flags & WRITE)
 		obj[0].flags = EXEC_OBJECT_WRITE;
 	obj[1].handle = gem_create(fd, 4096);
-	if (gem_mmap__has_wc(fd))
-		batch = gem_mmap__wc(fd, obj[1].handle, 0, 4096, PROT_WRITE);
-	else
-		batch = gem_mmap__gtt(fd, obj[1].handle, 4096, PROT_WRITE);
+	batch = gem_mmap__device_coherent(fd, obj[1].handle, 0, 4096, PROT_WRITE);
 	gem_set_domain(fd, obj[1].handle,
 			I915_GEM_DOMAIN_GTT, I915_GEM_DOMAIN_GTT);
 	batch[0] = MI_BATCH_BUFFER_END;
@@ -196,8 +170,8 @@ static int loop(unsigned ring, int reps, int ncpus, unsigned flags)
 	memset(&execbuf, 0, sizeof(execbuf));
 	execbuf.buffers_ptr = to_user_pointer(obj);
 	execbuf.buffer_count = 2;
-	execbuf.flags |= LOCAL_I915_EXEC_HANDLE_LUT;
-	execbuf.flags |= LOCAL_I915_EXEC_NO_RELOC;
+	execbuf.flags |= I915_EXEC_HANDLE_LUT;
+	execbuf.flags |= I915_EXEC_NO_RELOC;
 	if (__gem_execbuf(fd, &execbuf)) {
 		execbuf.flags = 0;
 		if (__gem_execbuf(fd, &execbuf))
@@ -206,11 +180,11 @@ static int loop(unsigned ring, int reps, int ncpus, unsigned flags)
 
 	if (flags & SYNCOBJ) {
 		syncobj.handle = syncobj_create(fd);
-		syncobj.flags = LOCAL_EXEC_FENCE_SIGNAL;
+		syncobj.flags = I915_EXEC_FENCE_SIGNAL;
 
 		execbuf.cliprects_ptr = to_user_pointer(&syncobj);
 		execbuf.num_cliprects = 1;
-		execbuf.flags |= LOCAL_I915_EXEC_FENCE_ARRAY;
+		execbuf.flags |= I915_EXEC_FENCE_ARRAY;
 	}
 
 	if (ring == -1) {
@@ -299,7 +273,7 @@ static int loop(unsigned ring, int reps, int ncpus, unsigned flags)
 					for (int inner = 0; inner < 1024; inner++)
 						poll(&pfd, 1, 0);
 				} else if (flags & SYNCOBJ) {
-					struct local_syncobj_wait arg = {
+					struct drm_syncobj_wait arg = {
 						.handles = to_user_pointer(&syncobj.handle),
 						.count_handles = 1,
 					};

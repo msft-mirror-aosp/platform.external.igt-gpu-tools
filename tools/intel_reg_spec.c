@@ -35,17 +35,77 @@
 static const struct port_desc port_descs[] = {
 	{
 		.name = "mmio",
-		.port = PORT_MMIO,
+		.port = PORT_MMIO_32,
 		.stride = 4,
 	},
 	{
-		.name = "portio-vga",
-		.port = PORT_PORTIO_VGA,
+		.name = "mmio16",
+		.port = PORT_MMIO_16,
+		.stride = 2,
+	},
+	{
+		.name = "mmio8",
+		.port = PORT_MMIO_8,
 		.stride = 1,
 	},
 	{
-		.name = "mmio-vga",
-		.port = PORT_MMIO_VGA,
+		.name = "mchbar",
+		.port = PORT_MCHBAR_32,
+		.stride = 4,
+	},
+	{
+		.name = "mchbar16",
+		.port = PORT_MCHBAR_16,
+		.stride = 2,
+	},
+	{
+		.name = "mchbar8",
+		.port = PORT_MCHBAR_8,
+		.stride = 1,
+	},
+	{
+		.name = "mmio-ar",
+		.port = PORT_MMIO_VGA_AR,
+		.stride = 1,
+	},
+	{
+		.name = "mmio-sr",
+		.port = PORT_MMIO_VGA_SR,
+		.stride = 1,
+	},
+	{
+		.name = "mmio-gr",
+		.port = PORT_MMIO_VGA_GR,
+		.stride = 1,
+	},
+	{
+		.name = "mmio-cr",
+		.port = PORT_MMIO_VGA_CR,
+		.stride = 1,
+	},
+	{
+		.name = "portio",
+		.port = PORT_PORTIO,
+		.stride = 1,
+	},
+	{
+		.name = "portio-ar",
+		.port = PORT_PORTIO_VGA_AR,
+		.stride = 1,
+	},
+	{
+		.name = "portio-sr",
+		.port = PORT_PORTIO_VGA_SR,
+		.stride = 1,
+	},
+	{
+		.name = "portio-gr",
+		.port = PORT_PORTIO_VGA_GR,
+		.stride = 1,
+	},
+	{
+		.name = "portio-cr",
+		.port = PORT_PORTIO_VGA_CR,
 		.stride = 1,
 	},
 	{
@@ -116,7 +176,7 @@ int parse_port_desc(struct reg *reg, const char *s)
 		if (endp > s && *endp == 0) {
 			if (n > PORT_MAX) {
 				/* Not a sideband port, assume MMIO offset. */
-				port = PORT_MMIO;
+				port = PORT_MMIO_32;
 				reg->mmio_offset = n;
 			} else {
 				port = n;
@@ -127,7 +187,7 @@ int parse_port_desc(struct reg *reg, const char *s)
 		}
 	} else {
 		/* No port, default to searching for MMIO. */
-		port = PORT_MMIO;
+		port = PORT_MMIO_32;
 		reg->mmio_offset = 0;
 	}
 
@@ -233,9 +293,9 @@ static int parse_line(struct reg *reg, const char *line)
 			reg->name = p;
 		} else if (i == 2) {
 			reg->addr = strtoul(p, &e, 16);
-			free(p);
 			if (*e)
 				ret = -1;
+			free(p);
 		} else if (i == 3) {
 			ret = parse_port_desc(reg, p);
 			free(p);

@@ -599,22 +599,20 @@ static void show_gpu_freq(struct overlay_context *ctx, struct overlay_gpu_freq *
 	}
 
 	if (has_freq) {
-		if (gf->gpu_freq.current)
-			chart_add_sample(&gf->current, gf->gpu_freq.current);
-		if (gf->gpu_freq.request)
-			chart_add_sample(&gf->request, gf->gpu_freq.request);
+		chart_add_sample(&gf->current, gf->gpu_freq.current);
+		chart_add_sample(&gf->request, gf->gpu_freq.request);
 
 		chart_draw(&gf->request, ctx->cr);
 		chart_draw(&gf->current, ctx->cr);
 	}
 
 	if (has_power) {
-		chart_add_sample(&gf->power_chart, gf->power.power_mW);
-		if (gf->power.new_sample) {
-			if (gf->power.power_mW > gf->power_max)
-				gf->power_max = gf->power.power_mW;
+		chart_add_sample(&gf->power_chart, gf->power.gpu.power_mW);
+		if (gf->power.gpu.new_sample) {
+			if (gf->power.gpu.power_mW > gf->power_max)
+				gf->power_max = gf->power.gpu.power_mW;
 			chart_set_range(&gf->power_chart, 0, gf->power_max);
-			gf->power.new_sample = 0;
+			gf->power.gpu.new_sample = 0;
 		}
 		chart_draw(&gf->power_chart, ctx->cr);
 	}
@@ -648,8 +646,8 @@ static void show_gpu_freq(struct overlay_context *ctx, struct overlay_gpu_freq *
 
 		len = sprintf(buf, "Frequency: %dMHz", gf->gpu_freq.current);
 		if (gf->gpu_freq.request)
-		cairo_set_source_rgba(ctx->cr, 1, 1, 1, 1);
 			sprintf(buf + len, " (requested %dMHz)", gf->gpu_freq.request);
+		cairo_set_source_rgba(ctx->cr, 1, 1, 1, 1);
 		cairo_move_to(ctx->cr, PAD, y);
 		cairo_show_text(ctx->cr, buf);
 		y += 12;
@@ -700,8 +698,14 @@ static void show_gpu_freq(struct overlay_context *ctx, struct overlay_gpu_freq *
 	}
 
 	if (has_power) {
-		sprintf(buf, "Power: %llumW", (long long unsigned)gf->power.power_mW);
 		cairo_set_source_rgba(ctx->cr, 1, 1, 1, 1);
+
+		sprintf(buf, "Power: %llumW", (long long unsigned)gf->power.gpu.power_mW);
+		cairo_move_to(ctx->cr, PAD, y);
+		cairo_show_text(ctx->cr, buf);
+		y += 14;
+
+		sprintf(buf, "Package: %llumW", (long long unsigned)gf->power.pkg.power_mW);
 		cairo_move_to(ctx->cr, PAD, y);
 		cairo_show_text(ctx->cr, buf);
 		y += 14;

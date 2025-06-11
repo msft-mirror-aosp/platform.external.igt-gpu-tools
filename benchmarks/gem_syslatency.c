@@ -42,9 +42,17 @@
 #include <limits.h>
 #include "drm.h"
 
+#ifdef __linux__
 #include <linux/unistd.h>
+#endif
 
-#define sigev_notify_thread_id _sigev_un._tid
+#include "i915/gem_create.h"
+#include "i915/gem_ring.h"
+#include "igt_aux.h"
+
+#ifdef __FreeBSD__
+#include "igt_freebsd.h"
+#endif
 
 static volatile int done;
 
@@ -71,24 +79,7 @@ static void force_low_latency(void)
 			strerror(errno));
 }
 
-#define LOCAL_I915_EXEC_NO_RELOC (1<<11)
-#define LOCAL_I915_EXEC_HANDLE_LUT (1<<12)
-
-#define LOCAL_I915_EXEC_BSD_SHIFT      (13)
-#define LOCAL_I915_EXEC_BSD_MASK       (3 << LOCAL_I915_EXEC_BSD_SHIFT)
-
-#define ENGINE_FLAGS  (I915_EXEC_RING_MASK | LOCAL_I915_EXEC_BSD_MASK)
-
-static bool ignore_engine(int fd, unsigned engine)
-{
-	if (engine == 0)
-		return true;
-
-	if (gem_has_bsd2(fd) && engine == I915_EXEC_BSD)
-		return true;
-
-	return false;
-}
+#define ENGINE_FLAGS  (I915_EXEC_RING_MASK | I915_EXEC_BSD_MASK)
 
 static void *gem_busyspin(void *arg)
 {
@@ -100,14 +91,13 @@ static void *gem_busyspin(void *arg)
 		bs->sz ? bs->sz + sizeof(bbe) : bs->leak ? 16 << 20 : 4 << 10;
 	unsigned engines[16];
 	unsigned nengine;
-	unsigned engine;
 	int fd;
 
 	fd = drm_open_driver(DRIVER_INTEL);
 
 	nengine = 0;
-	for_each_engine(fd, engine)
-		if (!ignore_engine(fd, engine)) engines[nengine++] = engine;
+	for_each_physical_ring(e, fd)
+		engines[nengine++] = eb_ring(e);
 
 	memset(obj, 0, sizeof(obj));
 	obj[0].handle = gem_create(fd, 4096);
@@ -123,8 +113,8 @@ static void *gem_busyspin(void *arg)
 		execbuf.buffers_ptr = (uintptr_t)&obj[1];
 		execbuf.buffer_count = 1;
 	}
-	execbuf.flags |= LOCAL_I915_EXEC_HANDLE_LUT;
-	execbuf.flags |= LOCAL_I915_EXEC_NO_RELOC;
+	execbuf.flags |= I915_EXEC_HANDLE_LUT;
+	execbuf.flags |= I915_EXEC_NO_RELOC;
 	if (__gem_execbuf(fd, &execbuf)) {
 		execbuf.flags = 0;
 		gem_execbuf(fd, &execbuf);
@@ -343,7 +333,7 @@ static unsigned long calibrate_nop(unsigned int target_us,
 		sz = loops * sz / elapsed(&t_start, &t_end) * 1e3 * target_us;
 		sz = ALIGN(sz, sizeof(uint32_t));
 	} while (elapsed(&t_0, &t_end) < 5 ||
-		 abs(sz - prev) > (sz * tolerance_pct / 100));
+		 labs(sz - prev) > (sz * tolerance_pct / 100));
 
 	close(fd);
 

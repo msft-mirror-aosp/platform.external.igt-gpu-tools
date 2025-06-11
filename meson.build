@@ -1,5 +1,5 @@
 project('igt-gpu-tools', 'c',
-	version : '1.24',
+	version : '2.0',
         default_options: [
           'warning_level=2',
           'c_std=gnu11',
@@ -7,11 +7,15 @@ project('igt-gpu-tools', 'c',
           'buildtype=debugoptimized',
         ],
 	license : 'MIT',
-	meson_version : '>=0.47.0')
+	meson_version : '>=0.47.2')
 
 if get_option('b_ndebug') != 'false'
 	error('Building without -Db_ndebug=false is not supported')
 endif
+
+# meson.source_root is marked as a future-deprecated feature
+source_root = meson.current_source_dir()
+build_root = meson.current_build_dir()
 
 cc = meson.get_compiler('c')
 
@@ -44,6 +48,7 @@ cc_args = [
 	'-Wno-maybe-uninitialized',
 	'-Wno-missing-field-initializers',
 	'-Wno-pointer-arith',
+	'-Wno-address-of-packed-member',
 	'-Wno-sign-compare',
 # Macros asserting on the range of their arguments triggers this.
 	'-Wno-type-limits',
@@ -52,8 +57,10 @@ cc_args = [
 
 	'-Werror=address',
 	'-Werror=array-bounds',
+	'-Werror=dangling-pointer',
 	'-Werror=implicit',
 	'-Werror=init-self',
+	'-Werror=int-conversion',
 	'-Werror=int-to-pointer-cast',
 	'-Werror=main',
 	'-Werror=missing-braces',
@@ -69,6 +76,8 @@ cc_args = [
 # well with longjmp which is heavily used by IGT framework.
 	'-fno-builtin-malloc',
 	'-fno-builtin-calloc',
+# Required to use off64_t and ino64_t on musl libc
+	'-D_LARGEFILE64_SOURCE=1',
 ]
 
 foreach cc_arg : cc_args
@@ -80,11 +89,16 @@ endforeach
 build_chamelium = get_option('chamelium')
 build_docs = get_option('docs')
 build_tests = not get_option('tests').disabled()
+build_xe = not get_option('xe_driver').disabled()
+build_xe_eudebug = get_option('xe_eudebug').enabled()
+build_vmtb = get_option('vmtb').enabled()
 with_libdrm = get_option('libdrm_drivers')
 
 build_info = ['Build type: ' + get_option('buildtype')]
+build_info += 'Build Xe EU debugger test framework: @0@'.format(build_xe_eudebug)
+build_info += 'Build VM Test Bench: @0@'.format(build_vmtb)
 
-inc = include_directories('include/drm-uapi', 'lib', 'lib/stubs/syscalls', '.')
+inc = include_directories('include', 'include/drm-uapi', 'include/drm-uapi-experimental', 'include/linux-uapi', 'lib', 'lib/stubs/syscalls', '.')
 
 inc_for_gtkdoc = include_directories('lib')
 
@@ -106,6 +120,9 @@ endif
 if with_libdrm.contains('auto') or with_libdrm.contains('nouveau')
 	libdrm_nouveau = dependency('libdrm_nouveau', version : libdrm_version, required : with_libdrm.contains('nouveau'))
 	libdrm_info += 'nouveau'
+	if libdrm_nouveau.found()
+		config.set('HAVE_LIBDRM_NOUVEAU', 1)
+	endif
 endif
 if with_libdrm.contains('auto') or with_libdrm.contains('amdgpu')
 	libdrm_amdgpu = dependency('libdrm_amdgpu', version : libdrm_version, required : with_libdrm.contains('amdgpu'))
@@ -116,9 +133,23 @@ build_info += 'With libdrm: ' + ','.join(libdrm_info)
 
 pciaccess = dependency('pciaccess', version : '>=0.10')
 libkmod = dependency('libkmod')
-libprocps = dependency('libprocps', required : true)
+libprocps = dependency('libprocps', required : false)
+libproc2 = dependency('libproc2', required : false)
+if libprocps.found()
+  config.set('HAVE_LIBPROCPS', 1)
+elif libproc2.found()
+  config.set('HAVE_LIBPROC2', 1)
+  if libproc2.version().version_compare('>= 4.0.5')
+    config.set('HAVE_LIBPROC2_POST_4_0_5_API', 1)
+  endif
+else
+  error('Either libprocps or libproc2 is required')
+endif
 
 libunwind = dependency('libunwind', required : get_option('libunwind'))
+if libunwind.found()
+	config.set('HAVE_LIBUNWIND', 1)
+endif
 build_info += 'With libunwind: @0@'.format(libunwind.found())
 
 libdw = dependency('libdw', required : true)
@@ -203,11 +234,19 @@ endif
 if cc.has_header('libgen.h')
 	config.set('HAVE_LIBGEN_H', 1)
 endif
-if cc.has_header('sys/io.h')
+if cc.has_header('sys/io.h') and cc.has_function('outb', prefix: '#include <sys/io.h>')
 	config.set('HAVE_SYS_IO_H', 1)
 endif
-if cc.has_header('cpuid.h')
-	# FIXME: Do we need the example link test from configure.ac?
+if cc.links('''
+#include <cpuid.h>
+#include <stddef.h>
+
+int main(void) {
+  int eax, ebx, ecx, edx;
+  if (__get_cpuid_max(0, NULL) < 4)
+    return 0;
+  __cpuid_count(4, 0, eax, ebx, ecx, edx);
+}''', name : 'cpuid.h')
 	config.set('HAVE_CPUID_H', 1)
 endif
 if cc.has_header_symbol('unistd.h', 'gettid', args : '-D_GNU_SOURCE')
@@ -238,7 +277,7 @@ config.set_quoted('PACKAGE', meson.project_name())
 config.set('PACKAGE_STRING', meson.project_name() + ' ' + meson.project_version())
 config.set_quoted('TARGET_CPU_PLATFORM', host_machine.cpu_family())
 
-configure_file(output: 'config.h', install: false, configuration: config)
+configure_file(output: 'config.h', configuration: config)
 
 prefix = get_option('prefix')
 bindir = get_option('bindir')
@@ -247,8 +286,14 @@ includedir = get_option('includedir')
 libdir = get_option('libdir')
 libexecdir = join_paths(get_option('libexecdir'), 'igt-gpu-tools')
 amdgpudir = join_paths(libexecdir, 'amdgpu')
+msmdir = join_paths(libexecdir, 'msm')
+panfrostdir = join_paths(libexecdir, 'panfrost')
+v3ddir = join_paths(libexecdir, 'v3d')
+vc4dir = join_paths(libexecdir, 'vc4')
+vmwgfxdir = join_paths(libexecdir, 'vmwgfx')
 mandir = get_option('mandir')
 pkgconfigdir = join_paths(libdir, 'pkgconfig')
+python3 = find_program('python3', required : true)
 
 if get_option('use_rpath')
 	# Set up runpath for the test executables towards libigt.so.
@@ -281,15 +326,57 @@ if get_option('use_rpath')
 		amdgpudir_rpathdir = join_paths(amdgpudir_rpathdir, '..')
 	endforeach
 	amdgpudir_rpathdir = join_paths(amdgpudir_rpathdir, libdir)
+
+	msm_rpathdir = '$ORIGIN'
+	foreach p : msmdir.split('/')
+		msm_rpathdir = join_paths(msm_rpathdir, '..')
+	endforeach
+	msm_rpathdir = join_paths(msm_rpathdir, libdir)
+
+	panfrost_rpathdir = '$ORIGIN'
+	foreach p : panfrostdir.split('/')
+		panfrost_rpathdir = join_paths(panfrost_rpathdir, '..')
+	endforeach
+	panfrost_rpathdir = join_paths(panfrost_rpathdir, libdir)
+
+	v3d_rpathdir = '$ORIGIN'
+	foreach p : v3ddir.split('/')
+		v3d_rpathdir = join_paths(v3d_rpathdir, '..')
+	endforeach
+	v3d_rpathdir = join_paths(v3d_rpathdir, libdir)
+
+	vc4_rpathdir = '$ORIGIN'
+	foreach p : vc4dir.split('/')
+		vc4_rpathdir = join_paths(vc4_rpathdir, '..')
+	endforeach
+	vc4_rpathdir = join_paths(vc4_rpathdir, libdir)
+
+	vmwgfx_rpathdir = '$ORIGIN'
+	foreach p : vmwgfxdir.split('/')
+		vmwgfx_rpathdir = join_paths(vmwgfx_rpathdir, '..')
+	endforeach
+	vmwgfx_rpathdir = join_paths(vmwgfx_rpathdir, libdir)
 else
 	bindir_rpathdir = ''
 	libexecdir_rpathdir = ''
 	amdgpudir_rpathdir = ''
+	msm_rpathdir = ''
+	panfrost_rpathdir = ''
+	v3d_rpathdir = ''
+	vc4_rpathdir = ''
+	vmwgfx_rpathdir = ''
 endif
+
+build_testplan = get_option('testplan')
+build_sphinx = get_option('sphinx')
+
+subdir('scripts')
 
 subdir('lib')
 if build_tests
 	subdir('tests')
+else
+	xe_test_config = ''
 endif
 build_info += 'Build tests: @0@'.format(build_tests)
 
@@ -301,15 +388,7 @@ if libdrm_intel.found()
 endif
 subdir('overlay')
 subdir('man')
-
-gtk_doc = dependency('gtk-doc', required : build_docs)
-python3 = find_program('python3', required : build_docs)
-if build_tests and gtk_doc.found() and python3.found()
-	subdir('docs')
-elif build_docs.enabled()
-	error('Documentation requires building tests')
-endif
-build_info += 'Build documentation: @0@'.format(build_tests and gtk_doc.found())
+subdir('docs')
 
 message('Build options')
 message('=============')

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 #
 # Copyright © 2014 Intel Corporation
 #
@@ -27,17 +27,42 @@ ROOT="`readlink -f $ROOT/..`"
 IGT_CONFIG_PATH="`readlink -f ${IGT_CONFIG_PATH:-$HOME/.igtrc}`"
 RESULTS="$ROOT/results"
 PIGLIT=`which piglit 2> /dev/null`
+IGT_RUNNER=
+IGT_RESUME=
+IGT_KERNEL_TREE=
+COV_ARGS=
+COV_PER_TEST=
+LCOV_CMD="lcov"
+KERNEL_TREE=
+USE_PIGLIT=0
+RUNNER=
+RESUME=
+PRUNE_MODE="keep-dynamic"
+
+find_file() # basename <possible paths>
+{
+	base=$1
+	shift
+
+	while [ -n "$1" ]; do
+		if [ -f "$1/$base" ]; then
+			echo "$1/$base";
+			return 0
+		fi
+		shift
+	done
+
+	return 1
+}
 
 if [ -z "$IGT_TEST_ROOT" ]; then
-	paths=("$ROOT/build/tests/test-list.txt"
-	       "$ROOT/tests/test-list.txt")
-	for p in "${paths[@]}"; do
-		if [ -f "$p" ]; then
-			echo "Found test list: \"$p\""
-			IGT_TEST_ROOT=$(dirname "$p")
-			break
-		fi
-	done
+	p=$(find_file test-list.txt \
+		    "$ROOT/build/tests" \
+		    "$ROOT/tests" )
+	if [ -f "$p" ]; then
+		echo "Found test list: \"$p\"" >&2
+		IGT_TEST_ROOT=$(dirname "$p")
+	fi
 fi
 
 if [ -z "$IGT_TEST_ROOT" ]; then
@@ -48,30 +73,72 @@ fi
 
 IGT_TEST_ROOT="`readlink -f ${IGT_TEST_ROOT}`"
 
-function download_piglit {
+find_runner_binary() # basename
+{
+	base=$1
+	shift
+
+	binary=$(find_file "$base" "$ROOT/build/runner" "$ROOT/runner")
+	if [ -x "$binary" ]; then
+		echo "$binary"
+		return 0
+	elif binary=$(which "$base"); then
+		echo "$binary"
+		return 0
+	fi
+
+	return 1
+}
+
+find_lcov_binary() # basename
+{
+	if command -v $LCOV_CMD > /dev/null 2>&1; then
+		return 0
+	fi
+
+	return 1
+}
+
+download_piglit() {
 	git clone https://anongit.freedesktop.org/git/piglit.git "$ROOT/piglit"
 }
 
-function run_piglit # as-root <args>
+execute_runner() # as-root <runner> <args>
 {
-	local need_root=$1
+	need_root=$1
 	shift
-	local sudo
+	runner=$1
+	shift
 
-	export IGT_TEST_ROOT IGT_CONFIG_PATH
+	export IGT_TEST_ROOT IGT_CONFIG_PATH IGT_KERNEL_TREE
 
-	if [ "$need_root" -ne 0 -a "$EUID" -ne 0 ]; then
-		sudo="sudo --preserve-env=IGT_TEST_ROOT,IGT_CONFIG_PATH"
+	if [ "$need_root" -ne 0 -a "$(id -u)" -ne 0 ]; then
+		if command -v sudo > /dev/null 2>&1; then
+			sudo="sudo --preserve-env=IGT_TEST_ROOT,IGT_CONFIG_PATH,IGT_KERNEL_TREE"
+		else
+			echo "$0: Could not start runner: Permission denied."
+			exit 1
+		fi
 	fi
 
-	$sudo $PIGLIT "$@"
+	$sudo $runner "$@"
 }
 
-function print_help {
+print_help() {
 	echo "Usage: run-tests.sh [options]"
 	echo "Available options:"
+	echo "  -c <capture_script>"
+	echo "                  capture gcov code coverage using the <capture_script>."
+	echo "  -P              store code coverage results per each test. Should be"
+	echo "                  used together with -k option"
 	echo "  -d              download Piglit to $ROOT/piglit"
+	echo "  -f              enable igt_facts on igt_runner"
 	echo "  -h              display this help message"
+	echo "  -k <kernel_dir> Linux Kernel source code directory used to generate code"
+	echo "                  coverage builds."
+	echo "  -K <mode>       Linux Kernel kmemleak reports"
+	echo "                   - once: run a kmemleak scan after all tests"
+	echo "                   - each: run a kmemleak scan after each test"
 	echo "  -l              list all available tests"
 	echo "  -r <directory>  store the results in directory"
 	echo "                  (default: $RESULTS)"
@@ -79,31 +146,45 @@ function print_help {
 	echo "  -t <regex>      only include tests that match the regular expression"
 	echo "                  (can be used more than once)"
 	echo "  -T <filename>   run tests listed in testlist"
-	echo "                  (overrides -t and -x)"
+	echo "                  (overrides -t and -x when running with piglit)"
 	echo "  -v              enable verbose mode"
 	echo "  -x <regex>      exclude tests that match the regular expression"
 	echo "                  (can be used more than once)"
+	echo "  -b              blacklist file to use for filtering"
+	echo "                  (can be used more than once)"
+	echo "                  (not supported by Piglit)"
 	echo "  -R              resume interrupted test where the partial results"
 	echo "                  are in the directory given by -r"
 	echo "  -n              do not retry incomplete tests when resuming a"
 	echo "                  test run with -R"
+	echo "                  (only valid for Piglit)"
+	echo "  -p              use Piglit instead of igt_runner"
+	echo "  -m              run test runner with prune mode(default: $PRUNE_MODE)"
 	echo ""
 	echo "Useful patterns for test filtering are described in the API documentation."
 }
 
-while getopts ":dhlr:st:T:vx:Rn" opt; do
+while getopts ":c:dfhk:K:lPr:st:T:vx:Rnpb:m:" opt; do
 	case $opt in
+		c) COV_ARGS="$COV_ARGS --collect-code-cov --collect-script $OPTARG " ;;
 		d) download_piglit; exit ;;
+		f) IGT_FACTS="-f" ;;
 		h) print_help; exit ;;
+		k) IGT_KERNEL_TREE="$OPTARG" ;;
+		K) KMEMLEAK="--kmemleak=$OPTARG" ;;
 		l) LIST_TESTS="true" ;;
+		P) COV_ARGS="$COV_ARGS --coverage-per-test"; COV_PER_TEST=1 ;;
 		r) RESULTS="$OPTARG" ;;
 		s) SUMMARY="html" ;;
 		t) FILTER="$FILTER -t $OPTARG" ;;
 		T) FILTER="$FILTER --test-list $OPTARG" ;;
-		v) VERBOSE="-v" ;;
-		x) EXCLUDE="$EXCLUDE -x $OPTARG" ;;
-		R) RESUME="true" ;;
+		v) VERBOSE="-l verbose" ;;
+		x) FILTER="$FILTER -x $OPTARG" ;;
+		R) RESUME_RUN="true" ;;
 		n) NORETRY="--no-retry" ;;
+		p) USE_PIGLIT=1 ;;
+		b) FILTER="$FILTER -b $OPTARG" ;;
+		m) PRUNE_MODE="$OPTARG" ;;
 		:)
 			echo "Option -$OPTARG requires an argument."
 			exit 1
@@ -123,29 +204,74 @@ if [ "x$1" != "x" ]; then
 	exit 1
 fi
 
-if [ "x$PIGLIT" == "x" ]; then
+if [ "x$PIGLIT" = "x" ]; then
 	PIGLIT="$ROOT/piglit/piglit"
 fi
 
-if [ ! -x "$PIGLIT" ]; then
-	echo "Could not find Piglit."
-	echo "Please install Piglit or use -d to download Piglit locally."
-	exit 1
+if [ "x$COV_ARGS" != "x" ]; then
+	if [ "$USE_PIGLIT" -eq "1" ]; then
+		echo "Cannot collect code coverage when running tests with Piglit. Use igt_runner instead."
+		exit 1
+	fi
+
+	if ! $(find_lcov_binary); then
+		echo "Can't check code coverage, as 'lcov' is not installed"
+		exit 1
+	fi
+fi
+
+RUN_ARGS=
+RESUME_ARGS=
+LIST_ARGS=
+if [ "$USE_PIGLIT" -eq "1" ]; then
+	if [ ! -x "$PIGLIT" ]; then
+		echo "Could not find Piglit."
+		echo "Please install Piglit or use -d to download Piglit locally."
+		exit 1
+	fi
+
+	RUNNER=$PIGLIT
+	RESUME=$PIGLIT
+	RUN_ARGS="run igt --ignore-missing"
+	RESUME_ARGS="resume $NORETRY"
+	LIST_ARGS="print-cmd igt --format {name}"
+else
+	if ! IGT_RUNNER=$(find_runner_binary igt_runner) ||
+	   ! IGT_RESUME=$(find_runner_binary igt_resume); then
+		echo "Could not find igt_runner binaries."
+		echo "Please build the runner, or use Piglit with the -p flag."
+		exit 1
+	fi
+
+	RUNNER=$IGT_RUNNER
+	RESUME=$IGT_RESUME
+	LIST_ARGS="-L"
 fi
 
 if [ "x$LIST_TESTS" != "x" ]; then
-	run_piglit 0 print-cmd --format "{name}" igt
+	execute_runner 0 $RUNNER $LIST_ARGS $FILTER $COV_ARGS
 	exit
 fi
 
-if [ "x$RESUME" != "x" ]; then
-	run_piglit 1 resume "$RESULTS" $NORETRY
+if [ "x$RESUME_RUN" != "x" ]; then
+	if [ "x$COV_ARGS" != "x" -a "x$COV_PER_TEST" = "x" ]; then
+		echo "Can't continue collecting coverage tests. Next time, run"
+		echo "$0 with '-P' in order to generate separate code coverage results".
+		exit 1
+	fi
+	execute_runner 1 $RESUME $RESUME_ARGS $COV_ARGS "$RESULTS"
 else
 	mkdir -p "$RESULTS"
-	run_piglit 1 run igt --ignore-missing -o "$RESULTS" -s $VERBOSE $EXCLUDE $FILTER
+	execute_runner 1 $RUNNER $RUN_ARGS -o $IGT_FACTS $KMEMLEAK -s "$RESULTS" $COV_ARGS $VERBOSE $FILTER --prune-mode $PRUNE_MODE
 fi
 
-if [ "$SUMMARY" == "html" ]; then
-	run_piglit 0 summary html --overwrite "$RESULTS/html" "$RESULTS"
+if [ "$SUMMARY" = "html" ]; then
+	if [ ! -x "$PIGLIT" ]; then
+		echo "Could not find Piglit, required for HTML generation."
+		echo "Please install Piglit or use -d to download Piglit locally."
+		exit 1
+	fi
+
+	execute_runner 0 $PIGLIT summary html --overwrite "$RESULTS/html" "$RESULTS"
 	echo "HTML summary has been written to $RESULTS/html/index.html"
 fi

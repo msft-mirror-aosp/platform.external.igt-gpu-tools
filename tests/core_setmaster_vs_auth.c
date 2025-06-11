@@ -40,6 +40,19 @@
 #include <string.h>
 
 #include "igt_device.h"
+/**
+ * TEST: core setmaster vs auth
+ * Description: Check that drop/setMaster correctly transfer master state
+ * Category: Core
+ * Mega feature: General Core features
+ * Sub-category: DRM
+ * Functionality: permission management for clients
+ * Feature: core
+ * Test category: GEM_Legacy
+ *
+ * SUBTEST:
+ * Description: Check that drop/setMaster correctly transfer master state
+ */
 
 IGT_TEST_DESCRIPTION("Check that drop/setMaster correctly transfer master "
 		     "state");
@@ -66,7 +79,7 @@ igt_simple_main
 	igt_assert_neq(drmAuthMagic(master2, magic), 0);
 	igt_assert_eq(errno, EINVAL);
 
-	close(client);
-	close(master2);
-	close(master1);
+	drm_close_driver(client);
+	drm_close_driver(master2);
+	drm_close_driver(master1);
 }

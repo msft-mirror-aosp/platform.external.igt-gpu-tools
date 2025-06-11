@@ -12,42 +12,44 @@ foreach prog : tools_progs_noisnt
 endforeach
 
 tools_progs = [
+	'igt_facts',
+	'igt_power',
 	'igt_stats',
 	'intel_audio_dump',
 	'intel_backlight',
 	'intel_bios_dumper',
+	'intel_display_bandwidth',
 	'intel_display_crc',
 	'intel_display_poller',
+	'intel_dump_decode',
+	'intel_error_decode',
 	'intel_forcewaked',
 	'intel_gpu_frequency',
 	'intel_firmware_decode',
+	'intel_framebuffer_dump',
 	'intel_gpu_time',
 	'intel_gtt',
 	'intel_guc_logger',
+	'intel_hdcp',
 	'intel_infoframes',
 	'intel_lid',
 	'intel_opregion_decode',
 	'intel_panel_fitter',
+	'intel_perf_counters',
+	'intel_pm_rpm',
 	'intel_reg_checker',
 	'intel_residency',
 	'intel_stepping',
+	'intel_tiling_detect',
 	'intel_vbt_decode',
 	'intel_watermark',
 	'intel_gem_info',
 	'intel_gvtg_test',
 	'dpcd_reg',
+	'lsgpu',
 ]
 tool_deps = igt_deps
-
-if libdrm_intel.found()
-	tools_progs += [
-		'intel_dump_decode',
-		'intel_error_decode',
-		'intel_framebuffer_dump',
-		'intel_perf_counters',
-	]
-	tool_deps += zlib
-endif
+tool_deps += zlib
 
 foreach prog : tools_progs
 	executable(prog, prog + '.c',
@@ -59,13 +61,19 @@ endforeach
 if libudev.found()
 	intel_dp_compliance_src = [
 		'intel_dp_compliance.c',
-		'intel_dp_compliance_hotplug.c'
+		'igt_dp_compliance_hotplug.c',
+		'igt_compliance_utils.c'
 	]
 	executable('intel_dp_compliance', sources : intel_dp_compliance_src,
 		   dependencies : [tool_deps, libudev],
 		   install_rpath : bindir_rpathdir,
 		   install : true)
 endif
+
+executable('gputop', 'gputop.c',
+           install : true,
+           install_rpath : bindir_rpathdir,
+           dependencies : [lib_igt_drm_clients,lib_igt_drm_fdinfo,lib_igt_profiling,math])
 
 intel_l3_parity_src = [ 'intel_l3_parity.c', 'intel_l3_udev_listener.c' ]
 executable('intel_l3_parity', sources : intel_l3_parity_src,
@@ -82,29 +90,36 @@ executable('intel_reg', sources : intel_reg_src,
 	     '-DIGT_DATADIR="@0@"'.format(join_paths(prefix, datadir)),
 	   ])
 
-install_data('intel_gpu_abrt', install_dir : bindir)
+install_data(['intel_gpu_abrt', 'intel-gfx-fw-info'], install_dir : bindir)
 
-install_subdir('registers', install_dir : datadir,
-	       exclude_files : [
-		 'Makefile', 'Makefile.in', 'Makefile.am',
-	       ])
-
-shared_library('intel_aubdump', 'aubdump.c',
-	       dependencies : [ lib_igt_chipset, dlsym ],
-	       name_prefix : '',
-	       install : true,
-	       soversion : '0')
+install_subdir('registers', install_dir : datadir)
 
 executable('intel_gpu_top', 'intel_gpu_top.c',
 	   install : true,
 	   install_rpath : bindir_rpathdir,
-	   dependencies : lib_igt_perf)
+	   dependencies : [lib_igt_perf,lib_igt_device_scan,lib_igt_drm_clients,lib_igt_drm_fdinfo,math])
 
-conf_data = configuration_data()
-conf_data.set('prefix', prefix)
-conf_data.set('exec_prefix', '${prefix}')
-conf_data.set('libdir', join_paths('${prefix}', libdir))
-configure_file(input : 'intel_aubdump.in', output : 'intel_aubdump',
-               configuration : conf_data, install_dir : bindir)
+executable('amd_hdmi_compliance', 'amd_hdmi_compliance.c',
+	   dependencies : [tool_deps],
+	   install_rpath : bindir_rpathdir,
+	   install : true)
 
+if libudev.found()
+	msm_dp_compliance_src = [
+		'msm_dp_compliance.c',
+		'igt_dp_compliance_hotplug.c',
+		'igt_compliance_utils.c'
+	]
+	executable('msm_dp_compliance', sources : msm_dp_compliance_src,
+			dependencies : [tool_deps, libudev],
+			install_rpath : bindir_rpathdir,
+			install : true)
+endif
+
+if build_vmtb
+	install_subdir('vmtb', install_dir: libexecdir)
+endif
+
+subdir('i915-perf')
+subdir('xe-perf')
 subdir('null_state_gen')

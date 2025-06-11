@@ -8,24 +8,23 @@ benchmark_progs = [
 	'gem_exec_reloc',
 	'gem_exec_trace',
 	'gem_latency',
-	'gem_mmap',
 	'gem_prw',
 	'gem_set_domain',
 	'gem_syslatency',
+	'gem_userptr_benchmark',
+	'gem_wsim',
+	'intel_upload_blit_large',
+	'intel_upload_blit_large_gtt',
+	'intel_upload_blit_large_map',
+	'intel_upload_blit_small',
+	'kms_fb_stress',
 	'kms_vblank',
 	'prime_lookup',
 	'vgem_mmap',
+        'xe_blt',
+	'xe_create',
+	'xe_exec_ctx',
 ]
-
-if libdrm_intel.found()
-	benchmark_progs += [
-		'intel_upload_blit_large',
-		'intel_upload_blit_large_gtt',
-		'intel_upload_blit_large_map',
-		'intel_upload_blit_small',
-		'gem_userptr_benchmark',
-	]
-endif
 
 benchmarksdir = join_paths(libexecdir, 'benchmarks')
 
@@ -36,7 +35,10 @@ foreach prog : benchmark_progs
 		   dependencies : igt_deps)
 endforeach
 
-executable('gem_wsim', 'gem_wsim.c',
-	   install : true,
-	   install_dir : benchmarksdir,
-	   dependencies : igt_deps + [ lib_igt_perf ])
+lib_gem_exec_tracer = shared_module(
+  'gem_exec_tracer',
+  'gem_exec_tracer.c',
+  dependencies : dlsym,
+  include_directories : inc,
+  install_dir : benchmarksdir,
+  install: true)

@@ -24,13 +24,16 @@
 #ifndef IGT_GT_H
 #define IGT_GT_H
 
+#include "drm-uapi-experimental/intel_drm_local.h"
 #include "igt_debugfs.h"
 #include "igt_dummyload.h"
 #include "igt_core.h"
 
 #include "i915_drm.h"
 
-void igt_require_hang_ring(int fd, int ring);
+struct pci_device;
+
+void igt_require_hang_ring(int fd, uint32_t ctx, int ring);
 
 typedef struct igt_hang {
 	igt_spin_t *spin;
@@ -45,10 +48,15 @@ void igt_disallow_hang(int fd, igt_hang_t arg);
 #define HANG_POISON 0xc5c5c5c5
 
 igt_hang_t igt_hang_ctx(int fd, uint32_t ctx, int ring, unsigned flags);
+igt_hang_t igt_hang_ctx_with_ahnd(int fd, uint64_t ahnd, uint32_t ctx, int ring,
+				  unsigned flags);
+
 #define HANG_ALLOW_BAN 1
 #define HANG_ALLOW_CAPTURE 2
+#define HANG_WANT_ENGINE_RESET 4
 
 igt_hang_t igt_hang_ring(int fd, int ring);
+igt_hang_t igt_hang_ring_with_ahnd(int fd, int ring, uint64_t ahnd);
 void igt_post_hang_ring(int fd, igt_hang_t arg);
 
 void igt_force_gpu_reset(int fd);
@@ -57,6 +65,7 @@ void igt_fork_hang_helper(void);
 void igt_stop_hang_helper(void);
 
 int igt_open_forcewake_handle(int fd);
+int igt_open_forcewake_handle_for_pcidev(const struct pci_device *pci_dev);
 
 int igt_setup_clflush(void);
 void igt_clflush_range(void *addr, int size);
@@ -65,41 +74,20 @@ unsigned intel_detect_and_clear_missed_interrupts(int fd);
 
 #define ALL_ENGINES ~0u /* Use in interfaces to iterate all engines */
 
-extern const struct intel_execution_engine {
-	const char *name;
-	const char *full_name;
-	unsigned exec_id;
-	unsigned flags;
-} intel_execution_engines[];
-
-#define for_if(expr__) if (!(expr__)) {} else
-
-#define for_each_engine(fd__, flags__) \
-	for (const struct intel_execution_engine *e__ = intel_execution_engines;\
-	     e__->name; \
-	     e__++) \
-		for_if (gem_has_ring(fd__, flags__ = e__->exec_id | e__->flags))
-
-#define for_each_physical_engine(fd__, flags__) \
-	for (const struct intel_execution_engine *e__ = intel_execution_engines;\
-	     e__->name; \
-	     e__++) \
-		for_if (gem_ring_has_physical_engine(fd__, flags__ = e__->exec_id | e__->flags))
-
-bool gem_ring_is_physical_engine(int fd, unsigned int ring);
-bool gem_ring_has_physical_engine(int fd, unsigned int ring);
-
 bool gem_can_store_dword(int fd, unsigned int engine);
-bool gem_class_can_store_dword(int fd, int engine_class);
+bool gem_class_can_store_dword(int fd, int class);
+bool gem_store_dword_needs_secure(int fd);
 
 extern const struct intel_execution_engine2 {
-	const char *name;
-	int engine_class;
-	int instance;
+	char name[16];
+	uint16_t class;
+	uint16_t instance;
 	uint64_t flags;
 	bool is_virtual;
 } intel_execution_engines2[];
 
 int gem_execbuf_flags_to_engine_class(unsigned int flags);
+bool gem_engine_can_block_ggtt_binder(int fd,
+		const struct intel_execution_engine2 *engine);
 
 #endif /* IGT_GT_H */

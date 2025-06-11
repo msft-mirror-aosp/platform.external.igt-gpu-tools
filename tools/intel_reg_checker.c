@@ -143,6 +143,11 @@ check_gfx_mode(void)
 	check_perf_bit(gfx_mode, 13, "Flush TLB Invalidation Mode", true);
 }
 
+static unsigned intel_gt(uint16_t __devid)
+{
+	return intel_get_device_info(__devid)->gt;
+}
+
 static void
 check_gt_mode(void)
 {
@@ -342,10 +347,11 @@ check_dpfc_control_sa(void)
 int main(int argc, char** argv)
 {
 	struct pci_device *dev;
+	struct intel_mmio_data mmio_data;
 
 	dev = intel_get_pci_device();
 	devid = dev->device_id;
-	intel_mmio_use_pci_bar(dev);
+	intel_mmio_use_pci_bar(&mmio_data, dev);
 
 	if (IS_GEN7(devid))
 		gen = 7;

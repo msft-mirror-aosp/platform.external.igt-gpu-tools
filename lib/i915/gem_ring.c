@@ -21,11 +21,15 @@
  * IN THE SOFTWARE.
  */
 
-#include "gem_ring.h"
-
+#include <fcntl.h>
 #include <signal.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
+
+#include "gem.h"
+#include "gem_create.h"
+#include "gem_ring.h"
+#include "gem_submission.h"
 
 #include "intel_reg.h"
 #include "drmtest.h"
@@ -88,10 +92,15 @@ __gem_measure_ring_inflight(int fd, unsigned int engine, enum measure_ring_flags
 
 	count = 0;
 	do {
-		if (__execbuf(fd, &execbuf) == 0) {
+		int err = __execbuf(fd, &execbuf);
+
+		if (err == 0) {
 			count++;
 			continue;
 		}
+
+		if (err == -EWOULDBLOCK)
+			break;
 
 		if (last[1] == count)
 			break;
@@ -101,9 +110,7 @@ __gem_measure_ring_inflight(int fd, unsigned int engine, enum measure_ring_flags
 		last[1] = last[0];
 		last[0] = count;
 	} while (1);
-
-	igt_assert_eq(__execbuf(fd, &execbuf), -EINTR);
-	igt_assert(count > 1);
+	igt_assert(count > 2);
 
 	memset(&itv, 0, sizeof(itv));
 	setitimer(ITIMER_REAL, &itv, NULL);
@@ -119,7 +126,7 @@ __gem_measure_ring_inflight(int fd, unsigned int engine, enum measure_ring_flags
 	gem_quiescent_gpu(fd);
 
 	/* Be conservative in case we must wrap later */
-	return count - 1;
+	return count - 2;
 }
 
 /**
@@ -140,18 +147,60 @@ __gem_measure_ring_inflight(int fd, unsigned int engine, enum measure_ring_flags
 unsigned int
 gem_measure_ring_inflight(int fd, unsigned int engine, enum measure_ring_flags flags)
 {
+	unsigned int min = ~0u;
+
+	fd = drm_reopen_driver(fd);
+
+	/* When available, disable execbuf throttling */
+	fcntl(fd, F_SETFD, fcntl(fd, F_GETFD) | O_NONBLOCK);
+
 	if (engine == ALL_ENGINES) {
-		unsigned int global_min = ~0u;
+		for_each_physical_ring(e, fd) {
+			unsigned int count =
+				__gem_measure_ring_inflight(fd, eb_ring(e), flags);
 
-		for_each_physical_engine(fd, engine) {
-			unsigned int engine_min = __gem_measure_ring_inflight(fd, engine, flags);
-
-			if (engine_min < global_min)
-				global_min = engine_min;
+			if (count < min)
+				min = count;
 		}
-
-		return global_min;
+	} else {
+		min =  __gem_measure_ring_inflight(fd, engine, flags);
 	}
 
-	return __gem_measure_ring_inflight(fd, engine, flags);
+	close(fd);
+
+	return min;
 }
+
+bool gem_ring_is_physical_engine(int fd, unsigned ring)
+{
+	if (ring == I915_EXEC_DEFAULT)
+		return false;
+
+	/* BSD uses an extra flag to chose between aliasing modes */
+	if ((ring & 63) == I915_EXEC_BSD) {
+		bool explicit_bsd = ring & (3 << 13);
+		bool has_bsd2 = gem_has_bsd2(fd);
+		return explicit_bsd ? has_bsd2 : !has_bsd2;
+	}
+
+	return true;
+}
+
+bool gem_ring_has_physical_engine(int fd, unsigned ring)
+{
+	if (!gem_ring_is_physical_engine(fd, ring))
+		return false;
+
+	return gem_has_ring(fd, ring);
+}
+
+const struct intel_execution_ring intel_execution_rings[] = {
+	{ "default", NULL, 0, 0 },
+	{ "render", "rcs0", I915_EXEC_RENDER, 0 },
+	{ "bsd", "vcs0", I915_EXEC_BSD, 0 },
+	{ "bsd1", "vcs0", I915_EXEC_BSD, 1<<13 /*I915_EXEC_BSD_RING1*/ },
+	{ "bsd2", "vcs1", I915_EXEC_BSD, 2<<13 /*I915_EXEC_BSD_RING2*/ },
+	{ "blt", "bcs0", I915_EXEC_BLT, 0 },
+	{ "vebox", "vecs0", I915_EXEC_VEBOX, 0 },
+	{ NULL, 0, 0 }
+};

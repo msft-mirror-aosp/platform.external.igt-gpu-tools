@@ -25,6 +25,14 @@
  *
  */
 
+/**
+ * TEST: kms addfb basic
+ * Category: Display
+ * Description: Sanity test for ioctls DRM_IOCTL_MODE_ADDFB2 & DRM_IOCTL_MODE_RMFB.
+ * Driver requirement: i915, xe
+ * Mega feature: General Display Features
+ */
+
 #include "igt.h"
 #include <unistd.h>
 #include <stdlib.h>
@@ -40,9 +48,145 @@
 
 #include "igt_rand.h"
 #include "igt_device.h"
+#include "i915/intel_memory_region.h"
+#include "intel_common.h"
+#include "xe/xe_ioctl.h"
+#include "xe/xe_query.h"
 
-uint32_t gem_bo;
-uint32_t gem_bo_small;
+/**
+ * SUBTEST: unused-%s
+ * Description: Test that addfb2 call fails correctly for unused %arg[1]
+ *
+ * SUBTEST: unused-modifier
+ * Description: Test that addfb2 call fails correctly for unused modifier
+ *
+ * SUBTEST: clobberred-modifier
+ * Description: Check if addfb2 call works for clobbered modifier
+ * Driver requirement: i915
+ *
+ * SUBTEST: invalid-smem-bo-on-discrete
+ * Description: Check if addfb2 with a system memory gem object fails correctly
+ *              if device requires local memory framebuffers
+ *
+ * SUBTEST: legacy-format
+ * Description: Check if addfb2 call works for legacy formats
+ *
+ * arg[1]:
+ *
+ * @handle:       Handle
+ * @pitches:      Pitches
+ * @offsets:      Offsets
+ */
+
+/**
+ * SUBTEST: no-handle
+ * Description: Test that addfb2 call fails correctly without handle
+ *
+ * SUBTEST: basic
+ * Description: Check if addfb2 call works with given handle
+ *
+ * SUBTEST: bad-pitch-%i
+ * Description: bad-pitch-%arg[1]: Test that addfb2 call fails correctly for bad-pitches
+ *
+ * arg[1].values: 0, 32, 63, 128, 256, 999, 1024, 65536
+ */
+
+/**
+ * SUBTEST: basic-x-tiled-legacy
+ * Description: Check if addfb2 and rmfb call works for basic x-tiling test
+ *
+ * SUBTEST: basic-y-tiled-legacy
+ * Description: Check if addfb2 and rmfb call works for basic y-tiling test
+ * Driver requirement: i915
+ *
+ * SUBTEST: framebuffer-vs-set-tiling
+ * Description: Check if addfb2 call works for x and y tiling
+ * Driver requirement: i915
+ *
+ * SUBTEST: tile-pitch-mismatch
+ * Description: Test that addfb2 call fails correctly for pitches mismatch
+ * Driver requirement: i915
+ */
+
+/**
+ * SUBTEST: size-max
+ * Description: Check if addfb2 call works with max size of buffer object
+ *
+ * SUBTEST: too-wide
+ * Description: Test that addfb2 call fails correctly with increased width of fb
+ *
+ * SUBTEST: too-high
+ * Description: Test that addfb2 call fails correctly with increased height of fb
+ *
+ * SUBTEST: bo-too-small
+ * Description: Test that addfb2 call fails correctly with small size of buffer object
+ *
+ * SUBTEST: small-bo
+ * Description: Check if addfb2 call works for given height
+ *
+ * SUBTEST: bo-too-small-due-to-tiling
+ * Description: Test that addfb2 call fails correctly with small buffer object
+ *              after changing tile
+ */
+
+/**
+ * SUBTEST: addfb25-modifier-no-flag
+ * Description: Test that addfb2 call fails correctly for x-tiling with given modifier
+ *
+ * SUBTEST: addfb25-bad-modifier
+ * Description: Test that addfb2 call fails correctly for irrelevant modifier
+ *
+ * SUBTEST: addfb25-x-tiled-mismatch-legacy
+ * Description: Test that addfb2 call fails correctly for irrelevant x-tiling
+ * Driver requirement: i915
+ *
+ * SUBTEST: addfb25-x-tiled-legacy
+ * Description: Check if addfb2 call works for x-tiling
+ *
+ * SUBTEST: addfb25-framebuffer-vs-set-tiling
+ * Description: Check if addfb2 call works for relevant combination of tiling and fbs
+ * Driver requirement: i915
+ */
+
+/**
+ * SUBTEST: addfb25-y-tiled-%s
+ * Description: Check if addfb2 call works for y-tiling %arg[1]
+ *
+ * SUBTEST: addfb25-yf-tiled-legacy
+ * Description: Check if addfb2 call works for yf-tiling
+ *
+ * arg[1]:
+ *
+ * @legacy:               with default size
+ * @small-legacy:         with given size & modifier
+ */
+
+/**
+ * SUBTEST: addfb25-4-tiled
+ * Description: Check if addfb2 call works for tiling-4
+ *
+ * SUBTEST: invalid-%s-%s
+ * Description: Test that %arg[1] ioctl call fails correctly for %arg[2] object
+ *
+ * arg[1]:
+ *
+ * @get:           get-properties
+ * @set:           set-properties
+ *
+ * arg[2]:
+ *
+ * @prop:          fb mode
+ * @prop-any:      invalid
+ */
+
+/**
+ * SUBTEST: master-rmfb
+ * Description: Check that only master can rmfb
+ */
+
+static uint32_t gem_bo;
+static uint32_t gem_bo_small;
+static igt_display_t display;
 
 static int legacy_addfb(int fd, struct drm_mode_fb_cmd *arg)
 {
@@ -56,21 +200,15 @@ static int legacy_addfb(int fd, struct drm_mode_fb_cmd *arg)
 	return err;
 }
 
-static int rmfb(int fd, uint32_t id)
+static int addfb_expected_ret(igt_display_t *disp, struct drm_mode_fb_cmd2 *f)
 {
-	int err;
-
-	err = 0;
-	if (igt_ioctl(fd, DRM_IOCTL_MODE_RMFB, &id))
-		err = -errno;
-
-	errno = 0;
-	return err;
+	return igt_display_has_format_mod(disp, f->pixel_format,
+					  f->modifier[0]) ? 0 : -1;
 }
 
 static void invalid_tests(int fd)
 {
-	struct local_drm_mode_fb_cmd2 f = {};
+	struct drm_mode_fb_cmd2 f = {};
 
 	f.width = 512;
 	f.height = 512;
@@ -79,68 +217,93 @@ static void invalid_tests(int fd)
 
 	igt_fixture {
 		gem_bo = igt_create_bo_with_dimensions(fd, 1024, 1024,
-			DRM_FORMAT_XRGB8888, 0, 0, NULL, NULL, NULL);
+			DRM_FORMAT_XRGB8888, DRM_FORMAT_MOD_LINEAR, 0, NULL, NULL, NULL);
 		igt_assert(gem_bo);
 		gem_bo_small = igt_create_bo_with_dimensions(fd, 1024, 1023,
-			DRM_FORMAT_XRGB8888, 0, 0, NULL, NULL, NULL);
+			DRM_FORMAT_XRGB8888, DRM_FORMAT_MOD_LINEAR, 0, NULL, NULL, NULL);
 		igt_assert(gem_bo_small);
 
 		f.handles[0] = gem_bo;
 
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_ADDFB2, &f) == 0);
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id) == 0);
+		do_ioctl(fd, DRM_IOCTL_MODE_ADDFB2, &f);
+		do_ioctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id);
 		f.fb_id = 0;
 	}
 
-	f.flags = LOCAL_DRM_MODE_FB_MODIFIERS;
+	f.flags = DRM_MODE_FB_MODIFIERS;
 
+	igt_describe("Test that addfb2 call fails correctly for unused handle");
 	igt_subtest("unused-handle") {
 		igt_require_fb_modifiers(fd);
 
 		f.handles[1] = gem_bo_small;
-		igt_assert(drmIoctl(fd, LOCAL_DRM_IOCTL_MODE_ADDFB2, &f) == -1 &&
-			   errno == EINVAL);
+		do_ioctl_err(fd, DRM_IOCTL_MODE_ADDFB2, &f, EINVAL);
 		f.handles[1] = 0;
 	}
 
+	igt_describe("Test that addfb2 call fails correctly for unused pitches");
 	igt_subtest("unused-pitches") {
 		igt_require_fb_modifiers(fd);
 
 		f.pitches[1] = 512;
-		igt_assert(drmIoctl(fd, LOCAL_DRM_IOCTL_MODE_ADDFB2, &f) == -1 &&
-			   errno == EINVAL);
+		do_ioctl_err(fd, DRM_IOCTL_MODE_ADDFB2, &f, EINVAL);
 		f.pitches[1] = 0;
 	}
 
+	igt_describe("Test that addfb2 call fails correctly for unused offset");
 	igt_subtest("unused-offsets") {
 		igt_require_fb_modifiers(fd);
 
 		f.offsets[1] = 512;
-		igt_assert(drmIoctl(fd, LOCAL_DRM_IOCTL_MODE_ADDFB2, &f) == -1 &&
-			   errno == EINVAL);
+		do_ioctl_err(fd, DRM_IOCTL_MODE_ADDFB2, &f, EINVAL);
 		f.offsets[1] = 0;
 	}
 
+	igt_describe("Test that addfb2 call fails correctly for unused modifier");
 	igt_subtest("unused-modifier") {
 		igt_require_fb_modifiers(fd);
 
-		f.modifier[1] =  LOCAL_I915_FORMAT_MOD_X_TILED;
-		igt_assert(drmIoctl(fd, LOCAL_DRM_IOCTL_MODE_ADDFB2, &f) == -1 &&
-			   errno == EINVAL);
+		f.modifier[1] =  I915_FORMAT_MOD_X_TILED;
+		do_ioctl_err(fd, DRM_IOCTL_MODE_ADDFB2, &f, EINVAL);
 		f.modifier[1] = 0;
 	}
 
+	igt_describe("Check if addfb2 call works for clobbered modifier");
 	igt_subtest("clobberred-modifier") {
-		igt_require_intel(fd);
+		igt_require_i915(fd);
+		igt_require(gem_available_fences(fd) > 0);
 		f.flags = 0;
 		f.modifier[0] = 0;
 		gem_set_tiling(fd, gem_bo, I915_TILING_X, 512*4);
-		igt_assert(drmIoctl(fd, LOCAL_DRM_IOCTL_MODE_ADDFB2, &f) == 0);
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id) == 0);
+		do_ioctl(fd, DRM_IOCTL_MODE_ADDFB2, &f);
+		do_ioctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id);
 		f.fb_id = 0;
-		igt_assert(f.modifier[0] == 0);
+		igt_assert_eq(f.modifier[0], 0);
 	}
 
+	igt_describe("Check if addfb2 with a system memory gem object "
+		     "fails correctly if device requires local memory framebuffers");
+	igt_subtest("invalid-smem-bo-on-discrete") {
+		struct igt_fb fb;
+		uint32_t handle;
+
+		igt_require_intel(fd);
+		igt_init_fb(&fb, fd, f.width, f.height,
+			    DRM_FORMAT_XRGB8888, 0,
+			    IGT_COLOR_YCBCR_BT709, IGT_COLOR_YCBCR_LIMITED_RANGE);
+		igt_calc_fb_size(&fb);
+
+		igt_require(is_intel_dgfx(fd));
+		if (is_i915_device(fd))
+			handle = gem_create_in_memory_regions(fd, fb.size, REGION_SMEM);
+		else
+			handle = xe_bo_create(fd, 0, fb.size, system_memory(fd), 0);
+
+		f.handles[0] = handle;
+		do_ioctl_err(fd, DRM_IOCTL_MODE_ADDFB2, &f, EREMOTE);
+	}
+
+	igt_describe("Check if addfb2 call works for legacy formats");
 	igt_subtest("legacy-format") {
 		struct {
 			/* drm_mode_legacy_fb_format() */
@@ -176,7 +339,7 @@ static void invalid_tests(int fd)
 			igt_debug("{bpp:%d, depth:%d} -> expect:%d\n",
 				  arg.bpp, arg.depth, known_formats[i].expect);
 			if (arg.fb_id) {
-				igt_assert_eq(rmfb(fd, arg.fb_id), 0);
+				do_ioctl(fd, DRM_IOCTL_MODE_RMFB, &arg.fb_id);
 				arg.fb_id = 0;
 			}
 		}
@@ -213,11 +376,18 @@ static void invalid_tests(int fd)
 				     "Expected %d with {bpp:%d, depth:%d}, got %d instead\n",
 				     expect, arg.bpp, arg.depth, err);
 			if (arg.fb_id) {
-				igt_assert_eq(rmfb(fd, arg.fb_id), 0);
+				do_ioctl(fd, DRM_IOCTL_MODE_RMFB, &arg.fb_id);
 				arg.fb_id = 0;
 			}
 
 			count++;
+
+			/*
+			 * to avoid exessive logging stop after 10k loops
+			 */
+			if (count >= 10000) {
+				break;
+			}
 		}
 
 		/* After all the abuse, confirm the known_formats */
@@ -234,7 +404,7 @@ static void invalid_tests(int fd)
 				     arg.bpp, arg.depth,
 				     err);
 			if (arg.fb_id) {
-				igt_assert_eq(rmfb(fd, arg.fb_id), 0);
+				do_ioctl(fd, DRM_IOCTL_MODE_RMFB, &arg.fb_id);
 				arg.fb_id = 0;
 			}
 		}
@@ -262,27 +432,33 @@ static void pitch_tests(int fd)
 
 	igt_fixture {
 		gem_bo = igt_create_bo_with_dimensions(fd, 1024, 1024,
-			DRM_FORMAT_XRGB8888, 0, 0, NULL, NULL, NULL);
+			DRM_FORMAT_XRGB8888, DRM_FORMAT_MOD_LINEAR, 0, NULL, NULL, NULL);
 		igt_assert(gem_bo);
 	}
 
+	igt_describe("Test that addfb2 call fails correctly without handle");
 	igt_subtest("no-handle") {
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_ADDFB2, &f) == -1 &&
-			   errno == EINVAL);
+		do_ioctl_err(fd, DRM_IOCTL_MODE_ADDFB2, &f, EINVAL);
 	}
 
+	igt_describe("Check if addfb2 call works with given handle");
 	f.handles[0] = gem_bo;
 	igt_subtest("basic") {
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_ADDFB2, &f) == 0);
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id) == 0);
+		do_ioctl(fd, DRM_IOCTL_MODE_ADDFB2, &f);
+		do_ioctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id);
 		f.fb_id = 0;
 	}
 
+	igt_describe("Test that addfb2 call fails correctly for bad-pitches");
 	for (i = 0; i < ARRAY_SIZE(bad_pitches); i++) {
 		igt_subtest_f("bad-pitch-%i", bad_pitches[i]) {
 			f.pitches[0] = bad_pitches[i];
-			igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_ADDFB2, &f) == -1 &&
-				   errno == EINVAL);
+			igt_assert_eq(igt_ioctl(fd, DRM_IOCTL_MODE_ADDFB2, &f), -1);
+			if (is_nouveau_device(fd) && bad_pitches[i] > 4 * 1024)
+				igt_assert_eq(errno, ERANGE);
+			else
+				igt_assert_eq(errno, EINVAL);
+			errno = 0;
 		}
 	}
 
@@ -305,12 +481,12 @@ static void tiling_tests(int fd)
 		igt_fixture {
 			igt_require_intel(fd);
 			tiled_x_bo = igt_create_bo_with_dimensions(fd, 1024, 1024,
-				DRM_FORMAT_XRGB8888, LOCAL_I915_FORMAT_MOD_X_TILED,
+				DRM_FORMAT_XRGB8888, I915_FORMAT_MOD_X_TILED,
 				1024*4, NULL, NULL, NULL);
 			igt_assert(tiled_x_bo);
 
 			tiled_y_bo = igt_create_bo_with_dimensions(fd, 1024, 1024,
-				DRM_FORMAT_XRGB8888, LOCAL_I915_FORMAT_MOD_Y_TILED,
+				DRM_FORMAT_XRGB8888, I915_FORMAT_MOD_Y_TILED,
 				1024*4, NULL, NULL, NULL);
 			igt_assert(tiled_y_bo);
 
@@ -320,39 +496,51 @@ static void tiling_tests(int fd)
 		}
 
 		f.pitches[0] = 1024*4;
-		igt_subtest("basic-X-tiled") {
+		igt_describe("Check if addfb2 and rmfb call works for basic x-tiling test");
+		igt_subtest("basic-x-tiled-legacy") {
+			if (is_i915_device(fd))
+				igt_require(gem_available_fences(fd) > 0);
 			f.handles[0] = tiled_x_bo;
 
-			igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_ADDFB2, &f) == 0);
-			igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id) == 0);
+			do_ioctl(fd, DRM_IOCTL_MODE_ADDFB2, &f);
+			do_ioctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id);
 			f.fb_id = 0;
 		}
 
+		igt_describe("Check if addfb2 call works for x and y tiling");
 		igt_subtest("framebuffer-vs-set-tiling") {
+			igt_require_i915(fd);
+			igt_require(gem_available_fences(fd) > 0);
 			f.handles[0] = gem_bo;
 
 			gem_set_tiling(fd, gem_bo, I915_TILING_X, 1024*4);
-			igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_ADDFB2, &f) == 0);
-			igt_assert(__gem_set_tiling(fd, gem_bo, I915_TILING_X, 512*4) == -EBUSY);
-			igt_assert(__gem_set_tiling(fd, gem_bo, I915_TILING_Y, 1024*4) == -EBUSY);
-			igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id) == 0);
+			do_ioctl(fd, DRM_IOCTL_MODE_ADDFB2, &f);
+			igt_assert_eq(__gem_set_tiling(fd, gem_bo, I915_TILING_X, 512*4), -EBUSY);
+			igt_assert_eq(__gem_set_tiling(fd, gem_bo, I915_TILING_Y, 1024*4), -EBUSY);
+			do_ioctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id);
 			f.fb_id = 0;
 		}
 
-		f.pitches[0] = 512*4;
+		igt_describe("Test that addfb2 call fails correctly for pitches mismatch");
+			f.pitches[0] = 512*4;
 		igt_subtest("tile-pitch-mismatch") {
-			f.handles[0] = tiled_x_bo;
+			igt_require_i915(fd);
+			igt_require(gem_available_fences(fd) > 0);
 
-			igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_ADDFB2, &f) == -1 &&
-				   errno == EINVAL);
+			f.handles[0] = tiled_x_bo;
+			do_ioctl_err(fd, DRM_IOCTL_MODE_ADDFB2, &f, EINVAL);
 		}
 
+		igt_describe("Test that addfb2 call fails correctly for basic y-tiling test");
 		f.pitches[0] = 1024*4;
-		igt_subtest("basic-Y-tiled") {
+		igt_subtest("basic-y-tiled-legacy") {
+			igt_require_i915(fd);
+			igt_require(!gem_has_lmem(fd));
+			igt_require(gem_available_fences(fd) > 0);
+
 			f.handles[0] = tiled_y_bo;
 
-			igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_ADDFB2, &f) == -1 &&
-				   errno == EINVAL);
+			do_ioctl_err(fd, DRM_IOCTL_MODE_ADDFB2, &f, EINVAL);
 		}
 
 		igt_fixture {
@@ -367,6 +555,8 @@ static void size_tests(int fd)
 	struct drm_mode_fb_cmd2 f = {};
 	struct drm_mode_fb_cmd2 f_16 = {};
 	struct drm_mode_fb_cmd2 f_8 = {};
+	struct drm_mode_fb_cmd2 *framebuffers[] = {&f, &f_16, &f_8};
+	int i;
 
 	f.width = 1024;
 	f.height = 1024;
@@ -385,10 +575,10 @@ static void size_tests(int fd)
 
 	igt_fixture {
 		gem_bo = igt_create_bo_with_dimensions(fd, 1024, 1024,
-			DRM_FORMAT_XRGB8888, 0, 0, NULL, NULL, NULL);
+			DRM_FORMAT_XRGB8888, DRM_FORMAT_MOD_LINEAR, 0, NULL, NULL, NULL);
 		igt_assert(gem_bo);
 		gem_bo_small = igt_create_bo_with_dimensions(fd, 1024, 1023,
-			DRM_FORMAT_XRGB8888, 0, 0, NULL, NULL, NULL);
+			DRM_FORMAT_XRGB8888, DRM_FORMAT_MOD_LINEAR, 0, NULL, NULL, NULL);
 		igt_assert(gem_bo_small);
 	}
 
@@ -396,28 +586,29 @@ static void size_tests(int fd)
 	f_16.handles[0] = gem_bo;
 	f_8.handles[0] = gem_bo;
 
+	igt_describe("Check if addfb2 call works with max size of buffer object");
 	igt_subtest("size-max") {
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_ADDFB2, &f) == 0);
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id) == 0);
+		do_ioctl(fd, DRM_IOCTL_MODE_ADDFB2, &f);
+		do_ioctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id);
 		f.fb_id = 0;
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_ADDFB2, &f_16) == 0);
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_RMFB, &f_16.fb_id) == 0);
-		f.fb_id = 0;
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_ADDFB2, &f_8) == 0);
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_RMFB, &f_8.fb_id) == 0);
-		f.fb_id = 0;
+		do_ioctl(fd, DRM_IOCTL_MODE_ADDFB2, &f_16);
+		do_ioctl(fd, DRM_IOCTL_MODE_RMFB, &f_16.fb_id);
+		f_16.fb_id = 0;
+		if (igt_display_has_format_mod(&display, DRM_FORMAT_C8, 0)) {
+			do_ioctl(fd, DRM_IOCTL_MODE_ADDFB2, &f_8);
+			do_ioctl(fd, DRM_IOCTL_MODE_RMFB, &f_8.fb_id);
+			f_8.fb_id = 0;
+		}
 	}
 
 	f.width++;
 	f_16.width++;
 	f_8.width++;
+	igt_describe("Test that addfb2 call fails correctly with increased width of fb");
 	igt_subtest("too-wide") {
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_ADDFB2, &f) == -1 &&
-			   errno == EINVAL);
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_ADDFB2, &f_16) == -1 &&
-			   errno == EINVAL);
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_ADDFB2, &f_8) == -1 &&
-			   errno == EINVAL);
+		do_ioctl_err(fd, DRM_IOCTL_MODE_ADDFB2, &f, EINVAL);
+		do_ioctl_err(fd, DRM_IOCTL_MODE_ADDFB2, &f_16, EINVAL);
+		do_ioctl_err(fd, DRM_IOCTL_MODE_ADDFB2, &f_8, EINVAL);
 	}
 	f.width--;
 	f_16.width--;
@@ -425,34 +616,46 @@ static void size_tests(int fd)
 	f.height++;
 	f_16.height++;
 	f_8.height++;
+	igt_describe("Test that addfb2 call fails correctly with increased height of fb");
 	igt_subtest("too-high") {
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_ADDFB2, &f) == -1 &&
-			   errno == EINVAL);
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_ADDFB2, &f_16) == -1 &&
-			   errno == EINVAL);
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_ADDFB2, &f_8) == -1 &&
-			   errno == EINVAL);
+		for (i = 0; i < ARRAY_SIZE(framebuffers); i++) {
+			igt_debug("Checking framebuffer %i\n", i);
+			igt_assert_eq(igt_ioctl(fd, DRM_IOCTL_MODE_ADDFB2, framebuffers[i]), -1);
+			if (is_nouveau_device(fd))
+				igt_assert_eq(errno, ERANGE);
+			else
+				igt_assert_eq(errno, EINVAL);
+			errno = 0;
+		}
 	}
 
+	igt_describe("Test that addfb2 call fails correctly with small size of buffer object");
 	f.handles[0] = gem_bo_small;
 	igt_subtest("bo-too-small") {
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_ADDFB2, &f) == -1 &&
-			   errno == EINVAL);
+		igt_assert_eq(igt_ioctl(fd, DRM_IOCTL_MODE_ADDFB2, &f), -1);
+		igt_assert(errno != 0);
+		if (is_nouveau_device(fd))
+			igt_assert_eq(errno, ERANGE);
+		else
+			igt_assert_eq(errno, EINVAL);
+		errno = 0;
 	}
 
 	/* Just to check that the parameters would work. */
+	igt_describe("Check if addfb2 call works for given height");
 	f.height = 1020;
 	igt_subtest("small-bo") {
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_ADDFB2, &f) == 0);
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id) == 0);
+		do_ioctl(fd, DRM_IOCTL_MODE_ADDFB2, &f);
+		do_ioctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id);
 		f.fb_id = 0;
 	}
 
+	igt_describe("Test that addfb2 call fails correctly with small buffer object after changing tile");
 	igt_subtest("bo-too-small-due-to-tiling") {
-		igt_require_intel(fd);
+		igt_require_i915(fd);
+		igt_require(gem_available_fences(fd) > 0);
 		gem_set_tiling(fd, gem_bo_small, I915_TILING_X, 1024*4);
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_ADDFB2, &f) == -1 &&
-			   errno == EINVAL);
+		do_ioctl_err(fd, DRM_IOCTL_MODE_ADDFB2, &f, EINVAL);
 	}
 
 
@@ -464,11 +667,11 @@ static void size_tests(int fd)
 
 static void addfb25_tests(int fd)
 {
-	struct local_drm_mode_fb_cmd2 f = {};
+	struct drm_mode_fb_cmd2 f = {};
 
 	igt_fixture {
 		gem_bo = igt_create_bo_with_dimensions(fd, 1024, 1024,
-			DRM_FORMAT_XRGB8888, 0, 0, NULL, NULL, NULL);
+			DRM_FORMAT_XRGB8888, DRM_FORMAT_MOD_LINEAR, 0, NULL, NULL, NULL);
 		igt_assert(gem_bo);
 
 		memset(&f, 0, sizeof(f));
@@ -477,88 +680,83 @@ static void addfb25_tests(int fd)
 		f.height = 1024;
 		f.pixel_format = DRM_FORMAT_XRGB8888;
 		f.pitches[0] = 1024*4;
-		f.modifier[0] = LOCAL_DRM_FORMAT_MOD_NONE;
+		f.modifier[0] = DRM_FORMAT_MOD_LINEAR;
 
 		f.handles[0] = gem_bo;
 	}
 
+	igt_describe("Test that addfb2 call fails correctly for x-tiling with given modifier");
 	igt_subtest("addfb25-modifier-no-flag") {
 		igt_require_fb_modifiers(fd);
 
-		f.modifier[0] = LOCAL_I915_FORMAT_MOD_X_TILED;
-		igt_assert(drmIoctl(fd, LOCAL_DRM_IOCTL_MODE_ADDFB2, &f) < 0 && errno == EINVAL);
+		f.modifier[0] = I915_FORMAT_MOD_X_TILED;
+		do_ioctl_err(fd, DRM_IOCTL_MODE_ADDFB2, &f, EINVAL);
 	}
 
 	igt_fixture
-		f.flags = LOCAL_DRM_MODE_FB_MODIFIERS;
+		f.flags = DRM_MODE_FB_MODIFIERS;
 
-	// TODO: b/254808989
-	/*
+	igt_describe("Test that addfb2 call fails correctly for irrelevant modifier");
 	igt_subtest("addfb25-bad-modifier") {
 		igt_require_fb_modifiers(fd);
 
-		f.modifier[0] = ~0;
-		igt_assert(drmIoctl(fd, LOCAL_DRM_IOCTL_MODE_ADDFB2, &f) < 0 && errno == EINVAL);
+		f.modifier[0] = DRM_FORMAT_MOD_INVALID;
+		do_ioctl_err(fd, DRM_IOCTL_MODE_ADDFB2, &f, EINVAL);
 	}
-	*/
 
 	igt_subtest_group {
 		igt_fixture {
 			igt_require_intel(fd);
-			gem_set_tiling(fd, gem_bo, I915_TILING_X, 1024*4);
+			if (is_i915_device(fd)) {
+				igt_require(gem_available_fences(fd) > 0);
+				gem_set_tiling(fd, gem_bo, I915_TILING_X, 1024*4);
+			}
 			igt_require_fb_modifiers(fd);
 		}
 
-		igt_subtest("addfb25-X-tiled-mismatch") {
-			f.modifier[0] = LOCAL_DRM_FORMAT_MOD_NONE;
-			igt_assert(drmIoctl(fd, LOCAL_DRM_IOCTL_MODE_ADDFB2, &f) < 0 && errno == EINVAL);
+		igt_describe("Test that addfb2 call fails correctly for irrelevant x-tiling");
+		igt_subtest("addfb25-x-tiled-mismatch-legacy") {
+			igt_require_i915(fd);
+			f.modifier[0] = DRM_FORMAT_MOD_LINEAR;
+			do_ioctl_err(fd, DRM_IOCTL_MODE_ADDFB2, &f, EINVAL);
 		}
 
-		igt_subtest("addfb25-X-tiled") {
-			f.modifier[0] = LOCAL_I915_FORMAT_MOD_X_TILED;
-			igt_assert(drmIoctl(fd, LOCAL_DRM_IOCTL_MODE_ADDFB2, &f) == 0);
-			igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id) == 0);
+		igt_describe("Check if addfb2 call works for x-tiling");
+		igt_subtest("addfb25-x-tiled-legacy") {
+			f.modifier[0] = I915_FORMAT_MOD_X_TILED;
+			igt_assert_eq(drmIoctl(fd, DRM_IOCTL_MODE_ADDFB2, &f),
+				      addfb_expected_ret(&display, &f));
+			if (!addfb_expected_ret(&display, &f))
+				do_ioctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id);
 			f.fb_id = 0;
 		}
 
+		igt_describe("Check if addfb2 call works for relevant combination of tiling and fbs");
 		igt_subtest("addfb25-framebuffer-vs-set-tiling") {
-			f.modifier[0] = LOCAL_I915_FORMAT_MOD_X_TILED;
-			igt_assert(drmIoctl(fd, LOCAL_DRM_IOCTL_MODE_ADDFB2, &f) == 0);
-			igt_assert(__gem_set_tiling(fd, gem_bo, I915_TILING_X, 512*4) == -EBUSY);
-			igt_assert(__gem_set_tiling(fd, gem_bo, I915_TILING_Y, 1024*4) == -EBUSY);
-			igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id) == 0);
+			igt_require_i915(fd);
+			f.modifier[0] = I915_FORMAT_MOD_X_TILED;
+			do_ioctl(fd, DRM_IOCTL_MODE_ADDFB2, &f);
+			igt_assert_eq(__gem_set_tiling(fd, gem_bo, I915_TILING_X, 512*4), -EBUSY);
+			igt_assert_eq(__gem_set_tiling(fd, gem_bo, I915_TILING_Y, 1024*4), -EBUSY);
+			do_ioctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id);
 			f.fb_id = 0;
 		}
 	}
+
 	igt_fixture
 		gem_close(fd, gem_bo);
 }
 
-static int addfb_expected_ret(int fd, uint64_t modifier)
-{
-	int gen;
-
-	if (!is_i915_device(fd))
-		return 0;
-
-	gen = intel_gen(intel_get_drm_devid(fd));
-
-	if (modifier == LOCAL_I915_FORMAT_MOD_Yf_TILED)
-		return gen >= 9 && gen < 12 ? 0 : -1;
-	return gen >= 9 ? 0 : -1;
-}
-
 static void addfb25_ytile(int fd)
 {
-	struct local_drm_mode_fb_cmd2 f = {};
-	int gen;
+	struct drm_mode_fb_cmd2 f = {};
 
 	igt_fixture {
 		gem_bo = igt_create_bo_with_dimensions(fd, 1024, 1024,
-			DRM_FORMAT_XRGB8888, 0, 0, NULL, NULL, NULL);
+			DRM_FORMAT_XRGB8888, DRM_FORMAT_MOD_LINEAR, 0, NULL, NULL, NULL);
 		igt_assert(gem_bo);
 		gem_bo_small = igt_create_bo_with_dimensions(fd, 1024, 1023,
-			DRM_FORMAT_XRGB8888, 0, 0, NULL, NULL, NULL);
+			DRM_FORMAT_XRGB8888, DRM_FORMAT_MOD_LINEAR, 0, NULL, NULL, NULL);
 		igt_assert(gem_bo_small);
 
 		memset(&f, 0, sizeof(f));
@@ -567,44 +765,45 @@ static void addfb25_ytile(int fd)
 		f.height = 1024;
 		f.pixel_format = DRM_FORMAT_XRGB8888;
 		f.pitches[0] = 1024*4;
-		f.flags = LOCAL_DRM_MODE_FB_MODIFIERS;
-		f.modifier[0] = LOCAL_DRM_FORMAT_MOD_NONE;
+		f.flags = DRM_MODE_FB_MODIFIERS;
+		f.modifier[0] = DRM_FORMAT_MOD_LINEAR;
 
 		f.handles[0] = gem_bo;
 	}
 
-	igt_subtest("addfb25-Y-tiled") {
+	igt_describe("Check if addfb2 call works for y-tiling");
+	igt_subtest("addfb25-y-tiled-legacy") {
 		igt_require_fb_modifiers(fd);
 
-		f.modifier[0] = LOCAL_I915_FORMAT_MOD_Y_TILED;
-		igt_assert(drmIoctl(fd, LOCAL_DRM_IOCTL_MODE_ADDFB2, &f) ==
-			   addfb_expected_ret(fd, f.modifier[0]));
-		if (!addfb_expected_ret(fd, f.modifier[0]))
-			igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id) == 0);
+		f.modifier[0] = I915_FORMAT_MOD_Y_TILED;
+		igt_assert_eq(drmIoctl(fd, DRM_IOCTL_MODE_ADDFB2, &f),
+			      addfb_expected_ret(&display, &f));
+		if (!addfb_expected_ret(&display, &f))
+			do_ioctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id);
 		f.fb_id = 0;
 	}
 
-	igt_subtest("addfb25-Yf-tiled") {
+	igt_describe("Check if addfb2 call works for yf-tiling");
+	igt_subtest("addfb25-yf-tiled-legacy") {
 		igt_require_fb_modifiers(fd);
 
-		f.modifier[0] = LOCAL_I915_FORMAT_MOD_Yf_TILED;
-		igt_assert(drmIoctl(fd, LOCAL_DRM_IOCTL_MODE_ADDFB2, &f) ==
-			   addfb_expected_ret(fd, f.modifier[0]));
-		if (!addfb_expected_ret(fd, f.modifier[0]))
-			igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id) == 0);
+		f.modifier[0] = I915_FORMAT_MOD_Yf_TILED;
+		igt_assert_eq(drmIoctl(fd, DRM_IOCTL_MODE_ADDFB2, &f),
+			      addfb_expected_ret(&display, &f));
+		if (!addfb_expected_ret(&display, &f))
+			do_ioctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id);
 		f.fb_id = 0;
 	}
 
-	igt_subtest("addfb25-Y-tiled-small") {
+	igt_describe("Test that addfb2 call fails correctly for y-tiling with given height and modifier");
+	igt_subtest("addfb25-y-tiled-small-legacy") {
 		igt_require_fb_modifiers(fd);
 
-		gen = intel_gen(intel_get_drm_devid(fd));
-		igt_require(gen >= 9);
-
-		f.modifier[0] = LOCAL_I915_FORMAT_MOD_Y_TILED;
+		f.modifier[0] = I915_FORMAT_MOD_Y_TILED;
 		f.height = 1023;
 		f.handles[0] = gem_bo_small;
-		igt_assert(drmIoctl(fd, LOCAL_DRM_IOCTL_MODE_ADDFB2, &f) < 0 && errno == EINVAL);
+		igt_require(addfb_expected_ret(&display, &f) == 0);
+		do_ioctl_err(fd, DRM_IOCTL_MODE_ADDFB2, &f, EINVAL);
 		f.fb_id = 0;
 	}
 
@@ -612,6 +811,44 @@ static void addfb25_ytile(int fd)
 		gem_close(fd, gem_bo);
 		gem_close(fd, gem_bo_small);
 	}
+}
+
+static void addfb25_4tile(int fd)
+{
+	struct drm_mode_fb_cmd2 f = {};
+
+	igt_fixture {
+		gem_bo = igt_create_bo_with_dimensions(fd, 1024, 1024,
+				DRM_FORMAT_XRGB8888, DRM_FORMAT_MOD_LINEAR, 0, NULL, NULL, NULL);
+		igt_assert(gem_bo);
+
+		memset(&f, 0, sizeof(f));
+
+		f.width = 1024;
+		f.height = 1024;
+		f.pixel_format = DRM_FORMAT_XRGB8888;
+		f.pitches[0] = 1024*4;
+		f.flags = DRM_MODE_FB_MODIFIERS;
+		f.modifier[0] = DRM_FORMAT_MOD_LINEAR;
+
+		f.handles[0] = gem_bo;
+
+	}
+
+	igt_describe("Check if addfb2 call works for tiling-4");
+	igt_subtest("addfb25-4-tiled") {
+		igt_require_fb_modifiers(fd);
+
+		f.modifier[0] = I915_FORMAT_MOD_4_TILED;
+		igt_assert_eq(drmIoctl(fd, DRM_IOCTL_MODE_ADDFB2, &f),
+			      addfb_expected_ret(&display, &f));
+		if (!addfb_expected_ret(&display, &f))
+			do_ioctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id);
+		f.fb_id = 0;
+	}
+
+	igt_fixture
+		gem_close(fd, gem_bo);
 }
 
 static void prop_tests(int fd)
@@ -628,12 +865,12 @@ static void prop_tests(int fd)
 
 	igt_fixture {
 		gem_bo = igt_create_bo_with_dimensions(fd, 1024, 1024,
-			DRM_FORMAT_XRGB8888, 0, 0, NULL, NULL, NULL);
+			DRM_FORMAT_XRGB8888, DRM_FORMAT_MOD_LINEAR, 0, NULL, NULL, NULL);
 		igt_assert(gem_bo);
 
 		f.handles[0] = gem_bo;
 
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_ADDFB2, &f) == 0);
+		do_ioctl(fd, DRM_IOCTL_MODE_ADDFB2, &f);
 	}
 
 	get_props.props_ptr = (uintptr_t) &prop;
@@ -641,41 +878,42 @@ static void prop_tests(int fd)
 	get_props.count_props = 1;
 	get_props.obj_id = f.fb_id;
 
+	igt_describe("Test that get-properties ioctl call fails correctly for invalid object type");
 	igt_subtest("invalid-get-prop-any") {
-		get_props.obj_type = 0; /* DRM_MODE_OBJECT_ANY */
+		get_props.obj_type = DRM_MODE_OBJECT_ANY;
 
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_OBJ_GETPROPERTIES,
-				    &get_props) == -1 && errno == EINVAL);
+		do_ioctl_err(fd, DRM_IOCTL_MODE_OBJ_GETPROPERTIES, &get_props, EINVAL);
 	}
 
+	igt_describe("Test that get-properties ioctl call fails correctly for fb mode object");
 	igt_subtest("invalid-get-prop") {
 		get_props.obj_type = DRM_MODE_OBJECT_FB;
 
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_OBJ_GETPROPERTIES,
-				    &get_props) == -1 && errno == EINVAL);
+		do_ioctl_err(fd, DRM_IOCTL_MODE_OBJ_GETPROPERTIES, &get_props, EINVAL);
 	}
 
 	set_prop.value = 0;
 	set_prop.prop_id = 1;
 	set_prop.obj_id = f.fb_id;
 
+	igt_describe("Test that set-properties ioctl call fails correctly for invalid object type");
 	igt_subtest("invalid-set-prop-any") {
-		set_prop.obj_type = 0; /* DRM_MODE_OBJECT_ANY */
+		set_prop.obj_type = DRM_MODE_OBJECT_ANY;
 
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_OBJ_SETPROPERTY,
-				    &set_prop) == -1 && errno == EINVAL);
+		do_ioctl_err(fd, DRM_IOCTL_MODE_OBJ_SETPROPERTY, &set_prop, EINVAL);
 	}
 
+	igt_describe("Test that get-properties ioctl call fails correctly for fb mode object");
 	igt_subtest("invalid-set-prop") {
 		set_prop.obj_type = DRM_MODE_OBJECT_FB;
 
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_OBJ_SETPROPERTY,
-				    &set_prop) == -1 && errno == EINVAL);
+		do_ioctl_err(fd, DRM_IOCTL_MODE_OBJ_SETPROPERTY, &set_prop, EINVAL);
 	}
 
-	igt_fixture
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id) == 0);
-
+	igt_fixture {
+		do_ioctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id);
+		gem_close(fd, gem_bo);
+	}
 }
 
 static void master_tests(int fd)
@@ -689,14 +927,15 @@ static void master_tests(int fd)
 
 	igt_fixture {
 		gem_bo = igt_create_bo_with_dimensions(fd, 1024, 1024,
-			DRM_FORMAT_XRGB8888, 0, 0, NULL, NULL, NULL);
+			DRM_FORMAT_XRGB8888, DRM_FORMAT_MOD_LINEAR, 0, NULL, NULL, NULL);
 		igt_assert(gem_bo);
 
 		f.handles[0] = gem_bo;
 
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_ADDFB2, &f) == 0);
+		do_ioctl(fd, DRM_IOCTL_MODE_ADDFB2, &f);
 	}
 
+	igt_describe("Check that only master can rmfb");
 	igt_subtest("master-rmfb") {
 		int master2_fd;
 
@@ -704,22 +943,23 @@ static void master_tests(int fd)
 
 		master2_fd = drm_open_driver_master(DRIVER_ANY);
 
-		igt_assert_eq(rmfb(master2_fd, f.fb_id), -ENOENT);
+		do_ioctl_err(master2_fd, DRM_IOCTL_MODE_RMFB, &f.fb_id, ENOENT);
 
 		igt_device_drop_master(master2_fd);
-		close(master2_fd);
+		drm_close_driver(master2_fd);
 
 		igt_device_set_master(fd);
 	}
 
-	igt_fixture
-		igt_assert(drmIoctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id) == 0);
-
+	igt_fixture {
+		do_ioctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id);
+		gem_close(fd, gem_bo);
+	}
 }
 
 static bool has_addfb2_iface(int fd)
 {
-	struct local_drm_mode_fb_cmd2 f = {};
+	struct drm_mode_fb_cmd2 f = {};
 	int err;
 
 	err = 0;
@@ -749,22 +989,40 @@ igt_main
 		igt_require(has_addfb2_iface(fd));
 	}
 
-	invalid_tests(fd);
+	igt_subtest_group
+		invalid_tests(fd);
 
-	pitch_tests(fd);
+	igt_subtest_group
+		pitch_tests(fd);
 
-	size_tests(fd);
+	igt_subtest_group
+		prop_tests(fd);
 
-	addfb25_tests(fd);
+	igt_subtest_group
+		master_tests(fd);
 
-	addfb25_ytile(fd);
+	igt_subtest_group
+		tiling_tests(fd);
 
-	tiling_tests(fd);
+	igt_subtest_group {
+		igt_fixture
+			igt_display_require(&display, fd);
 
-	prop_tests(fd);
+		size_tests(fd);
 
-	master_tests(fd);
+		addfb25_tests(fd);
+
+		igt_fixture
+			igt_require_intel(fd);
+
+		addfb25_ytile(fd);
+
+		addfb25_4tile(fd);
+
+		igt_fixture
+			igt_display_fini(&display);
+	}
 
 	igt_fixture
-		close(fd);
+		drm_close_driver(fd);
 }

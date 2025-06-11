@@ -21,12 +21,88 @@
  * IN THE SOFTWARE.
  */
 
+#include <poll.h>
+#include <sys/ioctl.h>
+#include <time.h>
+
+#include "i915/gem.h"
+#include "i915/gem_create.h"
 #include "igt.h"
 #include "igt_vgem.h"
-
-#include <sys/ioctl.h>
-#include <sys/poll.h>
-#include <time.h>
+#include "intel_batchbuffer.h"	/* igt_blitter_copy() */
+/**
+ * TEST: prime vgem
+ * Description: Basic check of polling for prime/vgem fences.
+ * Category: Core
+ * Mega feature: General Core features
+ * Sub-category: DRM
+ * Functionality: mock device
+ * Feature: prime
+ * Test category: GEM_Legacy
+ *
+ * SUBTEST: basic-blt
+ * Description: Examine blitter access path.
+ *
+ * SUBTEST: basic-fence-blt
+ * Description: Examine blitter access path fencing.
+ *
+ * SUBTEST: basic-fence-flip
+ * Description: Examine vgem bo front/back flip fencing.
+ *
+ * SUBTEST: basic-fence-mmap
+ * Description: Examine GTT access path fencing.
+ * Feature: gtt, prime
+ *
+ * SUBTEST: basic-fence-read
+ * Description: Examine read access path fencing.
+ * Feature: gtt, prime
+ *
+ * SUBTEST: basic-gtt
+ * Description: Examine access path through GTT.
+ * Feature: gtt, prime
+ *
+ * SUBTEST: basic-read
+ * Description: Examine read access path.
+ * Feature: gtt, prime
+ *
+ * SUBTEST: basic-write
+ * Description: Examine write access path.
+ * Feature: gtt, prime
+ *
+ * SUBTEST: busy
+ * Description: Examine busy check of polling for vgem fence.
+ *
+ * SUBTEST: coherency-blt
+ * Description: Examine blitter access path WC coherency.
+ *
+ * SUBTEST: coherency-gtt
+ * Description: Examine concurrent access of vgem bo.
+ * Feature: gtt, prime
+ *
+ * SUBTEST: fence-flip-hang
+ * Description: Examine vgem bo front/back flip fencing with a pending gpu hang.
+ * Feature: blacklist, prime, synchronization
+ *
+ * SUBTEST: fence-read-hang
+ * Description: Examine read access path fencing with a pending gpu hang.
+ * Feature: blacklist, prime, synchronization
+ *
+ * SUBTEST: fence-wait
+ * Description: Examine basic dma-buf fence interop.
+ *
+ * SUBTEST: fence-write-hang
+ * Description: Examine write access path fencing with a pending gpu hang.
+ * Feature: blacklist, prime, synchronization
+ *
+ * SUBTEST: shrink
+ * Description: Examine link establishment between shrinker and vgem bo.
+ *
+ * SUBTEST: sync
+ * Description: Examine sync on vgem fence.
+ *
+ * SUBTEST: wait
+ * Description: Examine wait on vgem fence.
+ */
 
 IGT_TEST_DESCRIPTION("Basic check of polling for prime/vgem fences.");
 
@@ -45,6 +121,9 @@ static void test_read(int vgem, int i915)
 	dmabuf = prime_handle_to_fd(vgem, scratch.handle);
 	handle = prime_fd_to_handle(i915, dmabuf);
 	close(dmabuf);
+
+	igt_skip_on_f(__gem_read(i915, handle, 0, &i, sizeof(i)),
+		      "PREAD from dma-buf not supported on this hardware\n");
 
 	ptr = vgem_mmap(vgem, &scratch, PROT_WRITE);
 	for (i = 0; i < 1024; i++)
@@ -80,6 +159,9 @@ static void test_fence_read(int i915, int vgem)
 	dmabuf = prime_handle_to_fd(vgem, scratch.handle);
 	handle = prime_fd_to_handle(i915, dmabuf);
 	close(dmabuf);
+
+	igt_skip_on_f(__gem_read(i915, handle, 0, &i, sizeof(i)),
+		      "PREAD from dma-buf not supported on this hardware\n");
 
 	igt_fork(child, 1) {
 		close(master[0]);
@@ -175,6 +257,85 @@ static void test_fence_mmap(int i915, int vgem)
 	close(slave[1]);
 }
 
+static void test_fence_blt(int i915, int vgem)
+{
+	struct vgem_bo scratch;
+	uint32_t prime;
+	uint32_t *ptr;
+	uint32_t fence;
+	int dmabuf, i;
+	int master[2], slave[2];
+
+	igt_assert(pipe(master) == 0);
+	igt_assert(pipe(slave) == 0);
+
+	scratch.width = 1024;
+	scratch.height = 1024;
+	scratch.bpp = 32;
+	vgem_create(vgem, &scratch);
+
+	dmabuf = prime_handle_to_fd(vgem, scratch.handle);
+	prime = prime_fd_to_handle(i915, dmabuf);
+	close(dmabuf);
+
+	igt_fork(child, 1) {
+		uint32_t native;
+		uint64_t ahnd;
+
+		close(master[0]);
+		close(slave[1]);
+
+		intel_allocator_init();
+		ahnd = get_reloc_ahnd(i915, 0);
+
+		native = gem_create(i915, scratch.size);
+
+		ptr = gem_mmap__device_coherent(i915, native, 0, scratch.size, PROT_READ);
+		for (i = 0; i < scratch.height; i++)
+			igt_assert_eq_u32(ptr[scratch.pitch * i / sizeof(*ptr)],
+					  0);
+
+		write(master[1], &child, sizeof(child));
+		read(slave[0], &child, sizeof(child));
+
+		igt_blitter_copy(i915, ahnd, 0, NULL, prime, 0, scratch.pitch,
+				 I915_TILING_NONE, 0, 0, scratch.size,
+				 scratch.width, scratch.height, scratch.bpp,
+				 native, 0, scratch.pitch,
+				 I915_TILING_NONE, 0, 0, scratch.size);
+		gem_sync(i915, native);
+
+		for (i = 0; i < scratch.height; i++)
+			igt_assert_eq_u32(ptr[scratch.pitch * i / sizeof(*ptr)],
+					  i);
+
+		munmap(ptr, scratch.size);
+		gem_close(i915, native);
+		gem_close(i915, prime);
+		put_ahnd(ahnd);
+	}
+
+	close(master[1]);
+	close(slave[0]);
+	read(master[0], &i, sizeof(i));
+	fence = vgem_fence_attach(vgem, &scratch, VGEM_FENCE_WRITE);
+	write(slave[1], &i, sizeof(i));
+
+	/* Emphasize that the only thing stopping the blitter is the fence */
+	usleep(50*1000);
+
+	ptr = vgem_mmap(vgem, &scratch, PROT_WRITE);
+	for (i = 0; i < scratch.height; i++)
+		ptr[scratch.pitch * i / sizeof(*ptr)] = i;
+	munmap(ptr, scratch.size);
+	vgem_fence_signal(vgem, fence);
+	gem_close(vgem, scratch.handle);
+
+	igt_waitchildren();
+	close(master[0]);
+	close(slave[1]);
+}
+
 static void test_write(int vgem, int i915)
 {
 	struct vgem_bo scratch;
@@ -190,6 +351,9 @@ static void test_write(int vgem, int i915)
 	dmabuf = prime_handle_to_fd(vgem, scratch.handle);
 	handle = prime_fd_to_handle(i915, dmabuf);
 	close(dmabuf);
+
+	igt_skip_on_f(__gem_write(i915, handle, 0, &i, sizeof(i)),
+		      "PWRITE to dma-buf not supported on this hardware\n");
 
 	ptr = vgem_mmap(vgem, &scratch, PROT_READ);
 	gem_close(vgem, scratch.handle);
@@ -238,6 +402,63 @@ static void test_gtt(int vgem, int i915)
 
 	gem_close(i915, handle);
 	gem_close(vgem, scratch.handle);
+}
+
+static void test_blt(int vgem, int i915)
+{
+	struct vgem_bo scratch;
+	uint32_t prime, native;
+	uint32_t *ptr;
+	int dmabuf, i;
+	uint64_t ahnd = get_reloc_ahnd(i915, 0);
+
+	scratch.width = 1024;
+	scratch.height = 1024;
+	scratch.bpp = 32;
+	vgem_create(vgem, &scratch);
+
+	dmabuf = prime_handle_to_fd(vgem, scratch.handle);
+	prime = prime_fd_to_handle(i915, dmabuf);
+
+	native = gem_create(i915, scratch.size);
+
+	ptr = gem_mmap__device_coherent(i915, native, 0, scratch.size, PROT_WRITE);
+	for (i = 0; i < scratch.height; i++)
+		ptr[scratch.pitch * i / sizeof(*ptr)] = i;
+	munmap(ptr, scratch.size);
+
+	igt_blitter_copy(i915, ahnd, 0, NULL, native, 0, scratch.pitch,
+			 I915_TILING_NONE, 0, 0, scratch.size,
+			 scratch.width, scratch.height, scratch.bpp,
+			 prime, 0, scratch.pitch, I915_TILING_NONE, 0, 0,
+			 scratch.size);
+	prime_sync_start(dmabuf, true);
+	prime_sync_end(dmabuf, true);
+	close(dmabuf);
+
+	ptr = vgem_mmap(vgem, &scratch, PROT_READ | PROT_WRITE);
+	for (i = 0; i < scratch.height; i++) {
+		igt_assert_eq_u32(ptr[scratch.pitch * i / sizeof(*ptr)], i);
+		ptr[scratch.pitch * i / sizeof(*ptr)] = ~i;
+	}
+	munmap(ptr, scratch.size);
+
+	igt_blitter_copy(i915, ahnd, 0, NULL, prime, 0, scratch.pitch,
+			 I915_TILING_NONE, 0, 0, scratch.size,
+			 scratch.width, scratch.height, scratch.bpp,
+			 native, 0, scratch.pitch, I915_TILING_NONE, 0, 0,
+			 scratch.size);
+	gem_sync(i915, native);
+
+	ptr = gem_mmap__device_coherent(i915, native, 0, scratch.size, PROT_READ);
+	for (i = 0; i < scratch.height; i++)
+		igt_assert_eq_u32(ptr[scratch.pitch * i / sizeof(*ptr)], ~i);
+	munmap(ptr, scratch.size);
+
+	gem_close(i915, native);
+	gem_close(i915, prime);
+	gem_close(vgem, scratch.handle);
+	put_ahnd(ahnd);
 }
 
 static void test_shrink(int vgem, int i915)
@@ -323,13 +544,68 @@ static void test_gtt_interleaved(int vgem, int i915)
 	gem_close(vgem, scratch.handle);
 }
 
+static void test_blt_interleaved(int vgem, int i915)
+{
+	struct vgem_bo scratch;
+	uint32_t prime, native;
+	uint32_t *foreign, *local;
+	int dmabuf, i;
+	uint64_t ahnd = get_reloc_ahnd(i915, 0);
+
+	scratch.width = 1024;
+	scratch.height = 1024;
+	scratch.bpp = 32;
+	vgem_create(vgem, &scratch);
+
+	dmabuf = prime_handle_to_fd(vgem, scratch.handle);
+	prime = prime_fd_to_handle(i915, dmabuf);
+
+	native = gem_create(i915, scratch.size);
+
+	foreign = vgem_mmap(vgem, &scratch, PROT_WRITE);
+	local = gem_mmap__device_coherent(i915, native, 0, scratch.size, PROT_WRITE);
+
+	for (i = 0; i < SLOW_QUICK(scratch.height, 64); i++) {
+		local[scratch.pitch * i / sizeof(*local)] = i;
+		igt_blitter_copy(i915, ahnd, 0, NULL, native, 0,
+				 scratch.pitch, I915_TILING_NONE, 0, i,
+				 scratch.size, scratch.width, 1,
+				 scratch.bpp, prime, 0, scratch.pitch,
+				 I915_TILING_NONE, 0, i, scratch.size);
+		prime_sync_start(dmabuf, true);
+		igt_assert_eq_u32(foreign[scratch.pitch * i / sizeof(*foreign)],
+				  i);
+		prime_sync_end(dmabuf, true);
+
+		foreign[scratch.pitch * i / sizeof(*foreign)] = ~i;
+		igt_blitter_copy(i915, ahnd, 0, NULL, prime, 0, scratch.pitch,
+				 I915_TILING_NONE, 0, i, scratch.size,
+				 scratch.width, 1,
+				 scratch.bpp, native, 0, scratch.pitch,
+				 I915_TILING_NONE, 0, i, scratch.size);
+		gem_sync(i915, native);
+		igt_assert_eq_u32(local[scratch.pitch * i / sizeof(*local)],
+				  ~i);
+	}
+	close(dmabuf);
+
+	munmap(local, scratch.size);
+	munmap(foreign, scratch.size);
+
+	gem_close(i915, native);
+	gem_close(i915, prime);
+	gem_close(vgem, scratch.handle);
+	put_ahnd(ahnd);
+}
+
 static bool prime_busy(int fd, bool excl)
 {
 	struct pollfd pfd = { .fd = fd, .events = excl ? POLLOUT : POLLIN };
 	return poll(&pfd, 1, 0) == 0;
 }
 
-static void work(int i915, int dmabuf, unsigned ring, uint32_t flags)
+static void work(int i915, uint64_t ahnd, uint64_t scratch_offset, int dmabuf,
+		 const intel_ctx_t *ctx, unsigned ring)
 {
 	const int SCRATCH = 0;
 	const int BATCH = 1;
@@ -345,19 +621,27 @@ static void work(int i915, int dmabuf, unsigned ring, uint32_t flags)
 	memset(&execbuf, 0, sizeof(execbuf));
 	execbuf.buffers_ptr = (uintptr_t)obj;
 	execbuf.buffer_count = 2;
-	execbuf.flags = ring | flags;
-	if (gen < 6)
+	execbuf.flags = ring;
+	if (gem_store_dword_needs_secure(i915))
 		execbuf.flags |= I915_EXEC_SECURE;
+	execbuf.rsvd1 = ctx->id;
 
 	memset(obj, 0, sizeof(obj));
 	obj[SCRATCH].handle = prime_fd_to_handle(i915, dmabuf);
 
 	obj[BATCH].handle = gem_create(i915, size);
+	obj[BATCH].offset = get_offset(ahnd, obj[BATCH].handle, size, 0);
 	obj[BATCH].relocs_ptr = (uintptr_t)store;
-	obj[BATCH].relocation_count = ARRAY_SIZE(store);
+	obj[BATCH].relocation_count = !ahnd ? ARRAY_SIZE(store) : 0;
 	memset(store, 0, sizeof(store));
 
-	batch = gem_mmap__wc(i915, obj[BATCH].handle, 0, size, PROT_WRITE);
+	if (ahnd) {
+		obj[SCRATCH].flags = EXEC_OBJECT_PINNED | EXEC_OBJECT_WRITE;
+		obj[SCRATCH].offset = scratch_offset;
+		obj[BATCH].flags = EXEC_OBJECT_PINNED;
+	}
+
+	batch = gem_mmap__device_coherent(i915, obj[BATCH].handle, 0, size, PROT_WRITE);
 	gem_set_domain(i915, obj[BATCH].handle,
 		       I915_GEM_DOMAIN_GTT, I915_GEM_DOMAIN_GTT);
 
@@ -369,10 +653,10 @@ static void work(int i915, int dmabuf, unsigned ring, uint32_t flags)
 		store[count].delta = sizeof(uint32_t) * count;
 		store[count].read_domains = I915_GEM_DOMAIN_INSTRUCTION;
 		store[count].write_domain = I915_GEM_DOMAIN_INSTRUCTION;
-		batch[i] = MI_STORE_DWORD_IMM | (gen < 6 ? 1 << 22 : 0);
+		batch[i] = MI_STORE_DWORD_IMM_GEN4 | (gen < 6 ? 1 << 22 : 0);
 		if (gen >= 8) {
-			batch[++i] = 0;
-			batch[++i] = 0;
+			batch[++i] = scratch_offset + store[count].delta;
+			batch[++i] = (scratch_offset + store[count].delta) >> 32;
 		} else if (gen >= 4) {
 			batch[++i] = 0;
 			batch[++i] = 0;
@@ -395,8 +679,8 @@ static void work(int i915, int dmabuf, unsigned ring, uint32_t flags)
 	batch[i] = MI_BATCH_BUFFER_START;
 	if (gen >= 8) {
 		batch[i] |= 1 << 8 | 1;
-		batch[++i] = 0;
-		batch[++i] = 0;
+		batch[++i] = obj[BATCH].offset;
+		batch[++i] = obj[BATCH].offset >> 32;
 	} else if (gen >= 6) {
 		batch[i] |= 1 << 8;
 		batch[++i] = 0;
@@ -424,21 +708,25 @@ static void work(int i915, int dmabuf, unsigned ring, uint32_t flags)
 	igt_assert(read_busy && write_busy);
 }
 
-static void test_busy(int i915, int vgem, unsigned ring, uint32_t flags)
+static void test_busy(int i915, int vgem, const intel_ctx_t *ctx, unsigned ring)
 {
 	struct vgem_bo scratch;
 	struct timespec tv;
 	uint32_t *ptr;
 	int dmabuf;
 	int i;
+	uint64_t ahnd = get_reloc_ahnd(i915, ctx->id), scratch_offset;
 
 	scratch.width = 1024;
 	scratch.height = 1;
 	scratch.bpp = 32;
 	vgem_create(vgem, &scratch);
+	scratch_offset = get_offset(ahnd, scratch.handle, scratch.size, 0);
 	dmabuf = prime_handle_to_fd(vgem, scratch.handle);
 
-	work(i915, dmabuf, ring, flags);
+	work(i915, ahnd, scratch_offset, dmabuf, ctx, ring);
+
+	put_ahnd(ahnd);
 
 	/* Calling busy in a loop should be enough to flush the rendering */
 	memset(&tv, 0, sizeof(tv));
@@ -454,20 +742,24 @@ static void test_busy(int i915, int vgem, unsigned ring, uint32_t flags)
 	close(dmabuf);
 }
 
-static void test_wait(int i915, int vgem, unsigned ring, uint32_t flags)
+static void test_wait(int i915, int vgem, const intel_ctx_t *ctx, unsigned ring)
 {
 	struct vgem_bo scratch;
 	struct pollfd pfd;
 	uint32_t *ptr;
 	int i;
+	uint64_t ahnd = get_reloc_ahnd(i915, ctx->id), scratch_offset;
 
 	scratch.width = 1024;
 	scratch.height = 1;
 	scratch.bpp = 32;
 	vgem_create(vgem, &scratch);
+	scratch_offset = get_offset(ahnd, scratch.handle, scratch.size, 0);
 	pfd.fd = prime_handle_to_fd(vgem, scratch.handle);
 
-	work(i915, pfd.fd, ring, flags);
+	work(i915, ahnd, scratch_offset, pfd.fd, ctx, ring);
+
+	put_ahnd(ahnd);
 
 	pfd.events = POLLIN;
 	igt_assert_eq(poll(&pfd, 1, 10000), 1);
@@ -481,47 +773,51 @@ static void test_wait(int i915, int vgem, unsigned ring, uint32_t flags)
 	close(pfd.fd);
 }
 
-static void test_sync(int i915, int vgem, unsigned ring, uint32_t flags)
+static void test_sync(int i915, int vgem, const intel_ctx_t *ctx, unsigned ring)
 {
 	struct vgem_bo scratch;
 	uint32_t *ptr;
 	int dmabuf;
 	int i;
+	uint64_t ahnd = get_reloc_ahnd(i915, ctx->id), scratch_offset;
 
 	scratch.width = 1024;
 	scratch.height = 1;
 	scratch.bpp = 32;
 	vgem_create(vgem, &scratch);
+	scratch_offset = get_offset(ahnd, scratch.handle, scratch.size, 0);
 	dmabuf = prime_handle_to_fd(vgem, scratch.handle);
 
 	ptr = mmap(NULL, scratch.size, PROT_READ, MAP_SHARED, dmabuf, 0);
 	igt_assert(ptr != MAP_FAILED);
 	gem_close(vgem, scratch.handle);
 
-	work(i915, dmabuf, ring, flags);
+	work(i915, ahnd, scratch_offset, dmabuf, ctx, ring);
+
+	put_ahnd(ahnd);
 
 	prime_sync_start(dmabuf, false);
 	for (i = 0; i < 1024; i++)
 		igt_assert_eq_u32(ptr[i], i);
-
 	prime_sync_end(dmabuf, false);
 	close(dmabuf);
 
 	munmap(ptr, scratch.size);
 }
 
-static void test_fence_wait(int i915, int vgem, unsigned ring, unsigned flags)
+static void test_fence_wait(int i915, int vgem, const intel_ctx_t *ctx, unsigned ring)
 {
 	struct vgem_bo scratch;
 	uint32_t fence;
 	uint32_t *ptr;
 	int dmabuf;
+	uint64_t ahnd = get_reloc_ahnd(i915, ctx->id), scratch_offset;
 
 	scratch.width = 1024;
 	scratch.height = 1;
 	scratch.bpp = 32;
 	vgem_create(vgem, &scratch);
-
+	scratch_offset = get_offset(ahnd, scratch.handle, scratch.size, 0);
 	dmabuf = prime_handle_to_fd(vgem, scratch.handle);
 	fence = vgem_fence_attach(vgem, &scratch, VGEM_FENCE_WRITE);
 	igt_assert(prime_busy(dmabuf, false));
@@ -530,10 +826,14 @@ static void test_fence_wait(int i915, int vgem, unsigned ring, unsigned flags)
 	ptr = mmap(NULL, scratch.size, PROT_READ, MAP_SHARED, dmabuf, 0);
 	igt_assert(ptr != MAP_FAILED);
 
-	igt_fork(child, 1)
-		work(i915, dmabuf, ring, flags);
+	igt_fork(child, 1) {
+		ahnd = get_reloc_ahnd(i915, ctx->id);
+		work(i915, ahnd, scratch_offset, dmabuf, ctx, ring);
+		put_ahnd(ahnd);
+	}
 
 	sleep(1);
+	put_ahnd(ahnd);
 
 	/* Check for invalidly completing the task early */
 	for (int i = 0; i < 1024; i++)
@@ -548,7 +848,6 @@ static void test_fence_wait(int i915, int vgem, unsigned ring, unsigned flags)
 	for (int i = 0; i < 1024; i++)
 		igt_assert_eq_u32(ptr[i], i);
 	prime_sync_end(dmabuf, false);
-
 	close(dmabuf);
 
 	munmap(ptr, scratch.size);
@@ -560,11 +859,13 @@ static void test_fence_hang(int i915, int vgem, unsigned flags)
 	uint32_t *ptr;
 	int dmabuf;
 	int i;
+	uint64_t ahnd = get_reloc_ahnd(i915, 0), scratch_offset;
 
 	scratch.width = 1024;
 	scratch.height = 1;
 	scratch.bpp = 32;
 	vgem_create(vgem, &scratch);
+	scratch_offset = get_offset(ahnd, scratch.handle, scratch.size, 0);
 	dmabuf = prime_handle_to_fd(vgem, scratch.handle);
 	vgem_fence_attach(vgem, &scratch, flags | WIP_VGEM_FENCE_NOTIMEOUT);
 
@@ -572,7 +873,9 @@ static void test_fence_hang(int i915, int vgem, unsigned flags)
 	igt_assert(ptr != MAP_FAILED);
 	gem_close(vgem, scratch.handle);
 
-	work(i915, dmabuf, I915_EXEC_DEFAULT, 0);
+	work(i915, ahnd, scratch_offset, dmabuf, intel_ctx_0(i915), 0);
+
+	put_ahnd(ahnd);
 
 	/* The work should have been cancelled */
 
@@ -784,7 +1087,7 @@ static void test_flip(int i915, int vgem, unsigned hang)
 					bo[i].width, bo[i].height,
 					DRM_FORMAT_XRGB8888, I915_TILING_NONE,
 					strides, offsets, 1,
-					LOCAL_DRM_MODE_FB_MODIFIERS,
+					DRM_MODE_FB_MODIFIERS,
 					&fb_id[i]) == 0);
 		igt_assert(fb_id[i]);
 	}
@@ -813,9 +1116,38 @@ static void test_flip(int i915, int vgem, unsigned hang)
 	}
 }
 
+static void test_each_engine(const char *name, int vgem, int i915,
+			     void (*fn)(int i915, int vgem,
+					const intel_ctx_t *ctx,
+					unsigned int flags))
+{
+	const struct intel_execution_engine2 *e;
+	const intel_ctx_t *ctx;
+
+	igt_fixture
+		ctx = intel_ctx_create_all_physical(i915);
+
+	igt_subtest_with_dynamic(name) {
+		for_each_ctx_engine(i915, ctx, e) {
+			if (!gem_class_can_store_dword(i915, e->class))
+				continue;
+
+			if (!gem_class_has_mutable_submission(i915, e->class))
+				continue;
+
+			igt_dynamic_f("%s", e->name) {
+				gem_quiescent_gpu(i915);
+				fn(i915, vgem, ctx, e->flags);
+			}
+		}
+	}
+
+	igt_fixture
+		intel_ctx_destroy(i915, ctx);
+}
+
 igt_main
 {
-	const struct intel_execution_engine *e;
 	int i915 = -1;
 	int vgem = -1;
 
@@ -826,57 +1158,57 @@ igt_main
 		i915 = drm_open_driver_master(DRIVER_INTEL);
 		igt_require_gem(i915);
 		igt_require(has_prime_import(i915));
-		gem_require_mmap_wc(i915);
+		gem_require_mmap_device_coherent(i915);
 	}
 
+	igt_describe("Examine read access path.");
 	igt_subtest("basic-read")
 		test_read(vgem, i915);
 
+	igt_describe("Examine write access path.");
 	igt_subtest("basic-write")
 		test_write(vgem, i915);
 
-	igt_subtest("basic-gtt")
+	igt_describe("Examine access path through GTT.");
+	igt_subtest("basic-gtt") {
+		gem_require_mappable_ggtt(i915);
 		test_gtt(vgem, i915);
+	}
 
+	igt_describe("Examine blitter access path.");
+	igt_subtest("basic-blt")
+		test_blt(vgem, i915);
+
+	igt_describe("Examine link establishment between shrinker and vgem bo.");
 	igt_subtest("shrink")
 		test_shrink(vgem, i915);
 
-	igt_subtest("coherency-gtt")
+	igt_describe("Examine concurrent access of vgem bo.");
+	igt_subtest("coherency-gtt") {
+		gem_require_mappable_ggtt(i915);
 		test_gtt_interleaved(vgem, i915);
-
-	for (e = intel_execution_engines; e->name; e++) {
-		igt_subtest_f("%ssync-%s",
-			      e->exec_id == 0 ? "basic-" : "",
-			      e->name) {
-			gem_require_ring(i915, e->exec_id | e->flags);
-			igt_require(gem_can_store_dword(i915, e->exec_id | e->flags));
-
-			gem_quiescent_gpu(i915);
-			test_sync(i915, vgem, e->exec_id, e->flags);
-		}
 	}
 
-	for (e = intel_execution_engines; e->name; e++) {
-		igt_subtest_f("%sbusy-%s",
-			      e->exec_id == 0 ? "basic-" : "",
-			      e->name) {
-			gem_require_ring(i915, e->exec_id | e->flags);
-			igt_require(gem_can_store_dword(i915, e->exec_id | e->flags));
+	igt_describe("Examine blitter access path WC coherency.");
+	igt_subtest("coherency-blt")
+		test_blt_interleaved(vgem, i915);
 
-			gem_quiescent_gpu(i915);
-			test_busy(i915, vgem, e->exec_id, e->flags);
-		}
-	}
+	{
+		static const struct {
+			const char *name;
+			void (*fn)(int i915, int vgem, const intel_ctx_t *ctx,
+				   unsigned int engine);
+			const char *describe;
+		} tests[] = {
+			{ "sync", test_sync, "Examine sync on vgem fence." },
+			{ "busy", test_busy, "Examine busy check of polling for vgem fence." },
+			{ "wait", test_wait, "Examine wait on vgem fence." },
+			{ }
+		};
 
-	for (e = intel_execution_engines; e->name; e++) {
-		igt_subtest_f("%swait-%s",
-			      e->exec_id == 0 ? "basic-" : "",
-			      e->name) {
-			gem_require_ring(i915, e->exec_id | e->flags);
-			igt_require(gem_can_store_dword(i915, e->exec_id | e->flags));
-
-			gem_quiescent_gpu(i915);
-			test_wait(i915, vgem, e->exec_id, e->flags);
+		for (const typeof(*tests) *t = tests; t->name; t++) {
+			igt_describe(t->describe);
+			test_each_engine(t->name, vgem, i915, t->fn);
 		}
 	}
 
@@ -886,23 +1218,21 @@ igt_main
 			igt_require(vgem_has_fences(vgem));
 		}
 
+		igt_describe("Examine read access path fencing.");
 		igt_subtest("basic-fence-read")
 			test_fence_read(i915, vgem);
-		igt_subtest("basic-fence-mmap")
+
+		igt_describe("Examine GTT access path fencing.");
+		igt_subtest("basic-fence-mmap") {
+			gem_require_mappable_ggtt(i915);
 			test_fence_mmap(i915, vgem);
-
-		for (e = intel_execution_engines; e->name; e++) {
-			igt_subtest_f("%sfence-wait-%s",
-					e->exec_id == 0 ? "basic-" : "",
-					e->name) {
-				gem_require_ring(i915, e->exec_id | e->flags);
-				igt_require(gem_can_store_dword(i915, e->exec_id | e->flags));
-
-				gem_quiescent_gpu(i915);
-				test_fence_wait(i915, vgem, e->exec_id, e->flags);
-			}
 		}
 
+		igt_describe("Examine blitter access path fencing.");
+		igt_subtest("basic-fence-blt")
+			test_fence_blt(i915, vgem);
+
+		igt_describe("Examine vgem bo front/back flip fencing.");
 		igt_subtest("basic-fence-flip")
 			test_flip(i915, vgem, 0);
 
@@ -911,18 +1241,39 @@ igt_main
 				igt_require(vgem_fence_has_flag(vgem, WIP_VGEM_FENCE_NOTIMEOUT));
 			}
 
+			igt_describe("Examine read access path fencing with a pending gpu hang.");
 			igt_subtest("fence-read-hang")
 				test_fence_hang(i915, vgem, 0);
+
+			igt_describe("Examine write access path fencing with a pending gpu hang.");
 			igt_subtest("fence-write-hang")
 				test_fence_hang(i915, vgem, VGEM_FENCE_WRITE);
 
+			igt_describe("Examine vgem bo front/back flip fencing with a pending gpu"
+				     " hang.");
 			igt_subtest("fence-flip-hang")
 				test_flip(i915, vgem, WIP_VGEM_FENCE_NOTIMEOUT);
 		}
 	}
 
+	/* Fence testing, requires multiprocess allocator */
+	igt_subtest_group {
+		igt_fixture {
+			igt_require(vgem_has_fences(vgem));
+			intel_allocator_multiprocess_start();
+		}
+
+		igt_describe("Examine basic dma-buf fence interop.");
+		test_each_engine("fence-wait", vgem, i915, test_fence_wait);
+
+		igt_fixture {
+			intel_allocator_multiprocess_stop();
+		}
+	}
+
+
 	igt_fixture {
-		close(i915);
-		close(vgem);
+		drm_close_driver(i915);
+		drm_close_driver(vgem);
 	}
 }

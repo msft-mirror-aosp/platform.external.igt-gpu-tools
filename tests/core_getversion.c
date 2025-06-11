@@ -28,16 +28,30 @@
 #include "igt.h"
 #include <string.h>
 #include <sys/ioctl.h>
+/**
+ * TEST: core getversion
+ * Description: Tests the DRM_IOCTL_GET_VERSION ioctl and libdrm's drmGetVersion() interface to it.
+ * Category: Core
+ * Mega feature: General Core features
+ * Sub-category: DRM
+ * Functionality: permission management for clients
+ * Feature: core
+ * Test category: GEM_Legacy
+ *
+ * SUBTEST: basic
+ * Description: Tests GET_VERSION ioctl of the first device.
+ *
+ * SUBTEST: all-cards
+ * Description: Tests GET_VERSION ioctl for all drm devices.
+ */
 
 IGT_TEST_DESCRIPTION("Tests the DRM_IOCTL_GET_VERSION ioctl and libdrm's "
 		     "drmGetVersion() interface to it.");
 
-igt_simple_main
+static void check(int fd, char *dst, int len)
 {
-	int fd;
 	drmVersionPtr v;
 
-	fd = drm_open_driver(DRIVER_ANY);
 	v = drmGetVersion(fd);
 	igt_assert_neq(strlen(v->name), 0);
 	igt_assert_neq(strlen(v->date), 0);
@@ -45,6 +59,48 @@ igt_simple_main
 	if (is_i915_device(fd))
 		igt_assert_lte(1, v->version_major);
 
+	snprintf(dst, len, "%s v%d.%d %s %s", v->name, v->version_major,
+		v->version_minor, v->date, v->desc);
+	dst[len - 1] = 0;
 	drmFree(v);
-	close(fd);
+}
+
+static void check_all_drm(void)
+{
+	char info[256];
+	int fd2;
+
+	for (int i = 0; ; i++) {
+		fd2 = __drm_open_driver_another(i, DRIVER_ANY);
+		if (fd2 == -1)
+			break;
+
+		check(fd2, info, sizeof(info));
+		igt_info("%d: %s\n", i, info);
+		drm_close_driver(fd2);
+	}
+}
+
+igt_main
+{
+	char info[256];
+	int fd;
+
+	igt_fixture {
+		fd = __drm_open_driver(DRIVER_ANY);
+		igt_assert_fd(fd);
+	}
+
+	igt_describe("Check GET_VERSION ioctl of the first drm device.");
+	igt_subtest("basic") {
+		check(fd, info, sizeof(info));
+		igt_info("0: %s\n", info);
+	}
+
+	igt_describe("Check GET_VERSION ioctl for all drm devices.");
+	igt_subtest("all-cards")
+		check_all_drm();
+
+	igt_fixture
+		drm_close_driver(fd);
 }

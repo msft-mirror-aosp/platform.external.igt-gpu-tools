@@ -45,6 +45,15 @@
  *  - DP commands (e.g. poweroff)
  * - verify outputs against VBT/physical connectors
  */
+
+/**
+ * TEST: testdisplay
+ * Category: Display
+ * Description: Tests basic display functionality.
+ * Driver requirement: i915, xe
+ * Mega feature: General Display Features
+ */
+
 #include "config.h"
 
 #include "igt.h"
@@ -57,8 +66,8 @@
 #include <stdbool.h>
 #include <strings.h>
 #include <unistd.h>
+#include <poll.h>
 #include <termios.h>
-#include <sys/poll.h>
 #include <sys/time.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
@@ -68,6 +77,14 @@
 
 #include <stdlib.h>
 #include <signal.h>
+
+/**
+ * SUBTEST:
+ * Description: This test is intended for testing of display functionality like
+ *              modeset, clone modes, test patterns & pixel generators etc..
+ */
+
+IGT_TEST_DESCRIPTION("Tests basic display functionality.");
 
 enum {
 	OPT_YB,
@@ -81,7 +98,7 @@ drmModeRes *resources;
 int drm_fd, modes;
 int test_all_modes = 0, test_preferred_mode = 0, force_mode = 0, test_plane,
     test_stereo_modes, test_aspect_ratio;
-uint64_t tiling = LOCAL_DRM_FORMAT_MOD_NONE;
+uint64_t modifier = DRM_FORMAT_MOD_LINEAR;
 int sleep_between_modes = 0;
 int do_dpms = 0; /* This aliases to DPMS_ON */
 uint32_t depth = 24, stride, bpp;
@@ -232,7 +249,7 @@ paint_color_key(struct igt_fb *fb_info)
 	cairo_set_source_rgb(cr, .8, .8, .8);
 	cairo_fill(cr);
 
-	igt_put_cairo_ctx(drm_fd, fb_info, cr);
+	igt_put_cairo_ctx(cr);
 }
 
 static void paint_image(cairo_t *cr, const char *file)
@@ -317,7 +334,7 @@ static void paint_output_info(struct connector *c, struct igt_fb *fb)
 	if (qr_code)
 		paint_image(cr, "pass.png");
 
-	igt_put_cairo_ctx(drm_fd, fb, cr);
+	igt_put_cairo_ctx(cr);
 }
 
 static void sighandler(int signo)
@@ -370,7 +387,7 @@ set_mode(struct connector *c)
 
 		fb_id = igt_create_pattern_fb(drm_fd, width, height,
 					      igt_bpp_depth_to_drm_format(bpp, depth),
-					      tiling, &fb_info[current_fb]);
+					      modifier, &fb_info[current_fb]);
 		paint_output_info(c, &fb_info[current_fb]);
 		paint_color_key(&fb_info[current_fb]);
 
@@ -416,7 +433,7 @@ static void do_set_stereo_mode(struct connector *c)
 
 	fb_id = igt_create_stereo_fb(drm_fd, &c->mode,
 				     igt_bpp_depth_to_drm_format(bpp, depth),
-				     tiling);
+				     modifier);
 
 	igt_warn_on_f(drmModeSetCrtc(drm_fd, c->crtc, fb_id, 0, 0, &c->id, 1, &c->mode),
 		      "failed to set mode (%dx%d@%dHz): %s\n", width, height, c->mode.vrefresh, strerror(errno));
@@ -426,7 +443,6 @@ static void
 set_stereo_mode(struct connector *c)
 {
 	int i, n;
-
 
 	if (specified_mode_num != -1)
 		n = 1;
@@ -476,7 +492,11 @@ set_stereo_mode(struct connector *c)
 int update_display(bool probe)
 {
 	struct connector *connectors;
+	igt_display_t display;
 	int c;
+
+	igt_display_require(&display, drm_fd);
+	igt_display_require_output(&display);
 
 	resources = drmModeGetResources(drm_fd);
 	igt_require(resources);
@@ -511,7 +531,6 @@ int update_display(bool probe)
 			if (test_preferred_mode || force_mode ||
 			    specified_mode_num != -1)
 				crtc_idx_mask &= ~(1 << connector->pipe);
-
 		}
 	}
 
@@ -542,9 +561,9 @@ int update_display(bool probe)
 
 #define dump_resource(res) if (res) dump_##res()
 
-static void __attribute__((noreturn)) cleanup_and_exit(int ret)
+__noreturn static void cleanup_and_exit(int ret)
 {
-	close(drm_fd);
+	drm_close_driver(drm_fd);
 	exit(ret);
 }
 
@@ -564,9 +583,9 @@ static gboolean input_event(GIOChannel *source, GIOCondition condition,
 
 static void enter_exec_path(void)
 {
-	char path[PATH_MAX];
+	char path[PATH_MAX] = {};
 
-	if (readlink("/proc/self/exe", path, sizeof(path)) > 0)
+	if (readlink("/proc/self/exe", path, sizeof(path) - 1) > 0)
 		chdir(dirname(path));
 }
 
@@ -593,7 +612,7 @@ static void set_termio_mode(void)
 	tcsetattr(tio_fd, TCSANOW, &tio);
 }
 
-static char optstr[] = "3Aiaf:s:d:p:mrto:j:y";
+static char optstr[] = "3Aiaf:s:d:p:mrt4o:j:y";
 static struct option long_opts[] = {
 	{"yb", 0, 0, OPT_YB},
 	{"yf", 0, 0, OPT_YF},
@@ -612,6 +631,7 @@ static const char *help_str =
 	"  -t\tuse an X-tiled framebuffer\n"
 	"  -y, --yb\n"
 	"  \tuse a Y-tiled framebuffer\n"
+	"  -4\tuse an Tile-4 framebuffer\n"
 	"  --yf\tuse a Yf-tiled framebuffer\n"
 	"  -j\tdo dpms off, optional arg to select dpms level (1-3)\n"
 	"  -r\tprint a QR code on the screen whose content is \"pass\" for the automatic test\n"
@@ -624,8 +644,6 @@ static const char *help_str =
 
 static int opt_handler(int opt, int opt_index, void *data)
 {
-	float force_clock;
-
 	switch (opt) {
 	case '3':
 		test_stereo_modes = 1;
@@ -641,12 +659,8 @@ static int opt_handler(int opt, int opt_index, void *data)
 		break;
 	case 'f':
 		force_mode = 1;
-		if (sscanf(optarg,"%f,%hu,%hu,%hu,%hu,%hu,%hu,%hu,%hu",
-			   &force_clock,&force_timing.hdisplay, &force_timing.hsync_start,&force_timing.hsync_end,&force_timing.htotal,
-			   &force_timing.vdisplay, &force_timing.vsync_start, &force_timing.vsync_end, &force_timing.vtotal)!= 9)
+		if (!igt_parse_mode_string(optarg, &force_timing))
 			return IGT_OPT_HANDLER_ERROR;
-		force_timing.clock = force_clock*1000;
-
 		break;
 	case 's':
 		sleep_between_modes = atoi(optarg);
@@ -671,14 +685,17 @@ static int opt_handler(int opt, int opt_index, void *data)
 		test_preferred_mode = 1;
 		break;
 	case 't':
-		tiling = LOCAL_I915_FORMAT_MOD_X_TILED;
+		modifier = I915_FORMAT_MOD_X_TILED;
 		break;
 	case 'y':
 	case OPT_YB:
-		tiling = LOCAL_I915_FORMAT_MOD_Y_TILED;
+		modifier = I915_FORMAT_MOD_Y_TILED;
 		break;
 	case OPT_YF:
-		tiling = LOCAL_I915_FORMAT_MOD_Yf_TILED;
+		modifier = I915_FORMAT_MOD_Yf_TILED;
+		break;
+	case '4':
+		modifier = I915_FORMAT_MOD_4_TILED;
 		break;
 	case 'r':
 		qr_code = 1;
@@ -696,7 +713,6 @@ igt_simple_main_args(optstr, long_opts, help_str, opt_handler, NULL)
 	int ret = 0;
 	GIOChannel *stdinchannel;
 	GMainLoop *mainloop;
-	igt_skip_on_simulation();
 
 	enter_exec_path();
 
@@ -778,7 +794,7 @@ out_hotplug:
 out_mainloop:
 	g_main_loop_unref(mainloop);
 out_close:
-	close(drm_fd);
+	drm_close_driver(drm_fd);
 
 	igt_assert_eq(ret, 0);
 }

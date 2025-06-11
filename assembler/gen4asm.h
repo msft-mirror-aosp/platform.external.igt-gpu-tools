@@ -46,7 +46,7 @@ extern int errors;
 #define WARN_ALL	(1 << 31)
 extern unsigned int warning_flags;
 
-extern char *input_filename;
+extern const char *input_filename;
 
 extern struct brw_context genasm_context;
 extern struct brw_compile genasm_compile;
@@ -116,7 +116,7 @@ struct src_operand {
 	int default_region;
 	uint32_t imm32; /* set if src_operand is expressing a branch offset */
 	char *reloc_target; /* bspec: branching instructions JIP and UIP are source operands */
-} src_operand;
+};
 
 typedef struct {
     enum {

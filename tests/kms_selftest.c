@@ -21,12 +21,47 @@
  * IN THE SOFTWARE.
  */
 
+/**
+ * TEST: kms selftest
+ * Category: Display
+ * Description: Basic sanity check of KMS selftests.
+ * Driver requirement: i915, xe
+ * Mega feature: General Display Features
+ */
+
 #include "igt.h"
 #include "igt_kmod.h"
+
+/**
+ * SUBTEST: %s
+ * Description: Basic sanity check of KMS selftest %arg[1].
+ *
+ * arg[1]:
+ *
+ * @drm_cmdline_parser:     drm cmdline parser
+ * @drm_damage_helper:      drm damage helper
+ * @drm_dp_mst_helper:      drm dp mst helper
+ * @drm_format_helper:      drm format helper
+ * @drm_format:             drm format
+ * @drm_plane_helper:       drm plane helper
+ * @drm_framebuffer:        drm framebuffer
+ */
 
 IGT_TEST_DESCRIPTION("Basic sanity check of KMS selftests.");
 
 igt_main
 {
-	igt_kselftests("test-drm_modeset", NULL, NULL, NULL);
+	static const char *kunit_subtests[] = {
+		"drm_cmdline_parser_test",
+		"drm_damage_helper_test",
+		"drm_dp_mst_helper_test",
+		"drm_format_helper_test",
+		"drm_format_test",
+		"drm_framebuffer_test",
+		"drm_plane_helper_test",
+		NULL,
+	};
+
+	for (int i = 0; kunit_subtests[i] != NULL; i++)
+		igt_kunit(kunit_subtests[i], NULL, NULL);
 }

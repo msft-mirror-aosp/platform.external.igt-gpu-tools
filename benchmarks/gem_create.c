@@ -39,16 +39,14 @@
 #include <time.h>
 
 #include "drm.h"
-#include "ioctl_wrappers.h"
 #include "drmtest.h"
+#include "i915/gem_create.h"
 #include "igt_aux.h"
 #include "igt_stats.h"
 #include "intel_reg.h"
+#include "ioctl_wrappers.h"
 
 #define OBJECT_SIZE (1<<23)
-
-#define LOCAL_I915_EXEC_NO_RELOC (1<<11)
-#define LOCAL_I915_EXEC_HANDLE_LUT (1<<12)
 
 static double elapsed(const struct timespec *start,
                         const struct timespec *end)
@@ -70,8 +68,8 @@ static void make_busy(int fd, uint32_t handle)
 	memset(&execbuf, 0, sizeof(execbuf));
 	execbuf.buffers_ptr = (uintptr_t)&gem_exec;
 	execbuf.buffer_count = 1;
-	execbuf.flags |= LOCAL_I915_EXEC_HANDLE_LUT;
-	execbuf.flags |= LOCAL_I915_EXEC_NO_RELOC;
+	execbuf.flags |= I915_EXEC_HANDLE_LUT;
+	execbuf.flags |= I915_EXEC_NO_RELOC;
 	if (__gem_execbuf(fd, &execbuf)) {
 		execbuf.flags = 0;
 		gem_execbuf(fd, &execbuf);
