@@ -920,13 +920,15 @@ test_cmrr(data_t *data, enum pipe pipe, igt_output_t *output, uint32_t flags)
 	}
 
 	igt_output_override_mode(output, &mode);
-	igt_display_commit2(&data->display, COMMIT_ATOMIC);
 
-	prepare_test(data, output, pipe);
-	result = flip_and_measure_cmrr(data, output, pipe, TEST_DURATION_NS * 2);
-	igt_assert_f(result > 75,
-		     "Refresh rate (%u Hz) %"PRIu64"ns: Target CMRR on threshold not reached, result was %u%%\n",
-		     mode.vrefresh, igt_kms_frame_time_from_vrefresh(mode.vrefresh), result);
+	if (!igt_display_try_commit2(&data->display, COMMIT_ATOMIC)) {
+		prepare_test(data, output, pipe);
+		result = flip_and_measure_cmrr(data, output, pipe, TEST_DURATION_NS * 2);
+		igt_assert_f(result > 75,
+			     "Refresh rate (%u Hz) %"PRIu64"ns: Target CMRR on threshold not reached, result was %u%%\n",
+			     mode.vrefresh, igt_kms_frame_time_from_vrefresh(mode.vrefresh),
+			     result);
+	}
 }
 
 static void test_cleanup(data_t *data, enum pipe pipe, igt_output_t *output)
@@ -1048,6 +1050,11 @@ run_vrr_test(data_t *data, test_t test, uint32_t flags)
 				igt_output_set_pipe(output, PIPE_NONE);
 				continue;
 			}
+
+			if (flags == TEST_LINK_OFF)
+				igt_require_f(psr_sink_support(data->drm_fd,
+					      data->debugfs_fd, PR_MODE, output),
+					      "LOBF not supported");
 
 			igt_dynamic_f("pipe-%s-%s",
 				      kmstest_pipe_name(pipe), output->name)
