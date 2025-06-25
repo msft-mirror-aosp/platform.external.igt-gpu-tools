@@ -24,6 +24,7 @@
 #ifndef GEM_VM_H
 #define GEM_VM_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 bool gem_has_vm(int i915);

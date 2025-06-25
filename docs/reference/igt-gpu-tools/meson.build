@@ -6,10 +6,10 @@ ignore_headers = [
 	'gen7_render.h',
 	'gen8_media.h',
 	'gen8_render.h',
+	'gen9_media.h',
 	'gpgpu_fill.h',
 	'i830_reg.h',
 	'i915_3d.h',
-	'i915_pciids.h',
 	'i915_reg.h',
 	'igt_edid_template.h',
 	'intel_reg.h',
@@ -20,19 +20,18 @@ ignore_headers = [
 	'media_spin.h',
 	'media_fill_gen9.h',
 	'gen9_render.h',
+	'pciids.h',
 	'version.h',
 ]
 
 test_groups = [
 	'amdgpu',
-	'chamelium',
 	'core',
 	'debugfs',
 	'drm',
 	'gem',
 	'gen3',
 	'gen7',
-	'gvt',
 	'i915',
 	'kms',
 	'meta',
@@ -52,7 +51,7 @@ generated_docs = []
 
 configure_file(input: 'version.xml.in',
 	       output: 'version.xml',
-	       install: false, configuration: config)
+	       configuration: config)
 
 foreach group : test_groups
 	programs_xml = 'igt_test_programs_' + group + '_programs.xml'

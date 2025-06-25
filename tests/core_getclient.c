@@ -31,6 +31,19 @@
 #include <stdlib.h>
 #include <errno.h>
 
+/**
+ * TEST: core getclient
+ * Description: Tests the DRM_IOCTL_GET_CLIENT ioctl.
+ * Category: Core
+ * Mega feature: General Core features
+ * Sub-category: DRM
+ * Functionality: permission management for clients
+ * Feature: core
+ * Test category: GEM_Legacy
+ *
+ * SUBTEST:
+ * Description: Tests the DRM_IOCTL_GET_CLIENT ioctl.
+ */
 
 IGT_TEST_DESCRIPTION("Tests the DRM_IOCTL_GET_CLIENT ioctl.");
 
@@ -58,5 +71,5 @@ igt_simple_main
 	ret = ioctl(fd, DRM_IOCTL_GET_CLIENT, &client);
 	igt_assert(ret == -1 && errno == EINVAL);
 
-	close(fd);
+	drm_close_driver(fd);
 }

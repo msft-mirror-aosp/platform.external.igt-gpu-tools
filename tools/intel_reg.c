@@ -32,12 +32,14 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "i915/gem_create.h"
 #include "igt.h"
 #include "igt_gt.h"
 #include "intel_io.h"
 #include "intel_chipset.h"
 
 #include "intel_reg_spec.h"
+#include "igt_device_scan.h"
 
 
 #ifdef HAVE_SYS_IO_H
@@ -57,6 +59,7 @@ static inline int _not_supported(void)
 
 struct config {
 	struct pci_device *pci_dev;
+	struct intel_mmio_data mmio_data;
 	char *mmiofile;
 	uint32_t devid;
 
@@ -65,6 +68,9 @@ struct config {
 
 	/* write: do a posting read */
 	bool post;
+
+	/* decode registers, otherwise use just raw values */
+	bool decode;
 
 	/* decode register for all platforms */
 	bool all_platforms;
@@ -82,6 +88,13 @@ struct config {
 	ssize_t regcount;
 
 	int verbosity;
+};
+
+struct igt_pci_slot {
+	int domain;
+	int bus;
+	int dev;
+	int func;
 };
 
 /* port desc must have been set */
@@ -178,7 +191,22 @@ static void to_binary(char *buf, size_t buflen, uint32_t val)
 	snprintf(buf, buflen, "\n");
 }
 
-static void dump_decode(struct config *config, struct reg *reg, uint32_t val)
+static bool port_is_mmio(enum port_addr port)
+{
+	switch (port) {
+	case PORT_MMIO_32:
+	case PORT_MMIO_16:
+	case PORT_MMIO_8:
+	case PORT_MCHBAR_32:
+	case PORT_MCHBAR_16:
+	case PORT_MCHBAR_8:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static void dump_regval(struct config *config, struct reg *reg, uint32_t val)
 {
 	char decode[1300];
 	char tmp[1024];
@@ -189,8 +217,11 @@ static void dump_decode(struct config *config, struct reg *reg, uint32_t val)
 	else
 		*bin = '\0';
 
-	intel_reg_spec_decode(tmp, sizeof(tmp), reg, val,
-			      config->all_platforms ? 0 : config->devid);
+	if (config->decode)
+		intel_reg_spec_decode(tmp, sizeof(tmp), reg, val,
+				      config->all_platforms ? 0 : config->devid);
+	else
+		*tmp = '\0';
 
 	if (*tmp) {
 		/* We have a decode result, and maybe binary decode. */
@@ -206,7 +237,7 @@ static void dump_decode(struct config *config, struct reg *reg, uint32_t val)
 		snprintf(decode, sizeof(decode), "\n");
 	}
 
-	if (reg->port_desc.port == PORT_MMIO) {
+	if (port_is_mmio(reg->port_desc.port)) {
 		/* Omit port name for MMIO, optionally include MMIO offset. */
 		if (reg->mmio_offset)
 			printf("%24s (0x%08x:0x%08x): 0x%08x%s",
@@ -251,7 +282,7 @@ static const struct intel_execution_engine2 *find_engine(const char *name)
 	if (name[0] == '-')
 		name++;
 
-	for (e = intel_execution_engines2; e->name; e++) {
+	__for_each_static_engine(e) {
 		if (!strcasecmp(e->name, name))
 			return e;
 	}
@@ -305,7 +336,7 @@ static int register_srm(struct config *config, struct reg *reg,
 		batch[i++] = MI_NOOP;
 		batch[i++] = MI_NOOP;
 
-		batch[i++] = MI_LOAD_REGISTER_IMM;
+		batch[i++] = MI_LOAD_REGISTER_IMM(1);
 		batch[i++] = reg->addr;
 		batch[i++] = *val_in;
 		batch[i++] = MI_NOOP;
@@ -353,24 +384,175 @@ static int register_srm(struct config *config, struct reg *reg,
 	return val;
 }
 
+static uint32_t mcbar_offset(uint32_t devid)
+{
+	return intel_gen(devid) >= 6 ? 0x140000 : 0x10000;
+}
+
+static uint8_t vga_read(uint16_t reg, bool mmio)
+{
+	uint8_t val;
+
+	if (mmio) {
+		val = INREG(reg);
+	} else {
+		iopl(3);
+		val = inb(reg);
+		iopl(0);
+	}
+
+	return val;
+}
+
+static void vga_write(uint16_t reg, uint8_t val, bool mmio)
+{
+	if (mmio) {
+		OUTREG(reg, val);
+	} else {
+		iopl(3);
+		outb(val, reg);
+		iopl(0);
+	}
+}
+
+static bool vga_is_cga_mode(bool mmio)
+{
+	return vga_read(MSR_R, mmio) & IO_ADDR_SELECT;
+}
+
+static uint16_t vga_st01(bool mmio)
+{
+	if (vga_is_cga_mode(mmio))
+		return ST01_CGA;
+	else
+		return ST01_MDA;
+}
+
+static void vga_ar_reset_flip_flop(bool mmio)
+{
+	vga_read(vga_st01(mmio), mmio);
+}
+
+static uint16_t vga_crx(bool mmio)
+{
+	if (vga_is_cga_mode(mmio))
+		return CRX_CGA;
+	else
+		return CRX_MDA;
+}
+
+static uint16_t vga_crd(bool mmio)
+{
+	if (vga_is_cga_mode(mmio))
+		return CRD_CGA;
+	else
+		return CRD_MDA;
+}
+
+static uint8_t vga_idx_read(uint16_t index_reg, uint16_t data_reg,
+			    uint8_t index, bool mmio)
+{
+	vga_write(index_reg, index, mmio);
+	return vga_read(data_reg, mmio);
+}
+
+static void vga_idx_write(uint16_t index_reg, uint16_t data_reg,
+			  uint8_t index, uint8_t value, bool mmio)
+{
+	vga_write(index_reg, index, mmio);
+	vga_write(data_reg, value, mmio);
+}
+
+static uint8_t vga_ar_read(uint8_t index, bool mmio)
+{
+	vga_ar_reset_flip_flop(mmio);
+	return vga_idx_read(ARX, ARD_R, index, mmio);
+}
+
+static void vga_ar_write(uint8_t index, uint8_t value, bool mmio)
+{
+	vga_ar_reset_flip_flop(mmio);
+	vga_idx_write(ARX, ARD_W, index, value, mmio);
+}
+
+static uint8_t vga_sr_read(uint8_t index, bool mmio)
+{
+	return vga_idx_read(SRX, SRD, index, mmio);
+}
+
+static void vga_sr_write(uint8_t index, uint8_t value, bool mmio)
+{
+	vga_idx_write(SRX, SRD, index, value, mmio);
+}
+
+static uint8_t vga_gr_read(uint8_t index, bool mmio)
+{
+	return vga_idx_read(GRX, GRD, index, mmio);
+}
+
+static void vga_gr_write(uint8_t index, uint8_t value, bool mmio)
+{
+	vga_idx_write(GRX, GRD, index, value, mmio);
+}
+
+static uint8_t vga_cr_read(uint8_t index, bool mmio)
+{
+	return vga_idx_read(vga_crx(mmio), vga_crd(mmio), index, mmio);
+}
+
+static void vga_cr_write(uint8_t index, uint8_t value, bool mmio)
+{
+	vga_idx_write(vga_crx(mmio), vga_crd(mmio), index, value, mmio);
+}
+
 static int read_register(struct config *config, struct reg *reg, uint32_t *valp)
 {
 	uint32_t val = 0;
 
 	switch (reg->port_desc.port) {
-	case PORT_MMIO:
+	case PORT_MCHBAR_32:
+	case PORT_MMIO_32:
 		if (reg->engine)
 			val = register_srm(config, reg, NULL);
 		else
 			val = INREG(reg->mmio_offset + reg->addr);
 		break;
-	case PORT_PORTIO_VGA:
+	case PORT_MCHBAR_16:
+	case PORT_MMIO_16:
+		val = INREG16(reg->mmio_offset + reg->addr);
+		break;
+	case PORT_MCHBAR_8:
+	case PORT_MMIO_8:
+		val = INREG8(reg->mmio_offset + reg->addr);
+		break;
+	case PORT_MMIO_VGA_AR:
+		val = vga_ar_read(reg->addr, true);
+		break;
+	case PORT_MMIO_VGA_SR:
+		val = vga_sr_read(reg->addr, true);
+		break;
+	case PORT_MMIO_VGA_GR:
+		val = vga_gr_read(reg->addr, true);
+		break;
+	case PORT_MMIO_VGA_CR:
+		val = vga_cr_read(reg->addr, true);
+		break;
+	case PORT_PORTIO:
 		iopl(3);
 		val = inb(reg->addr);
 		iopl(0);
 		break;
-	case PORT_MMIO_VGA:
-		val = INREG8(reg->addr);
+	case PORT_PORTIO_VGA_AR:
+		val = vga_ar_read(reg->addr, false);
+		break;
+	case PORT_PORTIO_VGA_SR:
+		val = vga_sr_read(reg->addr, false);
+		break;
+	case PORT_PORTIO_VGA_GR:
+		val = vga_gr_read(reg->addr, false);
+		break;
+	case PORT_PORTIO_VGA_CR:
+		val = vga_cr_read(reg->addr, false);
 		break;
 	case PORT_BUNIT:
 	case PORT_PUNIT:
@@ -387,7 +569,7 @@ static int read_register(struct config *config, struct reg *reg, uint32_t *valp)
 				reg->port_desc.name);
 			return -1;
 		}
-		val = intel_iosf_sb_read(reg->port_desc.port, reg->addr);
+		val = intel_iosf_sb_read(&config->mmio_data, reg->port_desc.port, reg->addr);
 		break;
 	default:
 		fprintf(stderr, "port %d not supported\n", reg->port_desc.port);
@@ -405,7 +587,7 @@ static void dump_register(struct config *config, struct reg *reg)
 	uint32_t val;
 
 	if (read_register(config, reg, &val) == 0)
-		dump_decode(config, reg, val);
+		dump_regval(config, reg, val);
 }
 
 static int write_register(struct config *config, struct reg *reg, uint32_t val)
@@ -418,14 +600,65 @@ static int write_register(struct config *config, struct reg *reg, uint32_t val)
 	}
 
 	switch (reg->port_desc.port) {
-	case PORT_MMIO:
+	case PORT_MCHBAR_32:
+	case PORT_MMIO_32:
 		if (reg->engine) {
 			register_srm(config, reg, &val);
 		} else {
 			OUTREG(reg->mmio_offset + reg->addr, val);
 		}
 		break;
-	case PORT_PORTIO_VGA:
+	case PORT_MCHBAR_16:
+	case PORT_MMIO_16:
+		if (val > 0xffff) {
+			fprintf(stderr, "value 0x%08x out of range for port %s\n",
+				val, reg->port_desc.name);
+			return -1;
+		}
+		OUTREG16(reg->mmio_offset + reg->addr, val);
+		break;
+	case PORT_MCHBAR_8:
+	case PORT_MMIO_8:
+		if (val > 0xff) {
+			fprintf(stderr, "value 0x%08x out of range for port %s\n",
+				val, reg->port_desc.name);
+			return -1;
+		}
+		OUTREG8(reg->mmio_offset + reg->addr, val);
+		break;
+	case PORT_MMIO_VGA_AR:
+		if (val > 0xff) {
+			fprintf(stderr, "value 0x%08x out of range for port %s\n",
+				val, reg->port_desc.name);
+			return -1;
+		}
+		vga_ar_write(reg->addr, val, true);
+		break;
+	case PORT_MMIO_VGA_SR:
+		if (val > 0xff) {
+			fprintf(stderr, "value 0x%08x out of range for port %s\n",
+				val, reg->port_desc.name);
+			return -1;
+		}
+		vga_sr_write(reg->addr, val, true);
+		break;
+	case PORT_MMIO_VGA_GR:
+		if (val > 0xff) {
+			fprintf(stderr, "value 0x%08x out of range for port %s\n",
+				val, reg->port_desc.name);
+			return -1;
+		}
+		vga_gr_write(reg->addr, val, true);
+		break;
+	case PORT_MMIO_VGA_CR:
+		if (val > 0xff) {
+			fprintf(stderr, "value 0x%08x out of range for port %s\n",
+				val, reg->port_desc.name);
+			return -1;
+		}
+		vga_cr_write(reg->addr, val, true);
+		break;
+	case PORT_PORTIO:
 		if (val > 0xff) {
 			fprintf(stderr, "value 0x%08x out of range for port %s\n",
 				val, reg->port_desc.name);
@@ -435,13 +668,37 @@ static int write_register(struct config *config, struct reg *reg, uint32_t val)
 		outb(val, reg->addr);
 		iopl(0);
 		break;
-	case PORT_MMIO_VGA:
+	case PORT_PORTIO_VGA_AR:
 		if (val > 0xff) {
 			fprintf(stderr, "value 0x%08x out of range for port %s\n",
 				val, reg->port_desc.name);
 			return -1;
 		}
-		OUTREG8(reg->addr, val);
+		vga_ar_write(reg->addr, val, false);
+		break;
+	case PORT_PORTIO_VGA_SR:
+		if (val > 0xff) {
+			fprintf(stderr, "value 0x%08x out of range for port %s\n",
+				val, reg->port_desc.name);
+			return -1;
+		}
+		vga_sr_write(reg->addr, val, false);
+		break;
+	case PORT_PORTIO_VGA_GR:
+		if (val > 0xff) {
+			fprintf(stderr, "value 0x%08x out of range for port %s\n",
+				val, reg->port_desc.name);
+			return -1;
+		}
+		vga_gr_write(reg->addr, val, false);
+		break;
+	case PORT_PORTIO_VGA_CR:
+		if (val > 0xff) {
+			fprintf(stderr, "value 0x%08x out of range for port %s\n",
+				val, reg->port_desc.name);
+			return -1;
+		}
+		vga_cr_write(reg->addr, val, false);
 		break;
 	case PORT_BUNIT:
 	case PORT_PUNIT:
@@ -458,7 +715,7 @@ static int write_register(struct config *config, struct reg *reg, uint32_t val)
 				reg->port_desc.name);
 			return -1;
 		}
-		intel_iosf_sb_write(reg->port_desc.port, reg->addr, val);
+		intel_iosf_sb_write(&config->mmio_data, reg->port_desc.port, reg->addr, val);
 		break;
 	default:
 		fprintf(stderr, "port %d not supported\n", reg->port_desc.port);
@@ -481,7 +738,7 @@ static int parse_engine(struct reg *reg, const char *s)
 
 	e = find_engine(s);
 	if (e) {
-		reg->port_desc.port = PORT_MMIO;
+		reg->port_desc.port = PORT_MMIO_32;
 		reg->port_desc.name = strdup(s);
 		reg->port_desc.stride = 4;
 		reg->engine = strdup(s);
@@ -529,6 +786,16 @@ static int parse_reg(struct config *config, struct reg *reg, const char *s)
 		return ret;
 	}
 
+	switch (reg->port_desc.port) {
+	case PORT_MCHBAR_32:
+	case PORT_MCHBAR_16:
+	case PORT_MCHBAR_8:
+		reg->mmio_offset = mcbar_offset(config->devid);
+		break;
+	default:
+		break;
+	}
+
 	addr = strtoul(p, &endp, 16);
 	if (endp > p && *endp == 0) {
 		/* It's a number. */
@@ -552,9 +819,9 @@ static int intel_reg_read(struct config *config, int argc, char *argv[])
 	}
 
 	if (config->mmiofile)
-		intel_mmio_use_dump_file(config->mmiofile);
+		intel_mmio_use_dump_file(&config->mmio_data, config->mmiofile);
 	else
-		intel_register_access_init(config->pci_dev, 0, -1);
+		intel_register_access_init(&config->mmio_data, config->pci_dev, 0);
 
 	for (i = 1; i < argc; i++) {
 		struct reg reg;
@@ -570,7 +837,7 @@ static int intel_reg_read(struct config *config, int argc, char *argv[])
 		}
 	}
 
-	intel_register_access_fini();
+	intel_register_access_fini(&config->mmio_data);
 
 	return EXIT_SUCCESS;
 }
@@ -584,7 +851,7 @@ static int intel_reg_write(struct config *config, int argc, char *argv[])
 		return EXIT_FAILURE;
 	}
 
-	intel_register_access_init(config->pci_dev, 0, -1);
+	intel_register_access_init(&config->mmio_data, config->pci_dev, 0);
 
 	for (i = 1; i < argc; i += 2) {
 		struct reg reg;
@@ -609,7 +876,7 @@ static int intel_reg_write(struct config *config, int argc, char *argv[])
 		write_register(config, &reg, val);
 	}
 
-	intel_register_access_fini();
+	intel_register_access_fini(&config->mmio_data);
 
 	return EXIT_SUCCESS;
 }
@@ -620,21 +887,21 @@ static int intel_reg_dump(struct config *config, int argc, char *argv[])
 	int i;
 
 	if (config->mmiofile)
-		intel_mmio_use_dump_file(config->mmiofile);
+		intel_mmio_use_dump_file(&config->mmio_data, config->mmiofile);
 	else
-		intel_register_access_init(config->pci_dev, 0, -1);
+		intel_register_access_init(&config->mmio_data, config->pci_dev, 0);
 
 	for (i = 0; i < config->regcount; i++) {
 		reg = &config->regs[i];
 
 		/* can't dump sideband with mmiofile */
-		if (config->mmiofile && reg->port_desc.port != PORT_MMIO)
+		if (config->mmiofile && !port_is_mmio(reg->port_desc.port))
 			continue;
 
 		dump_register(config, &config->regs[i]);
 	}
 
-	intel_register_access_fini();
+	intel_register_access_fini(&config->mmio_data);
 
 	return EXIT_SUCCESS;
 }
@@ -648,7 +915,7 @@ static int intel_reg_snapshot(struct config *config, int argc, char *argv[])
 		return EXIT_FAILURE;
 	}
 
-	intel_mmio_use_pci_bar(config->pci_dev);
+	intel_mmio_use_pci_bar(&config->mmio_data, config->pci_dev);
 
 	/* XXX: error handling */
 	if (write(1, igt_global_mmio, config->pci_dev->regions[mmio_bar].size) == -1)
@@ -691,7 +958,7 @@ static int intel_reg_decode(struct config *config, int argc, char *argv[])
 			continue;
 		}
 
-		dump_decode(config, &reg, val);
+		dump_regval(config, &reg, val);
 	}
 
 	return EXIT_SUCCESS;
@@ -714,10 +981,16 @@ struct command {
 	const char *name;
 	const char *description;
 	const char *synopsis;
+	bool decode;
 	int (*function)(struct config *config, int argc, char *argv[]);
 };
 
 static const struct command commands[] = {
+	{
+		.name = "help",
+		.function = intel_reg_help,
+		.description = "show this help",
+	},
 	{
 		.name = "read",
 		.function = intel_reg_read,
@@ -731,30 +1004,28 @@ static const struct command commands[] = {
 		.description = "write value(s) to specified register(s)",
 	},
 	{
+		.name = "snapshot",
+		.function = intel_reg_snapshot,
+		.description = "create a snapshot of the MMIO bar to stdout",
+	},
+	{
 		.name = "dump",
 		.function = intel_reg_dump,
 		.description = "dump all known registers",
+		.decode = true,
 	},
 	{
 		.name = "decode",
 		.function = intel_reg_decode,
 		.synopsis = "REGISTER VALUE [REGISTER VALUE ...]",
 		.description = "decode value(s) for specified register(s)",
-	},
-	{
-		.name = "snapshot",
-		.function = intel_reg_snapshot,
-		.description = "create a snapshot of the MMIO bar to stdout",
+		.decode = true,
 	},
 	{
 		.name = "list",
 		.function = intel_reg_list,
 		.description = "list all known register names",
-	},
-	{
-		.name = "help",
-		.function = intel_reg_help,
-		.description = "show this help",
+		.decode = true,
 	},
 };
 
@@ -782,15 +1053,19 @@ static int intel_reg_help(struct config *config, int argc, char *argv[])
 	printf("\n\n");
 
 	printf("ENGINE is one of:\n");
-	for (e = intel_execution_engines2; e->name; e++)
+	__for_each_static_engine(e)
 		printf("%s -%s ", e->name, e->name);
 	printf("\n\n");
 
 	printf("OPTIONS common to most COMMANDS:\n");
-	printf(" --spec=PATH    Read register spec from directory or file\n");
+	printf(" --spec=PATH    Read register spec from directory or file. Implies --decode\n");
 	printf(" --mmio=FILE    Use an MMIO snapshot\n");
 	printf(" --devid=DEVID  Specify PCI device ID for --mmio=FILE\n");
-	printf(" --all          Decode registers for all known platforms\n");
+	printf(" --decode       Decode registers. Implied by commands that require it\n");
+	printf(" --all          Decode registers for all known platforms. Implies --decode\n");
+	printf(" --pci-slot=BDF Decode registers for platform described by PCI slot\n"
+	       "		<domain>:<bus>:<device>[.<func>]\n"
+	       "                When this option is not provided use first matched Intel GPU\n");
 	printf(" --binary       Binary dump registers\n");
 	printf(" --verbose      Increase verbosity\n");
 	printf(" --quiet        Reduce verbosity\n");
@@ -856,6 +1131,9 @@ static int read_reg_spec(struct config *config)
 	struct stat st;
 	int r;
 
+	if (!config->decode)
+		return 0;
+
 	path = config->specfile;
 	if (!path)
 		path = getenv("INTEL_REG_SPEC");
@@ -897,6 +1175,62 @@ builtin:
 	return config->regcount;
 }
 
+static int parse_pci_slot_name(struct igt_pci_slot *st, const char *slot_name)
+{
+	st->domain = 0;
+	st->bus = 0;
+	st->dev = 0;
+	st->func = 0;
+
+	return sscanf(slot_name, "%x:%x:%x.%x", &st->domain, &st->bus, &st->dev, &st->func);
+}
+
+static bool is_intel_card_valid(struct pci_device *pci_dev)
+{
+	if (!pci_dev) {
+		fprintf(stderr, "PCI card not found\n");
+		return false;
+	}
+
+	if (pci_device_probe(pci_dev) != 0) {
+		fprintf(stderr, "Couldn't probe PCI card\n");
+		return false;
+	}
+
+	if (pci_dev->vendor_id != 0x8086) {
+		fprintf(stderr, "PCI card is non-Intel\n");
+		return false;
+	}
+
+	return true;
+}
+
+static bool find_dev_from_slot(struct pci_device **pci_dev, char *opt_slot)
+{
+	struct igt_pci_slot bdf;
+	bool ret;
+
+	if (parse_pci_slot_name(&bdf, opt_slot) < 3) {
+		fprintf(stderr, "Cannot decode PCI slot from '%s'\n", opt_slot);
+		return false;
+	}
+
+	if (pci_system_init() != 0) {
+		fprintf(stderr, "Couldn't initialize PCI system\n");
+		return false;
+	}
+
+	igt_devices_scan();
+	*pci_dev = pci_device_find_by_slot(bdf.domain, bdf.bus, bdf.dev, bdf.func);
+	ret = is_intel_card_valid(*pci_dev);
+	igt_devices_free();
+
+	if (!ret)
+		fprintf(stderr, "Cannot find PCI card given by slot '%s'\n", opt_slot);
+
+	return ret;
+}
+
 enum opt {
 	OPT_UNKNOWN = '?',
 	OPT_END = -1,
@@ -904,7 +1238,9 @@ enum opt {
 	OPT_DEVID,
 	OPT_COUNT,
 	OPT_POST,
+	OPT_DECODE,
 	OPT_ALL,
+	OPT_SLOT,
 	OPT_BINARY,
 	OPT_SPEC,
 	OPT_VERBOSE,
@@ -916,6 +1252,7 @@ int main(int argc, char *argv[])
 {
 	int ret, i, index;
 	char *endp;
+	char *opt_slot = NULL;
 	enum opt opt;
 	const struct command *command = NULL;
 	struct config config = {
@@ -938,7 +1275,9 @@ int main(int argc, char *argv[])
 		/* options specific to write */
 		{ "post",	no_argument,		NULL,	OPT_POST },
 		/* options specific to read, dump and decode */
+		{ "decode",	no_argument,		NULL,	OPT_DECODE },
 		{ "all",	no_argument,		NULL,	OPT_ALL },
+		{ "pci-slot",	required_argument,	NULL,	OPT_SLOT },
 		{ "binary",	no_argument,		NULL,	OPT_BINARY },
 		{ 0 }
 	};
@@ -973,6 +1312,7 @@ int main(int argc, char *argv[])
 			config.post = true;
 			break;
 		case OPT_SPEC:
+			config.decode = true;
 			config.specfile = strdup(optarg);
 			if (!config.specfile) {
 				fprintf(stderr, "strdup: %s\n",
@@ -982,6 +1322,18 @@ int main(int argc, char *argv[])
 			break;
 		case OPT_ALL:
 			config.all_platforms = true;
+			config.decode = true;
+			break;
+		case OPT_DECODE:
+			config.decode = true;
+			break;
+		case OPT_SLOT:
+			opt_slot = strdup(optarg);
+			if (!opt_slot) {
+				fprintf(stderr, "strdup: %s\n",
+					strerror(errno));
+				return EXIT_FAILURE;
+			}
 			break;
 		case OPT_BINARY:
 			config.binary = true;
@@ -1024,12 +1376,15 @@ int main(int argc, char *argv[])
 			fprintf(stderr, "--devid without --mmio\n");
 			return EXIT_FAILURE;
 		}
-		config.pci_dev = intel_get_pci_device();
-		config.devid = config.pci_dev->device_id;
-	}
 
-	if (read_reg_spec(&config) < 0) {
-		return EXIT_FAILURE;
+		if (opt_slot) {
+			if (!find_dev_from_slot(&config.pci_dev, opt_slot))
+				return EXIT_FAILURE;
+		} else {
+			config.pci_dev = intel_get_pci_device();
+		}
+
+		config.devid = config.pci_dev->device_id;
 	}
 
 	for (i = 0; i < ARRAY_SIZE(commands); i++) {
@@ -1044,12 +1399,21 @@ int main(int argc, char *argv[])
 		return EXIT_FAILURE;
 	}
 
+	if (command->decode)
+		config.decode = true;
+
+	if (read_reg_spec(&config) < 0)
+		return EXIT_FAILURE;
+
 	ret = command->function(&config, argc, argv);
 
 	free(config.mmiofile);
 
 	if (config.fd >= 0)
 		close(config.fd);
+
+	if (opt_slot)
+		free(opt_slot);
 
 	return ret;
 }

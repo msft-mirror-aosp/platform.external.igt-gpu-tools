@@ -30,8 +30,42 @@ The Code
   provided by the igt library. The semantic patch lib/igt.cocci can help with
   more automatic conversions.
 
+- Tests that use kernel interfaces (uapi, sysfs, or even debugfs) that
+  become deprecated in favour of new interfaces should have fallbacks
+  to the deprecated interfaces if the new stuff is not present in the
+  running kernel. The same IGT version can be used to test the tip of
+  development along with stable kernel releases that way.
+
 [igt-describe]: https://drm.pages.freedesktop.org/igt-gpu-tools/igt-gpu-tools-Core.html#igt-describe
 
+IGT libraries
+-------------
+- Tests and benchmarks are the main usage of IGT libraries, so they
+  could use test specific macros/functions, for example igt_assert,
+  igt_require, igt_skip, igt_info or igt_debug.
+
+- New library function could be written when it will have at least two
+  different users, for example if it could be used by two or more tests.
+  In some cases single user can be accepted, when it is very likely it
+  will be used in future.
+
+- In a new library function():
+  if it uses some of the macros igt_assert/igt_require/igt_skip then
+  consider to write also __function() with the same functionality but
+  without those macros.
+
+- Libraries and igt_runner
+  Runner should not use lib functions. It is crucial for CI runs so using
+  libraries puts a risk of bringing changes meant for tests which in turn
+  could break runner.
+  Note: You will find places where igt_runner uses lib functions - this will
+  be on ToDo list to be fixed.
+
+- Libraries and tools/
+  Give some thought if you are planning to use IGT lib code in tools, some
+  IGT lib functions might not be appropriate in tools. For example, any
+  abnormal condition should be simply reported by printf or fprintf to
+  stdout/stderr and then tool should exit gracefully.
 
 Sending Patches
 ---------------
@@ -57,6 +91,26 @@ Sending Patches
 
   on its first invocation.
 
+- If you plan to contribute regularly, please subscribe to igt-dev mailinglist:
+  https://lists.freedesktop.org/mailman/listinfo/igt-dev
+  When you are not subscribed, please note that your contribution will take
+  more time to reach to mailing list. You could find out if it was delivered or
+  what is a testing status of your patches at page:
+  https://patchwork.freedesktop.org/project/igt/series/
+  and also on
+  https://lore.kernel.org/igt-dev/
+
+- Place relevant prefix in subject, for example when your change is in one
+  testfile, use its name without '.c' nor '.h' suffix, like:
+  tests/simple_test: short description
+  Consider sending cover letter with your patch, so if you decide to change
+  subject it can still be linked into same patchseries on patchwork.
+
+- Look into some guides from Linux and Open Source community:
+  https://kernelnewbies.org/PatchPhilosophy
+  https://www.kernel.org/doc/html/latest/process/submitting-patches.html
+  https://www.kernel.org/doc/html/latest/process/submit-checklist.html
+
 - Patches need to be reviewed on the mailing list. Exceptions only apply for
   testcases and tooling for drivers with just a single contributor (e.g. vc4).
   In this case patches must still be submitted to the mailing list first.
@@ -69,8 +123,17 @@ Sending Patches
   contact one of the maintainers (listed in the MAINTAINERS file) and cc the
   igt-dev mailing list.
 
+- Before sending use Linux kernel script 'checkpatch.pl' for checking your
+  patchset. You could ignore some of them like 'line too long' or 'typedef'
+  but most of the time its log is accurate. Useful options you could use:
+  --emacs --strict --show-types --max-line-length=100 \
+  --ignore=BIT_MACRO,SPLIT_STRING,LONG_LINE_STRING,BOOL_MEMBER
+
 - Changes to the testcases are automatically tested. Take the results into
-  account before merging.
+  account before merging.  Please also reply to CI failures if you think they
+  are unrelated, add also to Cc CI e-mail which is present in message.  This
+  can help our bug-filing team. When replying, you can cut a message after
+  'Known bugs' to keep it in reasonable size.
 
 
 Commit Rights

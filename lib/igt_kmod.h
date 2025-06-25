@@ -31,43 +31,82 @@
 bool igt_kmod_is_loaded(const char *mod_name);
 void igt_kmod_list_loaded(void);
 
-int igt_kmod_load(const char *mod_name, const char *opts);
-int igt_kmod_unload(const char *mod_name, unsigned int flags);
+bool igt_kmod_has_param(const char *mod_name, const char *param);
 
-int igt_i915_driver_load(const char *opts);
-int igt_i915_driver_unload(void);
+int igt_kmod_load(const char *mod_name, const char *opts);
+int igt_kmod_unload(const char *mod_name);
+
+int igt_kmod_unbind(const char *mod_name, const char *pci_device);
+__attribute__((nonnull)) int igt_kmod_bind(const char *mod_name,
+					   const char *pci_device);
+__attribute__((nonnull)) int igt_kmod_rebind(const char *mod_name,
+					     const char *pci_device);
+
+int igt_audio_driver_unload(char **whom);
+
+int igt_intel_driver_load(const char *opts, const char *driver);
+int igt_intel_driver_unload(const char *driver);
+int __igt_intel_driver_unload(char **who, const char *driver);
+
+static inline int igt_i915_driver_load(const char *opts)
+{
+	return igt_intel_driver_load(opts, "i915");
+}
+
+static inline int igt_i915_driver_unload(void)
+{
+	return igt_intel_driver_unload("i915");
+}
+
+static inline int __igt_i915_driver_unload(char **whom)
+{
+	return __igt_intel_driver_unload(whom, "i915");
+};
+
+static inline int igt_xe_driver_load(const char *opts)
+{
+	return igt_intel_driver_load(opts, "xe");
+}
+
+
+int igt_xe_driver_unload(void);
+
+int igt_amdgpu_driver_load(const char *opts);
+int igt_amdgpu_driver_unload(void);
+
+void igt_kunit(const char *module_name, const char *name, const char *opts);
 
 void igt_kselftests(const char *module_name,
 		    const char *module_options,
 		    const char *result_option,
 		    const char *filter);
 
-struct igt_kselftest {
+struct igt_ktest {
 	struct kmod_module *kmod;
 	char *module_name;
 	int kmsg;
 };
 
 struct igt_kselftest_list {
-	struct igt_list link;
+	struct igt_list_head link;
 	unsigned int number;
 	char *name;
 	char param[];
 };
 
-int igt_kselftest_init(struct igt_kselftest *tst,
+int igt_ktest_init(struct igt_ktest *tst,
 		       const char *module_name);
-int igt_kselftest_begin(struct igt_kselftest *tst);
+int igt_ktest_begin(struct igt_ktest *tst);
 
 void igt_kselftest_get_tests(struct kmod_module *kmod,
 			     const char *filter,
-			     struct igt_list *tests);
-int igt_kselftest_execute(struct igt_kselftest *tst,
+			     struct igt_list_head *tests);
+int igt_kselftest_execute(struct igt_ktest *tst,
 			  struct igt_kselftest_list *tl,
 			  const char *module_options,
 			  const char *result);
 
-void igt_kselftest_end(struct igt_kselftest *tst);
-void igt_kselftest_fini(struct igt_kselftest *tst);
+void igt_ktest_end(struct igt_ktest *tst);
+void igt_ktest_fini(struct igt_ktest *tst);
 
 #endif /* IGT_KMOD_H */

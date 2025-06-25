@@ -1,158 +1,208 @@
 #include "intel_chipset.h"
-#include "i915_pciids.h"
+#include "pciids.h"
+#include "i915_pciids_local.h"
 
 #include <strings.h> /* ffs() */
 
 static const struct intel_device_info intel_generic_info = {
-	.gen = 0,
+	.graphics_ver = 0,
+	.display_ver = 0,
 };
 
 static const struct intel_device_info intel_i810_info = {
-	.gen = BIT(0),
+	.graphics_ver = 1,
+	.display_ver = 1,
 	.is_whitney = true,
 	.codename = "solano" /* 815 == "whitney" ? or vice versa? */
 };
 
 static const struct intel_device_info intel_i815_info = {
-	.gen = BIT(0),
+	.graphics_ver = 1,
+	.display_ver = 1,
 	.is_whitney = true,
 	.codename = "whitney"
 };
 
 static const struct intel_device_info intel_i830_info = {
-	.gen = BIT(1),
+	.graphics_ver = 2,
+	.display_ver = 2,
 	.is_almador = true,
+	.cmds_info = &pre_gen6_cmds_info,
 	.codename = "almador"
 };
 static const struct intel_device_info intel_i845_info = {
-	.gen = BIT(1),
+	.graphics_ver = 2,
+	.display_ver = 2,
 	.is_brookdale = true,
+	.cmds_info = &pre_gen6_cmds_info,
 	.codename = "brookdale"
 };
 static const struct intel_device_info intel_i855_info = {
-	.gen = BIT(1),
+	.graphics_ver = 2,
+	.display_ver = 2,
 	.is_mobile = true,
 	.is_montara = true,
+	.cmds_info = &pre_gen6_cmds_info,
 	.codename = "montara"
 };
 static const struct intel_device_info intel_i865_info = {
-	.gen = BIT(1),
+	.graphics_ver = 2,
+	.display_ver = 2,
 	.is_springdale = true,
+	.cmds_info = &pre_gen6_cmds_info,
 	.codename = "spingdale"
 };
 
 static const struct intel_device_info intel_i915_info = {
-	.gen = BIT(2),
+	.graphics_ver = 3,
+	.display_ver = 3,
 	.is_grantsdale = true,
+	.cmds_info = &pre_gen6_cmds_info,
 	.codename = "grantsdale"
 };
 static const struct intel_device_info intel_i915m_info = {
-	.gen = BIT(2),
+	.graphics_ver = 3,
+	.display_ver = 3,
 	.is_mobile = true,
 	.is_alviso = true,
+	.cmds_info = &pre_gen6_cmds_info,
 	.codename = "alviso"
 };
 static const struct intel_device_info intel_i945_info = {
-	.gen = BIT(2),
+	.graphics_ver = 3,
+	.display_ver = 3,
 	.is_lakeport = true,
+	.cmds_info = &pre_gen6_cmds_info,
 	.codename = "lakeport"
 };
 static const struct intel_device_info intel_i945m_info = {
-	.gen = BIT(2),
+	.graphics_ver = 3,
+	.display_ver = 3,
 	.is_mobile = true,
 	.is_calistoga = true,
+	.cmds_info = &pre_gen6_cmds_info,
 	.codename = "calistoga"
 };
 
 static const struct intel_device_info intel_g33_info = {
-	.gen = BIT(2),
+	.graphics_ver = 3,
+	.display_ver = 3,
 	.is_bearlake = true,
+	.cmds_info = &pre_gen6_cmds_info,
 	.codename = "bearlake"
 };
 
 static const struct intel_device_info intel_pineview_g_info = {
-	.gen = BIT(2),
+	.graphics_ver = 3,
+	.display_ver = 3,
 	.is_pineview = true,
+	.cmds_info = &pre_gen6_cmds_info,
 	.codename = "pineview"
 };
 
 static const struct intel_device_info intel_pineview_m_info = {
-	.gen = BIT(2),
+	.graphics_ver = 3,
+	.display_ver = 3,
 	.is_mobile = true,
 	.is_pineview = true,
+	.cmds_info = &pre_gen6_cmds_info,
 	.codename = "pineview"
 };
 
 static const struct intel_device_info intel_i965_info = {
-	.gen = BIT(3),
+	.graphics_ver = 4,
+	.display_ver = 4,
 	.is_broadwater = true,
+	.cmds_info = &pre_gen6_cmds_info,
 	.codename = "broadwater"
 };
 
 static const struct intel_device_info intel_i965m_info = {
-	.gen = BIT(3),
+	.graphics_ver = 4,
+	.display_ver = 4,
 	.is_mobile = true,
 	.is_crestline = true,
+	.cmds_info = &pre_gen6_cmds_info,
 	.codename = "crestline"
 };
 
 static const struct intel_device_info intel_g45_info = {
-	.gen = BIT(3),
+	.graphics_ver = 4,
+	.display_ver = 4,
 	.is_eaglelake = true,
+	.cmds_info = &pre_gen6_cmds_info,
 	.codename = "eaglelake"
 };
 static const struct intel_device_info intel_gm45_info = {
-	.gen = BIT(3),
+	.graphics_ver = 4,
+	.display_ver = 4,
 	.is_mobile = true,
 	.is_cantiga = true,
+	.cmds_info = &pre_gen6_cmds_info,
 	.codename = "cantiga"
 };
 
 static const struct intel_device_info intel_ironlake_info = {
-	.gen = BIT(4),
+	.graphics_ver = 5,
+	.display_ver = 5,
 	.is_ironlake = true,
+	.cmds_info = &pre_gen6_cmds_info,
 	.codename = "ironlake" /* clarkdale? */
 };
 static const struct intel_device_info intel_ironlake_m_info = {
-	.gen = BIT(4),
+	.graphics_ver = 5,
+	.display_ver = 5,
 	.is_mobile = true,
 	.is_arrandale = true,
+	.cmds_info = &pre_gen6_cmds_info,
 	.codename = "arrandale"
 };
 
 static const struct intel_device_info intel_sandybridge_info = {
-	.gen = BIT(5),
+	.graphics_ver = 6,
+	.display_ver = 6,
 	.is_sandybridge = true,
+	.cmds_info = &gen6_cmds_info,
 	.codename = "sandybridge"
 };
 static const struct intel_device_info intel_sandybridge_m_info = {
-	.gen = BIT(5),
+	.graphics_ver = 6,
+	.display_ver = 6,
 	.is_mobile = true,
 	.is_sandybridge = true,
+	.cmds_info = &gen6_cmds_info,
 	.codename = "sandybridge"
 };
 
 static const struct intel_device_info intel_ivybridge_info = {
-	.gen = BIT(6),
+	.graphics_ver = 7,
+	.display_ver = 7,
 	.is_ivybridge = true,
+	.cmds_info = &gen6_cmds_info,
 	.codename = "ivybridge"
 };
 static const struct intel_device_info intel_ivybridge_m_info = {
-	.gen = BIT(6),
+	.graphics_ver = 7,
+	.display_ver = 7,
 	.is_mobile = true,
 	.is_ivybridge = true,
+	.cmds_info = &gen6_cmds_info,
 	.codename = "ivybridge"
 };
 
 static const struct intel_device_info intel_valleyview_info = {
-	.gen = BIT(6),
+	.graphics_ver = 7,
+	.display_ver = 7,
 	.is_valleyview = true,
+	.cmds_info = &gen6_cmds_info,
 	.codename = "valleyview"
 };
 
 #define HASWELL_FIELDS \
-	.gen = BIT(6), \
+	.graphics_ver = 7, \
+	.display_ver = 7, \
 	.is_haswell = true, \
+	.cmds_info = &gen6_cmds_info, \
 	.codename = "haswell"
 
 static const struct intel_device_info intel_haswell_gt1_info = {
@@ -171,8 +221,10 @@ static const struct intel_device_info intel_haswell_gt3_info = {
 };
 
 #define BROADWELL_FIELDS \
-	.gen = BIT(7), \
+	.graphics_ver = 8, \
+	.display_ver = 8, \
 	.is_broadwell = true, \
+	.cmds_info = &gen8_cmds_info, \
 	.codename = "broadwell"
 
 static const struct intel_device_info intel_broadwell_gt1_info = {
@@ -195,13 +247,17 @@ static const struct intel_device_info intel_broadwell_unknown_info = {
 };
 
 static const struct intel_device_info intel_cherryview_info = {
-	.gen = BIT(7),
+	.graphics_ver = 8,
+	.display_ver = 8,
 	.is_cherryview = true,
+	.cmds_info = &gen8_cmds_info,
 	.codename = "cherryview"
 };
 
 #define SKYLAKE_FIELDS \
-	.gen = BIT(8), \
+	.graphics_ver = 9, \
+	.display_ver = 9, \
+	.cmds_info = &gen11_cmds_info, \
 	.codename = "skylake", \
 	.is_skylake = true
 
@@ -226,14 +282,18 @@ static const struct intel_device_info intel_skylake_gt4_info = {
 };
 
 static const struct intel_device_info intel_broxton_info = {
-	.gen = BIT(8),
+	.graphics_ver = 9,
+	.display_ver = 9,
 	.is_broxton = true,
+	.cmds_info = &gen11_cmds_info,
 	.codename = "broxton"
 };
 
 #define KABYLAKE_FIELDS \
-	.gen = BIT(8), \
+	.graphics_ver = 9, \
+	.display_ver = 9, \
 	.is_kabylake = true, \
+	.cmds_info = &gen11_cmds_info, \
 	.codename = "kabylake"
 
 static const struct intel_device_info intel_kabylake_gt1_info = {
@@ -257,14 +317,18 @@ static const struct intel_device_info intel_kabylake_gt4_info = {
 };
 
 static const struct intel_device_info intel_geminilake_info = {
-	.gen = BIT(8),
+	.graphics_ver = 9,
+	.display_ver = 9,
 	.is_geminilake = true,
+	.cmds_info = &gen11_cmds_info,
 	.codename = "geminilake"
 };
 
 #define COFFEELAKE_FIELDS \
-	.gen = BIT(8), \
+	.graphics_ver = 9, \
+	.display_ver = 9, \
 	.is_coffeelake = true, \
+	.cmds_info = &gen11_cmds_info, \
 	.codename = "coffeelake"
 
 static const struct intel_device_info intel_coffeelake_gt1_info = {
@@ -283,8 +347,10 @@ static const struct intel_device_info intel_coffeelake_gt3_info = {
 };
 
 #define COMETLAKE_FIELDS \
-	.gen = BIT(8), \
+	.graphics_ver = 9, \
+	.display_ver = 9, \
 	.is_cometlake = true, \
+	.cmds_info = &gen11_cmds_info, \
 	.codename = "cometlake"
 
 static const struct intel_device_info intel_cometlake_gt1_info = {
@@ -298,108 +364,301 @@ static const struct intel_device_info intel_cometlake_gt2_info = {
 };
 
 static const struct intel_device_info intel_cannonlake_info = {
-	.gen = BIT(9),
+	.graphics_ver = 10,
+	.display_ver = 10,
 	.is_cannonlake = true,
+	.cmds_info = &gen11_cmds_info,
 	.codename = "cannonlake"
 };
 
 static const struct intel_device_info intel_icelake_info = {
-	.gen = BIT(10),
+	.graphics_ver = 11,
+	.display_ver = 11,
 	.is_icelake = true,
+	.cmds_info = &gen11_cmds_info,
 	.codename = "icelake"
 };
 
-static const struct intel_device_info intel_tigerlake_info = {
-	.gen = BIT(11),
-	.is_tigerlake = true,
-	.codename = "tigerlake"
+static const struct intel_device_info intel_elkhartlake_info = {
+	.graphics_ver = 11,
+	.display_ver = 11,
+	.is_elkhartlake = true,
+	.cmds_info = &gen11_cmds_info,
+	.codename = "elkhartlake"
 };
+
+static const struct intel_device_info intel_jasperlake_info = {
+	.graphics_ver = 11,
+	.display_ver = 11,
+	.is_jasperlake = true,
+	.cmds_info = &gen11_cmds_info,
+	.codename = "jasperlake"
+};
+
+static const struct intel_device_info intel_tigerlake_gt1_info = {
+	.graphics_ver = 12,
+	.display_ver = 12,
+	.is_tigerlake = true,
+	.cmds_info = &gen12_cmds_info,
+	.codename = "tigerlake",
+	.gt = 1,
+};
+
+static const struct intel_device_info intel_tigerlake_gt2_info = {
+	.graphics_ver = 12,
+	.display_ver = 12,
+	.is_tigerlake = true,
+	.cmds_info = &gen12_cmds_info,
+	.codename = "tigerlake",
+	.gt = 2,
+};
+
+static const struct intel_device_info intel_rocketlake_info = {
+	.graphics_ver = 12,
+	.display_ver = 12,
+	.is_rocketlake = true,
+	.cmds_info = &gen12_cmds_info,
+	.codename = "rocketlake"
+};
+
+static const struct intel_device_info intel_dg1_info = {
+	.graphics_ver = 12,
+	.graphics_rel = 10,
+	.display_ver = 12,
+	.is_dg1 = true,
+	.cmds_info = &gen12_cmds_info,
+	.codename = "dg1"
+};
+
+static const struct intel_device_info intel_dg2_info = {
+	.graphics_ver = 12,
+	.graphics_rel = 55,
+	.display_ver = 13,
+	.has_4tile = true,
+	.is_dg2 = true,
+	.codename = "dg2",
+	.cmds_info = &gen12_dg2_cmds_info,
+	.has_flatccs = true,
+};
+
+static const struct intel_device_info intel_alderlake_s_info = {
+	.graphics_ver = 12,
+	.display_ver = 12,
+	.is_alderlake_s = true,
+	.cmds_info = &gen12_cmds_info,
+	.codename = "alderlake_s"
+};
+
+static const struct intel_device_info intel_raptorlake_s_info = {
+	.graphics_ver = 12,
+	.display_ver = 12,
+	.is_raptorlake_s = true,
+	.cmds_info = &gen12_cmds_info,
+	.codename = "raptorlake_s"
+};
+
+static const struct intel_device_info intel_alderlake_p_info = {
+	.graphics_ver = 12,
+	.display_ver = 13,
+	.is_alderlake_p = true,
+	.cmds_info = &gen12_cmds_info,
+	.codename = "alderlake_p"
+};
+
+static const struct intel_device_info intel_alderlake_n_info = {
+	.graphics_ver = 12,
+	.display_ver = 13,
+	.is_alderlake_n = true,
+	.cmds_info = &gen12_cmds_info,
+	.codename = "alderlake_n"
+};
+
+static const struct intel_device_info intel_ats_m_info = {
+	.graphics_ver = 12,
+	.graphics_rel = 55,
+	.display_ver = 0, /* no display support */
+	.is_dg2 = true,
+	.has_4tile = true,
+	.codename = "ats_m",
+	.cmds_info = &gen12_dg2_cmds_info,
+	.has_flatccs = true,
+};
+
+static const struct intel_device_info intel_meteorlake_info = {
+	.graphics_ver = 12,
+	.graphics_rel = 70,
+	.display_ver = 14,
+	.has_4tile = true,
+	.has_oam = true,
+	.is_meteorlake = true,
+	.codename = "meteorlake",
+	.cmds_info = &gen12_mtl_cmds_info,
+};
+
+static const struct intel_device_info intel_pontevecchio_info = {
+	.graphics_ver = 12,
+	.graphics_rel = 60,
+	.is_pontevecchio = true,
+	.codename = "pontevecchio",
+	.cmds_info = &gen12_pvc_cmds_info,
+};
+
+static const struct intel_device_info intel_lunarlake_info = {
+	.graphics_ver = 20,
+	.graphics_rel = 4,
+	.display_ver = 20,
+	.has_4tile = true,
+	.has_flatccs = true,
+	.has_oam = true,
+	.is_lunarlake = true,
+	.codename = "lunarlake",
+	.cmds_info = &xe2_cmds_info,
+};
+
+static const struct intel_device_info intel_battlemage_info = {
+	.graphics_ver = 20,
+	.graphics_rel = 1,
+	.display_ver = 14,
+	.has_4tile = true,
+	.has_flatccs = true,
+	.is_battlemage = true,
+	.codename = "battlemage",
+	.cmds_info = &xe2_cmds_info,
+};
+
+static const struct intel_device_info intel_pantherlake_info = {
+	.graphics_ver = 30,
+	.graphics_rel = 0,
+	.display_ver = 30,
+	.has_4tile = true,
+	.has_flatccs = true,
+	.is_pantherlake = true,
+	.codename = "pantherlake",
+	.cmds_info = &xe2_cmds_info,
+};
+
+#define INTEL_PCI_ID_INIT(_id, _info) { \
+	.vendor_id = 0x8086, .device_id = (_id), \
+	.subvendor_id = PCI_MATCH_ANY, .subdevice_id = PCI_MATCH_ANY, \
+	.device_class = 0x03 << 16, .device_class_mask = 0xff << 16, \
+	.match_data = (intptr_t)(_info), \
+}
 
 static const struct pci_id_match intel_device_match[] = {
-	INTEL_I810_IDS(&intel_i810_info),
-	INTEL_I815_IDS(&intel_i815_info),
+	INTEL_I810_IDS(INTEL_PCI_ID_INIT, &intel_i810_info),
+	INTEL_I815_IDS(INTEL_PCI_ID_INIT, &intel_i815_info),
 
-	INTEL_I830_IDS(&intel_i830_info),
-	INTEL_I845G_IDS(&intel_i845_info),
-	INTEL_I85X_IDS(&intel_i855_info),
-	INTEL_I865G_IDS(&intel_i865_info),
+	INTEL_I830_IDS(INTEL_PCI_ID_INIT, &intel_i830_info),
+	INTEL_I845G_IDS(INTEL_PCI_ID_INIT, &intel_i845_info),
+	INTEL_I85X_IDS(INTEL_PCI_ID_INIT, &intel_i855_info),
+	INTEL_I865G_IDS(INTEL_PCI_ID_INIT, &intel_i865_info),
 
-	INTEL_I915G_IDS(&intel_i915_info),
-	INTEL_I915GM_IDS(&intel_i915m_info),
-	INTEL_I945G_IDS(&intel_i945_info),
-	INTEL_I945GM_IDS(&intel_i945m_info),
+	INTEL_I915G_IDS(INTEL_PCI_ID_INIT, &intel_i915_info),
+	INTEL_I915GM_IDS(INTEL_PCI_ID_INIT, &intel_i915m_info),
+	INTEL_I945G_IDS(INTEL_PCI_ID_INIT, &intel_i945_info),
+	INTEL_I945GM_IDS(INTEL_PCI_ID_INIT, &intel_i945m_info),
 
-	INTEL_G33_IDS(&intel_g33_info),
-	INTEL_PINEVIEW_G_IDS(&intel_pineview_g_info),
-	INTEL_PINEVIEW_M_IDS(&intel_pineview_m_info),
+	INTEL_G33_IDS(INTEL_PCI_ID_INIT, &intel_g33_info),
+	INTEL_PNV_G_IDS(INTEL_PCI_ID_INIT, &intel_pineview_g_info),
+	INTEL_PNV_M_IDS(INTEL_PCI_ID_INIT, &intel_pineview_m_info),
 
-	INTEL_I965G_IDS(&intel_i965_info),
-	INTEL_I965GM_IDS(&intel_i965m_info),
+	INTEL_I965G_IDS(INTEL_PCI_ID_INIT, &intel_i965_info),
+	INTEL_I965GM_IDS(INTEL_PCI_ID_INIT, &intel_i965m_info),
 
-	INTEL_G45_IDS(&intel_g45_info),
-	INTEL_GM45_IDS(&intel_gm45_info),
+	INTEL_G45_IDS(INTEL_PCI_ID_INIT, &intel_g45_info),
+	INTEL_GM45_IDS(INTEL_PCI_ID_INIT, &intel_gm45_info),
 
-	INTEL_IRONLAKE_D_IDS(&intel_ironlake_info),
-	INTEL_IRONLAKE_M_IDS(&intel_ironlake_m_info),
+	INTEL_ILK_D_IDS(INTEL_PCI_ID_INIT, &intel_ironlake_info),
+	INTEL_ILK_M_IDS(INTEL_PCI_ID_INIT, &intel_ironlake_m_info),
 
-	INTEL_SNB_D_IDS(&intel_sandybridge_info),
-	INTEL_SNB_M_IDS(&intel_sandybridge_m_info),
+	INTEL_SNB_D_IDS(INTEL_PCI_ID_INIT, &intel_sandybridge_info),
+	INTEL_SNB_M_IDS(INTEL_PCI_ID_INIT, &intel_sandybridge_m_info),
 
-	INTEL_IVB_D_IDS(&intel_ivybridge_info),
-	INTEL_IVB_M_IDS(&intel_ivybridge_m_info),
+	INTEL_IVB_D_IDS(INTEL_PCI_ID_INIT, &intel_ivybridge_info),
+	INTEL_IVB_M_IDS(INTEL_PCI_ID_INIT, &intel_ivybridge_m_info),
 
-	INTEL_HSW_GT1_IDS(&intel_haswell_gt1_info),
-	INTEL_HSW_GT2_IDS(&intel_haswell_gt2_info),
-	INTEL_HSW_GT3_IDS(&intel_haswell_gt3_info),
+	INTEL_HSW_GT1_IDS(INTEL_PCI_ID_INIT, &intel_haswell_gt1_info),
+	INTEL_HSW_GT2_IDS(INTEL_PCI_ID_INIT, &intel_haswell_gt2_info),
+	INTEL_HSW_GT3_IDS(INTEL_PCI_ID_INIT, &intel_haswell_gt3_info),
 
-	INTEL_VLV_IDS(&intel_valleyview_info),
+	INTEL_VLV_IDS(INTEL_PCI_ID_INIT, &intel_valleyview_info),
 
-	INTEL_BDW_GT1_IDS(&intel_broadwell_gt1_info),
-	INTEL_BDW_GT2_IDS(&intel_broadwell_gt2_info),
-	INTEL_BDW_GT3_IDS(&intel_broadwell_gt3_info),
-	INTEL_BDW_RSVD_IDS(&intel_broadwell_unknown_info),
+	INTEL_BDW_GT1_IDS(INTEL_PCI_ID_INIT, &intel_broadwell_gt1_info),
+	INTEL_BDW_GT2_IDS(INTEL_PCI_ID_INIT, &intel_broadwell_gt2_info),
+	INTEL_BDW_GT3_IDS(INTEL_PCI_ID_INIT, &intel_broadwell_gt3_info),
+	INTEL_BDW_RSVD_IDS(INTEL_PCI_ID_INIT, &intel_broadwell_unknown_info),
 
-	INTEL_CHV_IDS(&intel_cherryview_info),
+	INTEL_CHV_IDS(INTEL_PCI_ID_INIT, &intel_cherryview_info),
 
-	INTEL_SKL_GT1_IDS(&intel_skylake_gt1_info),
-	INTEL_SKL_GT2_IDS(&intel_skylake_gt2_info),
-	INTEL_SKL_GT3_IDS(&intel_skylake_gt3_info),
-	INTEL_SKL_GT4_IDS(&intel_skylake_gt4_info),
+	INTEL_SKL_GT1_IDS(INTEL_PCI_ID_INIT, &intel_skylake_gt1_info),
+	INTEL_SKL_GT2_IDS(INTEL_PCI_ID_INIT, &intel_skylake_gt2_info),
+	INTEL_SKL_GT3_IDS(INTEL_PCI_ID_INIT, &intel_skylake_gt3_info),
+	INTEL_SKL_GT4_IDS(INTEL_PCI_ID_INIT, &intel_skylake_gt4_info),
 
-	INTEL_BXT_IDS(&intel_broxton_info),
+	INTEL_BXT_IDS(INTEL_PCI_ID_INIT, &intel_broxton_info),
 
-	INTEL_KBL_GT1_IDS(&intel_kabylake_gt1_info),
-	INTEL_KBL_GT2_IDS(&intel_kabylake_gt2_info),
-	INTEL_KBL_GT3_IDS(&intel_kabylake_gt3_info),
-	INTEL_KBL_GT4_IDS(&intel_kabylake_gt4_info),
-	INTEL_AML_KBL_GT2_IDS(&intel_kabylake_gt2_info),
+	INTEL_KBL_GT1_IDS(INTEL_PCI_ID_INIT, &intel_kabylake_gt1_info),
+	INTEL_KBL_GT2_IDS(INTEL_PCI_ID_INIT, &intel_kabylake_gt2_info),
+	INTEL_KBL_GT3_IDS(INTEL_PCI_ID_INIT, &intel_kabylake_gt3_info),
+	INTEL_KBL_GT4_IDS(INTEL_PCI_ID_INIT, &intel_kabylake_gt4_info),
+	INTEL_AML_KBL_GT2_IDS(INTEL_PCI_ID_INIT, &intel_kabylake_gt2_info),
 
-	INTEL_GLK_IDS(&intel_geminilake_info),
+	INTEL_GLK_IDS(INTEL_PCI_ID_INIT, &intel_geminilake_info),
 
-	INTEL_CFL_S_GT1_IDS(&intel_coffeelake_gt1_info),
-	INTEL_CFL_S_GT2_IDS(&intel_coffeelake_gt2_info),
-	INTEL_CFL_H_GT1_IDS(&intel_coffeelake_gt1_info),
-	INTEL_CFL_H_GT2_IDS(&intel_coffeelake_gt2_info),
-	INTEL_CFL_U_GT2_IDS(&intel_coffeelake_gt2_info),
-	INTEL_CFL_U_GT3_IDS(&intel_coffeelake_gt3_info),
-	INTEL_WHL_U_GT1_IDS(&intel_coffeelake_gt1_info),
-	INTEL_WHL_U_GT2_IDS(&intel_coffeelake_gt2_info),
-	INTEL_WHL_U_GT3_IDS(&intel_coffeelake_gt3_info),
-	INTEL_AML_CFL_GT2_IDS(&intel_coffeelake_gt2_info),
+	INTEL_CFL_S_GT1_IDS(INTEL_PCI_ID_INIT, &intel_coffeelake_gt1_info),
+	INTEL_CFL_S_GT2_IDS(INTEL_PCI_ID_INIT, &intel_coffeelake_gt2_info),
+	INTEL_CFL_H_GT1_IDS(INTEL_PCI_ID_INIT, &intel_coffeelake_gt1_info),
+	INTEL_CFL_H_GT2_IDS(INTEL_PCI_ID_INIT, &intel_coffeelake_gt2_info),
+	INTEL_CFL_U_GT2_IDS(INTEL_PCI_ID_INIT, &intel_coffeelake_gt2_info),
+	INTEL_CFL_U_GT3_IDS(INTEL_PCI_ID_INIT, &intel_coffeelake_gt3_info),
+	INTEL_WHL_U_GT1_IDS(INTEL_PCI_ID_INIT, &intel_coffeelake_gt1_info),
+	INTEL_WHL_U_GT2_IDS(INTEL_PCI_ID_INIT, &intel_coffeelake_gt2_info),
+	INTEL_WHL_U_GT3_IDS(INTEL_PCI_ID_INIT, &intel_coffeelake_gt3_info),
+	INTEL_AML_CFL_GT2_IDS(INTEL_PCI_ID_INIT, &intel_coffeelake_gt2_info),
 
-	INTEL_CML_GT1_IDS(&intel_cometlake_gt1_info),
-	INTEL_CML_GT2_IDS(&intel_cometlake_gt2_info),
+	INTEL_CML_GT1_IDS(INTEL_PCI_ID_INIT, &intel_cometlake_gt1_info),
+	INTEL_CML_GT2_IDS(INTEL_PCI_ID_INIT, &intel_cometlake_gt2_info),
+	INTEL_CML_U_GT1_IDS(INTEL_PCI_ID_INIT, &intel_cometlake_gt1_info),
+	INTEL_CML_U_GT2_IDS(INTEL_PCI_ID_INIT, &intel_cometlake_gt2_info),
 
-	INTEL_CNL_IDS(&intel_cannonlake_info),
+	INTEL_CNL_IDS(INTEL_PCI_ID_INIT, &intel_cannonlake_info),
 
-	INTEL_ICL_11_IDS(&intel_icelake_info),
+	INTEL_ICL_IDS(INTEL_PCI_ID_INIT, &intel_icelake_info),
 
-	INTEL_EHL_IDS(&intel_icelake_info),
+	INTEL_EHL_IDS(INTEL_PCI_ID_INIT, &intel_elkhartlake_info),
+	INTEL_JSL_IDS(INTEL_PCI_ID_INIT, &intel_jasperlake_info),
 
-	INTEL_TGL_12_IDS(&intel_tigerlake_info),
+	INTEL_TGL_GT1_IDS(INTEL_PCI_ID_INIT, &intel_tigerlake_gt1_info),
+	INTEL_TGL_GT2_IDS(INTEL_PCI_ID_INIT, &intel_tigerlake_gt2_info),
+	INTEL_RKL_IDS(INTEL_PCI_ID_INIT, &intel_rocketlake_info),
 
-	INTEL_VGA_DEVICE(PCI_MATCH_ANY, &intel_generic_info),
+	INTEL_DG1_IDS(INTEL_PCI_ID_INIT, &intel_dg1_info),
+	INTEL_DG2_IDS(INTEL_PCI_ID_INIT, &intel_dg2_info),
+
+	INTEL_ADLS_IDS(INTEL_PCI_ID_INIT, &intel_alderlake_s_info),
+	INTEL_RPLS_IDS(INTEL_PCI_ID_INIT, &intel_raptorlake_s_info),
+	INTEL_ADLP_IDS(INTEL_PCI_ID_INIT, &intel_alderlake_p_info),
+	INTEL_RPLU_IDS(INTEL_PCI_ID_INIT, &intel_alderlake_p_info),
+	INTEL_RPLP_IDS(INTEL_PCI_ID_INIT, &intel_alderlake_p_info),
+	INTEL_ADLN_IDS(INTEL_PCI_ID_INIT, &intel_alderlake_n_info),
+
+	INTEL_ATS_M_IDS(INTEL_PCI_ID_INIT, &intel_ats_m_info),
+
+	INTEL_MTL_IDS(INTEL_PCI_ID_INIT, &intel_meteorlake_info),
+	INTEL_ARL_IDS(INTEL_PCI_ID_INIT, &intel_meteorlake_info),
+
+	INTEL_PVC_IDS(INTEL_PCI_ID_INIT, &intel_pontevecchio_info),
+
+	INTEL_LNL_IDS(INTEL_PCI_ID_INIT, &intel_lunarlake_info),
+
+	INTEL_BMG_IDS(INTEL_PCI_ID_INIT, &intel_battlemage_info),
+
+	INTEL_PTL_IDS(INTEL_PCI_ID_INIT, &intel_pantherlake_info),
+
+	INTEL_PCI_ID_INIT(PCI_MATCH_ANY, &intel_generic_info),
 };
+
+#undef INTEL_PCI_ID_INIT
 
 /**
  * intel_get_device_info:
@@ -412,8 +671,8 @@ static const struct pci_id_match intel_device_match[] = {
  */
 const struct intel_device_info *intel_get_device_info(uint16_t devid)
 {
-	static const struct intel_device_info *cache = &intel_generic_info;
-	static uint16_t cached_devid;
+	static __thread const struct intel_device_info *cache = &intel_generic_info;
+	static __thread uint16_t cached_devid;
 	int i;
 
 	if (cached_devid == devid)
@@ -433,38 +692,55 @@ out:
 }
 
 /**
+ * intel_get_cmds_info:
+ * @devid: pci device id
+ *
+ * Looks up information on copy commands and tiling formats supported
+ * by the device.
+ *
+ * Returns:
+ * The associated intel_cmds_info, NULL if no such information is found
+ */
+const struct intel_cmds_info *intel_get_cmds_info(uint16_t devid)
+{
+	const struct intel_device_info *dev_info;
+
+	dev_info = intel_get_device_info(devid);
+
+	return dev_info->cmds_info;
+}
+
+/**
  * intel_gen:
  * @devid: pci device id
  *
  * Computes the Intel GFX generation for the given device id.
  *
  * Returns:
- * The GFX generation on successful lookup, 0 on failure.
+ * The GFX generation on successful lookup, -1u on failure.
  */
 unsigned intel_gen(uint16_t devid)
 {
-	return ffs(intel_get_device_info(devid)->gen);
+	return intel_get_device_info(devid)->graphics_ver ?: -1u;
+}
+
+unsigned intel_graphics_ver(uint16_t devid)
+{
+	const struct intel_device_info *info = intel_get_device_info(devid);
+
+	return IP_VER(info->graphics_ver, info->graphics_rel);
 }
 
 /**
- * intel_gt:
+ * intel_display_ver:
  * @devid: pci device id
  *
- * Computes the Intel GFX GT size for the given device id.
+ * Computes the Intel GFX display version for the given device id.
  *
  * Returns:
- * The GT size.
+ * The display version on successful lookup, -1u on failure.
  */
-unsigned intel_gt(uint16_t devid)
+unsigned intel_display_ver(uint16_t devid)
 {
-	unsigned mask = intel_gen(devid);
-
-	if (mask >= 8)
-		mask = 0xf;
-	else if (mask >= 6)
-		mask = 0x3;
-	else
-		mask = 0;
-
-	return (devid >> 4) & mask;
+	return intel_get_device_info(devid)->display_ver ?: -1u;
 }

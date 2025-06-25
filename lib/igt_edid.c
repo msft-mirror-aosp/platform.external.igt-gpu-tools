@@ -31,6 +31,7 @@
 #include <time.h>
 #include <xf86drmMode.h>
 
+#include "igt_aux.h"
 #include "igt_core.h"
 #include "igt_edid.h"
 
@@ -59,8 +60,11 @@ static const char monitor_range_padding[] = {
 
 const uint8_t hdmi_ieee_oui[3] = {0x03, 0x0C, 0x00};
 
-/* vfreq is in Hz */
-static void std_timing_set(struct std_timing *st, int hsize, int vfreq,
+/**
+ * std_timing_set: Sets the EDID standard timing for a given @hsize, @vfreq
+ * in Hz and @aspect ratio
+ */
+ void std_timing_set(struct std_timing *st, int hsize, int vfreq,
 			   enum std_timing_aspect aspect)
 {
 	assert(hsize >= 256 && hsize <= 2288);
@@ -183,10 +187,14 @@ void detailed_timing_set_string(struct detailed_timing *dt,
 
 	np->type = type;
 
-	strncpy(ds->str, str, sizeof(ds->str));
-	len = strlen(str);
+	len = min(strlen(str), sizeof(ds->str));
+	memcpy(ds->str, str, len);
+
 	if (len < sizeof(ds->str))
-		ds->str[len] = '\n';
+		ds->str[len++] = '\n';
+
+	while (len < sizeof(ds->str))
+		ds->str[len++] = ' ';
 }
 
 /**
@@ -200,6 +208,33 @@ void edid_get_mfg(const struct edid *edid, char out[static 3])
 	out[1] = (((edid->mfg_id[0] & 0x03) << 3) |
 		 ((edid->mfg_id[1] & 0xE0) >> 5)) + '@';
 	out[2] = (edid->mfg_id[1] & 0x1F) + '@';
+}
+
+void edid_get_monitor_name(const struct edid *edid, char *name, size_t name_size)
+{
+	const struct detailed_timing *dt;
+	const struct detailed_non_pixel *np;
+	const struct detailed_data_string *ds;
+	size_t i;
+
+	assert(name_size > 0);
+	name[0] = '\0';
+
+	for (i = 0; i < DETAILED_TIMINGS_LEN; i++) {
+		dt = &edid->detailed_timings[i];
+		np = &dt->data.other_data;
+
+		if (np->type != EDID_DETAIL_MONITOR_NAME)
+			continue;
+
+		ds = &np->data.string;
+		strncpy(name, ds->str, name_size - 1);
+		name[name_size - 1] = '\0';
+		igt_debug("Monitor name: %s\n", name);
+		return;
+	}
+	igt_debug("No monitor name found in EDID\n");
+	name[0] = '\0';
 }
 
 static void edid_set_mfg(struct edid *edid, const char mfg[static 3])
@@ -313,7 +348,25 @@ void edid_update_checksum(struct edid *edid)
 			ext->data.cea.checksum =
 				compute_checksum((uint8_t *) ext,
 						 sizeof(struct edid_ext));
+		else if (ext->tag == EDID_EXT_DISPLAYID) {
+			ext->data.tile.extension_checksum =
+				compute_checksum((uint8_t *) &ext->data.tile,
+						 sizeof(struct edid_ext));
+			ext->data.tile.checksum =
+				compute_checksum((uint8_t *) ext,
+						 sizeof(struct edid_ext));
+		}
 	}
+}
+
+/**
+ * base_edid_update_checksum: compute and update the checksum of the main EDID
+ * block
+ */
+void base_edid_update_checksum(struct edid *edid)
+{
+	edid->checksum = compute_checksum((uint8_t *) edid,
+					  sizeof(struct edid));
 }
 
 /**
@@ -324,6 +377,72 @@ size_t edid_get_size(const struct edid *edid)
 {
 	return sizeof(struct edid) +
 	       edid->extensions_len * sizeof(struct edid_ext);
+}
+
+static int ieee_oui(uint8_t oui[CEA_VSDB_HEADER_SIZE])
+{
+         return (oui[2] << 16) | (oui[1] << 8) | oui[0];
+}
+
+/**
+ * edid_get_deep_color_from_vsdb: return the Deep Color info from Vendor
+ * Specific Data Block (VSDB), if VSDB not found then return zero.
+ */
+uint8_t edid_get_deep_color_from_vsdb(const struct edid *edid)
+{
+	const struct edid_ext *edid_ext;
+	const struct edid_cea *edid_cea;
+	const char *cea_data;
+	uint8_t deep_color = 0;
+	int offset, i, j;
+
+	/*
+	 * Read from vendor specific data block first, if vsdb not found
+	 * return 0.
+	 */
+	for (i = 0; i < edid->extensions_len; i++) {
+		edid_ext = &edid->extensions[i];
+		edid_cea = &edid_ext->data.cea;
+
+		if ((edid_ext->tag != EDID_EXT_CEA) ||
+		    (edid_cea->revision != 3))
+			continue;
+
+		offset = edid_cea->dtd_start;
+		cea_data = edid_cea->data;
+
+		for (j = 0; j < offset; j += (cea_data[j] & 0x1F) + 1) {
+			struct edid_cea_data_block *vsdb =
+				(struct edid_cea_data_block *)(cea_data + j);
+
+			if (((vsdb->type_len & 0xE0) >> 5) != EDID_CEA_DATA_VENDOR_SPECIFIC)
+				continue;
+
+			if (ieee_oui(vsdb->data.vsdbs->ieee_oui) == 0x000C03)
+				deep_color = vsdb->data.vsdbs->data.hdmi.flags1;
+
+			if (deep_color & (7 << 4))
+				return deep_color;
+		}
+	}
+
+	return 0;
+}
+
+/**
+ * edid_get_bit_depth: Read from the Video Input Definition and return the
+ * Color Bit Depth if Input is a Digital Video, else return zero.
+ */
+uint8_t edid_get_bit_depth_from_vid(const struct edid *edid)
+{
+	/*
+	 * Video Signal Interface: Bit 7 (1:Digital, 0:Analog)
+	 * Color Bit Depth: Bits 6 → 4
+	 */
+	if (!(edid->input & (1 << 7)))
+		return 0;
+
+	return ((edid->input & (7 << 4)) >> 4);
 }
 
 /**
@@ -351,7 +470,7 @@ void cea_sad_init_pcm(struct cea_sad *sad, int channels,
 const struct cea_vsdb *cea_vsdb_get_hdmi_default(size_t *size)
 {
 	/* We'll generate a VSDB with 2 extension fields. */
-	static char raw[CEA_VSDB_HDMI_MIN_SIZE + 2] = {0};
+	static char raw[CEA_VSDB_HDMI_MIN_SIZE + 3] = {0};
 	struct cea_vsdb *vsdb;
 	struct hdmi_vsdb *hdmi;
 
@@ -459,6 +578,15 @@ size_t edid_cea_data_block_set_speaker_alloc(struct edid_cea_data_block *block,
 }
 
 /**
+ * edid_ext_set_tile initialize an EDID extension block to be identified
+ * as a tiled display topology block
+ */
+void edid_ext_set_displayid(struct edid_ext *ext)
+{
+	ext->tag = EDID_EXT_DISPLAYID;
+}
+
+/**
  * edid_ext_set_cea: initialize an EDID extension block to contain a CEA
  * extension. CEA extensions contain a Data Block Collection (with multiple
  * CEA data blocks) followed by multiple Detailed Timing Descriptors.
@@ -476,4 +604,124 @@ void edid_ext_set_cea(struct edid_ext *ext, size_t data_blocks_size,
 	cea->revision = 3;
 	cea->dtd_start = 4 + data_blocks_size;
 	cea->misc = flags | num_native_dtds;
+}
+
+/**
+ * dispid_block_tiled:
+ * @ptr: The DisplayID data block
+ * @num_htiles: Total number of horizontal tiles
+ * @num_vtiles: Total number of vertical tiles
+ * @htile: Horizontal tile location
+ * @vtile: Vertical tile location
+ * @hsize: Horizontal size
+ * @vsize: Vertical size
+ * @topology_id: Tiled display topology ID
+ *
+ * Fill a DisplayID tiled display topology data block
+ *
+ * Returns:
+ * A pointer to the next data block
+ */
+void *dispid_block_tiled(void *ptr,
+			 int num_htiles, int num_vtiles,
+			 int htile, int vtile,
+			 int hsize, int vsize,
+			 const char *topology_id)
+{
+	struct dispid_block_header *block = ptr;
+	struct dispid_tiled_block *tiled = (void*)(block + 1);
+	size_t len;
+
+	block->tag = 0x12;
+	block->rev = 0;
+	block->num_bytes = sizeof(*tiled);
+
+	num_htiles--;
+	num_vtiles--;
+	hsize--;
+	vsize--;
+
+	tiled->tile_caps =
+		DISPID_MULTI_TILE_AT_TILE_LOCATION |
+		DISPID_SINGLE_TILE_AT_TILE_LOCATION;
+
+	tiled->topo[0] = (num_htiles & 0xf) << 4 |
+		(num_vtiles & 0xf) << 0;
+
+	tiled->topo[1] = (htile & 0xf) << 4 |
+		(vtile & 0xf) << 0;
+
+	tiled->topo[2] = (num_htiles >> 4) << 6 |
+		(num_vtiles >> 4) << 4 |
+		(htile >> 4) << 2 |
+		(vtile >> 4) << 0;
+
+	tiled->tile_size[0] = hsize;
+	tiled->tile_size[1] = hsize >> 8;
+	tiled->tile_size[2] = vsize;
+	tiled->tile_size[3] = vsize >> 8;
+
+	len = min(strlen(topology_id), sizeof(tiled->topology_id));
+	memcpy(tiled->topology_id, topology_id, len);
+
+	return tiled + 1;
+}
+
+/**
+ * edid_ext_dispid:
+ * @ext: EDID extension block
+ *
+ * Mark the EDID extentions block as DisplayID.
+
+ * Returns:
+ * A pointer to the contained DisplayID.
+ */
+void *edid_ext_dispid(struct edid_ext *ext)
+{
+	struct edid_dispid *dispid = &ext->data.dispid;
+
+	edid_ext_set_displayid(ext);
+
+	return dispid;
+}
+
+/**
+ * dispid_init:
+ * @ptr: Pointer to the DisplayID
+ *
+ * Initialize the DisplayID header.
+ *
+ * Returns:
+ * A pointer to the first data block.
+ */
+void *dispid_init(void *ptr)
+{
+	struct dispid_header *dispid = ptr;
+
+	dispid->rev = 0x10;
+	dispid->prod_id = 0x3;
+	dispid->ext_count = 0;
+
+	return dispid + 1;
+}
+
+/**
+ * dispid_done:
+ * @dispid: Pointer to the DisplayID
+ * @ptr: Pointer to the end of the DisplayID (the checksum byte)
+ *
+ * Finalize the DisplayID (fill the number of bytes and checksum).
+ *
+ * Returns:
+ * A pointer just past the end of the DisplayID.
+ */
+void *dispid_done(struct dispid_header *dispid, void *ptr)
+{
+	int bytes = ptr - (void *)dispid;
+
+	dispid->num_bytes = bytes - sizeof(*dispid);
+
+	*(uint8_t *)ptr = compute_checksum((void*)dispid, bytes + 1);
+
+	return ptr + 1;
 }

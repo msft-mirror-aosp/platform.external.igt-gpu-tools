@@ -138,7 +138,7 @@ usage(const char *prog)
 	printf("   intel_gpu_frequency --set 400\tLock frequency to 400Mhz\n");
 	printf("   intel_gpu_frequency --custom max=750\tSet the max frequency to 750MHz\n");
 	printf("\n");
-	printf("Report bugs to <bugs.freedesktop.org>\n");
+	printf("Report bugs to https://gitlab.freedesktop.org/drm/igt-gpu-tools/-/issues\n");
 	exit(EXIT_FAILURE);
 }
 
@@ -283,7 +283,7 @@ int main(int argc, char *argv[])
 	bool write, fail, targets[MAX+1] = {false};
 	int i, fd, try = 1, set_freq[MAX+1] = {0};
 
-	fd = drm_open_driver(DRIVER_INTEL);
+	fd = __drm_open_driver(DRIVER_INTEL);
 	devid = intel_get_drm_devid(fd);
 	device = igt_device_get_card_index(fd);
 	close(fd);

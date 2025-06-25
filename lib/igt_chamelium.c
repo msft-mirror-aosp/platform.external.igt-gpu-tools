@@ -26,13 +26,18 @@
 
 #include "config.h"
 
+#include <stdbool.h>
 #include <string.h>
 #include <errno.h>
 #include <math.h>
 #include <xmlrpc-c/base.h>
 #include <xmlrpc-c/client.h>
 #include <pthread.h>
+#ifndef ANDROID
 #include <glib.h>
+#else
+#include "android/glib.h"
+#endif
 #include <pixman.h>
 #include <cairo.h>
 
@@ -43,6 +48,7 @@
 #include "igt_frame.h"
 #include "igt_list.h"
 #include "igt_kms.h"
+#include "igt_pipe_crc.h"
 #include "igt_rc.h"
 
 /**
@@ -82,19 +88,22 @@
  *
  */
 
-struct chamelium_edid {
-	struct chamelium *chamelium;
-	struct edid *base;
-	struct edid *raw[CHAMELIUM_MAX_PORTS];
-	int ids[CHAMELIUM_MAX_PORTS];
-	struct igt_list link;
-};
+/*
+ * We cannot expect chamelium_plug() to take effect imediately.
+ *
+ * Especially with modern, more complex hardware where we may have LSPcons and
+ * USB controllers in the way.
+ */
+#define CHAMELIUM_HOTPLUG_DETECTION_DELAY 10
 
 struct chamelium_port {
 	unsigned int type;
 	int id;
 	int connector_id;
 	char *name;
+	bool adapter_allowed;
+	char *connector_path;
+	bool is_mapped;
 };
 
 struct chamelium_frame_dump {
@@ -122,10 +131,12 @@ struct chamelium {
 
 	int drm_fd;
 
-	struct igt_list edids;
+	struct igt_list_head edids;
 	struct chamelium_port ports[CHAMELIUM_MAX_PORTS];
 	int port_count;
 };
+
+bool igt_chamelium_allow_fsm_handling = true;
 
 static struct chamelium *cleanup_instance;
 
@@ -146,7 +157,7 @@ struct chamelium_port **chamelium_get_ports(struct chamelium *chamelium,
 {
 	int i;
 	struct chamelium_port **ret =
-		calloc(sizeof(void*), chamelium->port_count);
+		calloc(chamelium->port_count, sizeof(void*));
 
 	*count = chamelium->port_count;
 	for (i = 0; i < chamelium->port_count; i++)
@@ -170,6 +181,20 @@ unsigned int chamelium_port_get_type(const struct chamelium_port *port) {
 }
 
 /**
+ * chamelium_port_get_name:
+ * @port: The chamelium port to retrieve the name of
+ *
+ * Gets the name of the DRM connector corresponding to the given Chamelium
+ * port.
+ *
+ * Returns: the name of the DRM connector
+ */
+const char *chamelium_port_get_name(struct chamelium_port *port)
+{
+	return port->name;
+}
+
+/**
  * chamelium_port_get_connector:
  * @chamelium: The Chamelium instance to use
  * @port: The chamelium port to retrieve the DRM connector for
@@ -184,30 +209,286 @@ drmModeConnector *chamelium_port_get_connector(struct chamelium *chamelium,
 					       struct chamelium_port *port,
 					       bool reprobe)
 {
-	drmModeConnector *connector;
+	typedef drmModeConnectorPtr (*getConnectorPtr)(int fd,
+						       uint32_t connector_id);
 
-	if (reprobe)
-		connector = drmModeGetConnector(chamelium->drm_fd,
-						port->connector_id);
-	else
-		connector = drmModeGetConnectorCurrent(
-		    chamelium->drm_fd, port->connector_id);
+	drmModeRes *res = NULL;
+	int i;
 
+	bool is_mst_port = !!port->connector_path;
+	getConnectorPtr getConnector = reprobe ? &drmModeGetConnector :
+						 &drmModeGetConnectorCurrent;
+	int drm_fd = chamelium->drm_fd;
+	drmModeConnector *connector = getConnector(drm_fd, port->connector_id);
+
+	/* If the port isn't MST, then the connector ID should be consistent to grab the connector. */
+	if (!is_mst_port) {
+		return connector;
+	}
+
+	/* If the port is MST, then we need to find the connector ID from the path. */
+
+	/* In case the connector ID is still valid, do a quick check if we're have the connector we expect. 
+	 * Otherwise, read the new resources and find the new connector we're looking for. */
+	if (connector) {
+		if (connector->connection == DRM_MODE_CONNECTED) {
+			drmModePropertyBlobPtr path_blob =
+				kmstest_get_path_blob(drm_fd,
+						      connector->connector_id);
+			if (path_blob) {
+				bool is_correct_connector =
+					strcmp(port->connector_path,
+					       path_blob->data) == 0;
+				drmModeFreePropertyBlob(path_blob);
+				if (is_correct_connector)
+					return connector;
+			}
+		}
+
+		drmModeFreeConnector(connector);
+		connector = NULL;
+	}
+
+	res = drmModeGetResources(drm_fd);
+	for (i = 0; i < res->count_connectors; i++) {
+		drmModePropertyBlobPtr path_blob = NULL;
+
+		connector = getConnector(drm_fd, res->connectors[i]);
+		/* Check if the connector is not disconnected and in zombie mode. */
+		if (!connector)
+			continue;
+		/* Check if the connector is MST. */
+		path_blob =
+			kmstest_get_path_blob(drm_fd, connector->connector_id);
+		if (!path_blob)
+			continue;
+
+		if (strcmp(path_blob->data, port->connector_path) == 0) {
+			char connector_name[50];
+			/* At finding the connector, update its metadata. */
+			port->connector_id = connector->connector_id;
+
+			snprintf(connector_name, 50, "%s-%u",
+				 kmstest_connector_type_str(
+					 connector->connector_type),
+				 connector->connector_type_id);
+			port->name = strdup(connector_name);
+
+			goto out;
+		}
+
+		drmModeFreePropertyBlob(path_blob);
+		drmModeFreeConnector(connector);
+		connector = NULL;
+	}
+
+out:
+	drmModeFreeResources(res);
 	return connector;
 }
 
 /**
- * chamelium_port_get_name:
- * @port: The chamelium port to retrieve the name of
+ * chamelium_require_connector_present
+ * @ports: All connected ports
+ * @type: Required port type
+ * @port_count: Total port count
+ * @count: The required number of port count
  *
- * Gets the name of the DRM connector corresponding to the given Chamelium
- * port.
- *
- * Returns: the name of the DRM connector
+ * Check there are required ports connected of given type
  */
-const char *chamelium_port_get_name(struct chamelium_port *port)
+void
+chamelium_require_connector_present(struct chamelium_port **ports,
+				    unsigned int type,
+				    int port_count,
+				    int count)
 {
-	return port->name;
+	int i;
+	int found = 0;
+
+	for (i = 0; i < port_count; i++) {
+		if (chamelium_port_get_type(ports[i]) == type)
+			found++;
+	}
+
+	igt_require_f(found >= count,
+		      "port of type %s found %d and required %d\n",
+		      kmstest_connector_type_str(type), found, count);
+}
+
+/**
+ * chamelium_reprobe_connector
+ * @display: A pointer to an #igt_display_t structure
+ * @chamelium: The Chamelium instance to use
+ * @port: Chamelium port to reprobe
+ *
+ *  Reprobe the given connector and fetch current status
+ *
+ *  Returns: drmModeConnection
+ */
+drmModeConnection
+chamelium_reprobe_connector(igt_display_t *display,
+			    struct chamelium *chamelium,
+			    struct chamelium_port *port)
+{
+	drmModeConnector *connector;
+	drmModeConnection connection_status;
+	igt_output_t *output;
+	bool is_mst_port = !!port->connector_path;
+
+	igt_debug("Reprobing %s...\n", chamelium_port_get_name(port));
+
+	if (is_mst_port)
+	{
+		int drm_fd = display->drm_fd;
+		drmModeRes *res = drmModeGetResources(drm_fd);
+		bool is_connector_found = false;
+		int i;
+
+		for (i = 0; i < res->count_connectors; ++i)
+		{
+			char connector_name[50];
+			uint64_t path_blob_id;
+			drmModePropertyBlobPtr path_blob = NULL;
+
+			connector = drmModeGetConnector(drm_fd, res->connectors[i]);
+			/* If the connector is now unplugged, the spawned connectors will no
+			   longer be available but can still be counted as part of
+			   res->count_connectors */
+			if (!connector)
+			{
+				drmModeFreeConnector(connector);
+				connector = NULL;
+				continue;
+			}
+
+			/* If the post is MST, it must have a path property - skip if not */
+			if (!kmstest_get_property(drm_fd, connector->connector_id,
+									  DRM_MODE_OBJECT_CONNECTOR, "PATH", NULL,
+									  &path_blob_id, NULL))
+			{
+				drmModeFreeConnector(connector);
+				connector = NULL;
+				continue;
+			}
+
+			igt_assert(path_blob =
+						   drmModeGetPropertyBlob(drm_fd, path_blob_id));
+			/* With MST, the only thing that is guaranteed to persist between
+			   plugs and unplugs is the PATH property. Verify that it matches
+			   what we previously saved. */
+			if (strcmp(path_blob->data, port->connector_path) == 0)
+			{
+				is_connector_found = true;
+				/* Update name and connector ID they can change between plugs and
+				   unplugs */
+				port->connector_id = connector->connector_id;
+				snprintf(connector_name, 50, "%s-%u",
+						 kmstest_connector_type_str(connector->connector_type),
+						 connector->connector_type_id);
+				port->name = strdup(connector_name);
+
+				drmModeFreePropertyBlob(path_blob);
+				break;
+			}
+
+			drmModeFreePropertyBlob(path_blob);
+			drmModeFreeConnector(connector);
+			connector = NULL;
+		}
+		drmModeFreeResources(res);
+
+		if (!is_connector_found)
+		{
+			igt_assert(!connector);
+			return DRM_MODE_DISCONNECTED;
+		}
+	}
+	else
+	{
+		connector = chamelium_port_get_connector(chamelium, port, true);
+	}
+
+	igt_assert(connector);
+	connection_status = connector->connection;
+
+	/* If we still have a connector, let's make sure that igt_display and
+	   the port are up to date too */
+	output = igt_output_from_connector(display, connector);
+	output->force_reprobe = true;
+	igt_output_refresh(output);
+
+	drmModeFreeConnector(connector);
+	return connection_status;
+}
+
+/**
+ * chamelium_wait_for_conn_status_change
+ * @display: A pointer to an #igt_display_t structure
+ * @chamelium: The Chamelium instance to use
+ * @port: Chamelium port to check connector status update
+ * @status: Enum which describes connector states
+ *
+ * Wait for the connector to change the status
+ */
+void
+chamelium_wait_for_conn_status_change(igt_display_t *display,
+			     struct chamelium *chamelium,
+			     struct chamelium_port *port,
+			     drmModeConnection status)
+{
+	igt_debug("Waiting for %s to get %s...\n",
+			  chamelium_port_get_name(port),
+			  kmstest_connector_status_str(status));
+
+	/*
+	 * Rely on simple reprobing so we don't fail tests that don't require
+	 * that hpd events work in the event that hpd doesn't work on the system
+	 */
+	igt_until_timeout(CHAMELIUM_HOTPLUG_TIMEOUT) {
+		if (chamelium_reprobe_connector(display,
+						chamelium, port) == status)
+			return;
+
+		usleep(50000);
+	}
+
+	igt_assert_f(false, "Timed out waiting for %s to get %s\n",
+				 chamelium_port_get_name(port),
+				 kmstest_connector_status_str(status));
+}
+
+/**
+ * chamelium_reset_state
+ *
+ * @chamelium: The Chamelium instance to use
+ * @port: Chamelium port to reset
+ * @ports: All connected ports
+ * @port_count: Count of connected ports
+ *
+ * Reset chamelium ports
+ */
+void
+chamelium_reset_state(igt_display_t *display,
+		      struct chamelium *chamelium,
+		      struct chamelium_port *port,
+		      struct chamelium_port **ports,
+		      int port_count)
+{
+	int p;
+
+	chamelium_reset(chamelium);
+
+	if (port) {
+		chamelium_wait_for_conn_status_change(display, chamelium,
+						      port,
+						      DRM_MODE_DISCONNECTED);
+	} else {
+		for (p = 0; p < port_count; p++) {
+			port = ports[p];
+			chamelium_wait_for_conn_status_change(display, chamelium,
+							      port, DRM_MODE_DISCONNECTED);
+		}
+	}
 }
 
 /**
@@ -234,6 +515,40 @@ struct fsm_monitor_args {
 	struct chamelium_port *port;
 	struct udev_monitor *mon;
 };
+
+static bool wait_for_connected_state(int drm_fd,
+				     int *connectors, int connector_count)
+{
+	igt_assert(connector_count > 0);
+
+	igt_until_timeout(CHAMELIUM_HOTPLUG_DETECTION_DELAY) {
+		bool connected;
+
+		for (int i = 0; i < connector_count; i++) {
+			drmModeConnector *connector =
+				drmModeGetConnector(drm_fd, connectors[i]);
+
+			if (!connector) {
+				connected = false;
+				break;
+			}
+
+			connected = connector->connection == DRM_MODE_CONNECTED;
+
+			drmModeFreeConnector(connector);
+
+			if (!connected)
+				break;
+		}
+
+		if (connected)
+			return true;
+
+		usleep(50000);
+	}
+
+	return false;
+}
 
 /*
  * Whenever resolutions or other factors change with the display output, the
@@ -264,11 +579,15 @@ static void *chamelium_fsm_mon(void *data)
 	connector = chamelium_port_get_connector(args->chamelium, args->port,
 						 false);
 	kmstest_set_connector_dpms(drm_fd, connector, DRM_MODE_DPMS_OFF);
+	wait_for_connected_state(drm_fd, &args->port->connector_id, 1);
+
 	kmstest_set_connector_dpms(drm_fd, connector, DRM_MODE_DPMS_ON);
 
 	drmModeFreeConnector(connector);
 	return NULL;
 }
+
+#define _RECEIVER_RESPONSIVE_AFTER_RESET_SECONDS 10
 
 static xmlrpc_value *__chamelium_rpc_va(struct chamelium *chamelium,
 					struct chamelium_port *fsm_port,
@@ -280,34 +599,44 @@ static xmlrpc_value *__chamelium_rpc_va(struct chamelium *chamelium,
 	struct fsm_monitor_args monitor_args;
 	pthread_t fsm_thread_id;
 
-	/* Cleanup the last error, if any */
-	if (chamelium->env.fault_occurred) {
-		xmlrpc_env_clean(&chamelium->env);
-		xmlrpc_env_init(&chamelium->env);
-	}
-
 	/* Unfortunately xmlrpc_client's event loop helpers are rather useless
 	 * for implementing any sort of event loop, since they provide no way
 	 * to poll for events other then the RPC response. This means in order
 	 * to handle the chamelium attempting FSM, we have to fork into another
 	 * thread and have that handle hotplugging displays
 	 */
-	if (fsm_port) {
+	if (fsm_port && igt_chamelium_allow_fsm_handling) {
 		monitor_args.chamelium = chamelium;
 		monitor_args.port = fsm_port;
-		monitor_args.mon = igt_watch_hotplug();
+		monitor_args.mon = igt_watch_uevents();
 		pthread_create(&fsm_thread_id, NULL, chamelium_fsm_mon,
 			       &monitor_args);
 	}
 
-	xmlrpc_client_call2f_va(&chamelium->env, chamelium->client,
-				chamelium->url, method_name, format_str, &res,
-				va_args);
+	igt_until_timeout(_RECEIVER_RESPONSIVE_AFTER_RESET_SECONDS) {
+		/* Cleanup the last error, if any */
+		if (chamelium->env.fault_occurred) {
+			xmlrpc_env_clean(&chamelium->env);
+			xmlrpc_env_init(&chamelium->env);
+		}
 
-	if (fsm_port) {
+		xmlrpc_client_call2f_va(&chamelium->env, chamelium->client,
+					chamelium->url, method_name, format_str, &res,
+					va_args);
+
+		if (!chamelium->env.fault_occurred)
+			break;
+
+		if (NULL == strstr(chamelium->env.fault_string, "I2C"))
+			break;
+
+		/* i2c error, let's try to retry */
+	}
+
+	if (fsm_port && igt_chamelium_allow_fsm_handling) {
 		pthread_cancel(fsm_thread_id);
 		pthread_join(fsm_thread_id, NULL);
-		igt_cleanup_hotplug(monitor_args.mon);
+		igt_cleanup_uevents(monitor_args.mon);
 	}
 
 	return res;
@@ -338,14 +667,31 @@ static xmlrpc_value *chamelium_rpc(struct chamelium *chamelium,
 {
 	xmlrpc_value *res;
 	va_list va_args;
+	int fsm_trials_left = 5;
 
-	va_start(va_args, format_str);
-	res = __chamelium_rpc_va(chamelium, fsm_port, method_name,
-				 format_str, va_args);
-	va_end(va_args);
+	if (strcmp(method_name, "CaptureVideo") == 0
+	    || strcmp(method_name, "StartCapturingVideo") == 0) {
+		while (fsm_trials_left) {
+			va_start(va_args, format_str);
+			res = __chamelium_rpc_va(chamelium, fsm_port,
+						 method_name, format_str,
+						 va_args);
+			va_end(va_args);
 
+			if (!chamelium->env.fault_occurred)
+				break;
+
+			igt_debug("DP FSM failed retrying, tries left %d\n", fsm_trials_left);
+			--fsm_trials_left;
+		}
+	} else {
+		va_start(va_args, format_str);
+		res = __chamelium_rpc_va(chamelium, fsm_port, method_name,
+					 format_str, va_args);
+		va_end(va_args);
+	}
 	igt_assert_f(!chamelium->env.fault_occurred,
-		     "Chamelium RPC call failed: %s\n",
+		     "Chamelium RPC call[%s] failed: %s\n", method_name,
 		     chamelium->env.fault_string);
 
 	return res;
@@ -361,18 +707,42 @@ static bool __chamelium_is_reachable(struct chamelium *chamelium)
 	if (res != NULL)
 		xmlrpc_DECREF(res);
 
-	if (chamelium->env.fault_occurred)
+	if (chamelium->env.fault_occurred) {
 		igt_debug("Chamelium RPC call failed: %s\n",
 			  chamelium->env.fault_string);
 
-	return !chamelium->env.fault_occurred;
+		xmlrpc_env_clean(&chamelium->env);
+		xmlrpc_env_init(&chamelium->env);
+
+		return false;
+	}
+
+	return true;
 }
 
-void chamelium_wait_reachable(struct chamelium *chamelium, int timeout)
+/**
+ * chamelium_wait_reachable:
+ * @chamelium: The Chamelium instance to use
+ * @timeout: Time (in seconds) to wait for chamelium to be reachable
+ *
+ * Returns: %true if the Chamelium is reachable, %false otherwise.
+ */
+bool chamelium_wait_reachable(struct chamelium *chamelium, int timeout)
 {
-	bool chamelium_online = igt_wait(__chamelium_is_reachable(chamelium),
-					 timeout * 1000, 100);
+	return igt_wait(__chamelium_is_reachable(chamelium),
+			timeout * 1000, 100);
+}
 
+/**
+ * chamelium_assert_reachable:
+ * @chamelium: The Chamelium instance to use
+ * @timeout: Time (in seconds) to wait for chamelium to be reachable
+ *
+ * Asserts that the chamelium is reachable.
+ */
+void chamelium_assert_reachable(struct chamelium *chamelium, int timeout)
+{
+	bool chamelium_online = chamelium_wait_reachable(chamelium, timeout);
 	igt_assert_f(chamelium_online,
 		     "Couldn't connect to Chamelium for %ds", timeout);
 }
@@ -649,6 +1019,33 @@ const struct edid *chamelium_edid_get_raw(struct chamelium_edid *edid,
 }
 
 /**
+ * chamelium_edid_get_editable_raw: get the raw EDID which can be edited later.
+ * @edid: the Chamelium EDID
+ * @port: the Chamelium port
+ *
+ * The EDID provided to #chamelium_new_edid may be mutated for identification
+ * purposes. This function allows to retrieve the exact EDID that will be set
+ * for a given port.
+ *
+ * The returned raw EDID is only valid until the next call to this function.
+ */
+struct edid *chamelium_edid_get_editable_raw(struct chamelium_edid *edid,
+					  struct chamelium_port *port)
+{
+	size_t port_index = port - edid->chamelium->ports;
+	size_t edid_size;
+
+	if (!edid->raw[port_index]) {
+		edid_size = edid_get_size(edid->base);
+		edid->raw[port_index] = malloc(edid_size);
+		memcpy(edid->raw[port_index], edid->base, edid_size);
+		chamelium_port_tag_edid(port, edid->raw[port_index]);
+	}
+
+	return edid->raw[port_index];
+}
+
+/**
  * chamelium_port_set_edid:
  * @chamelium: The Chamelium instance to use
  * @port: The port on the Chamelium to set the EDID on
@@ -682,6 +1079,46 @@ void chamelium_port_set_edid(struct chamelium *chamelium,
 		edid_id = 0;
 	}
 
+	xmlrpc_DECREF(chamelium_rpc(chamelium, NULL, "ApplyEdid", "(ii)",
+				    port->id, edid_id));
+}
+
+/**
+ * chamelium_port_set_tiled_edid:
+ * @chamelium: The Chamelium instance to use
+ * @port: The port on the Chamelium to set the EDID on
+ * @edid: The Chamelium EDID to set or NULL to use the default Chamelium EDID
+ *
+ * Sets unique serial for tiled edid.
+ * Sets a port on the chamelium to use the specified EDID. This does not fire a
+ * hotplug pulse on it's own, and merely changes what EDID the chamelium port
+ * will report to us the next time we probe it. Users will need to reprobe the
+ * connectors themselves if they want to see the EDID reported by the port
+ * change.
+ *
+ * To create an EDID, see #chamelium_new_edid.
+ */
+void chamelium_port_set_tiled_edid(struct chamelium *chamelium,
+			     struct chamelium_port *port,
+			     struct chamelium_edid *edid)
+{
+	int edid_id;
+	size_t port_index;
+	struct edid *raw_edid;
+
+	if (edid) {
+		port_index = port - chamelium->ports;
+		edid_id = edid->ids[port_index];
+		if (edid_id == 0) {
+			raw_edid = chamelium_edid_get_editable_raw(edid, port);
+			raw_edid->serial[0] = 0x02;
+			base_edid_update_checksum(raw_edid);
+			edid_id = chamelium_upload_edid(chamelium, raw_edid);
+			edid->ids[port_index] = edid_id;
+		}
+	} else {
+		edid_id = 0;
+	}
 	xmlrpc_DECREF(chamelium_rpc(chamelium, NULL, "ApplyEdid", "(ii)",
 				    port->id, edid_id));
 }
@@ -1088,7 +1525,7 @@ igt_crc_t *chamelium_read_captured_crcs(struct chamelium *chamelium,
 	res = chamelium_rpc(chamelium, NULL, "GetCapturedChecksums", "(in)", 0);
 
 	*frame_count = xmlrpc_array_size(&chamelium->env, res);
-	ret = calloc(sizeof(igt_crc_t), *frame_count);
+	ret = calloc(*frame_count, sizeof(igt_crc_t));
 
 	for (i = 0; i < *frame_count; i++) {
 		xmlrpc_array_read_item(&chamelium->env, res, i, &elem);
@@ -1204,21 +1641,6 @@ void chamelium_infoframe_destroy(struct chamelium_infoframe *infoframe)
 {
 	free(infoframe->payload);
 	free(infoframe);
-}
-
-bool chamelium_supports_trigger_link_failure(struct chamelium *chamelium)
-{
-	return chamelium_supports_method(chamelium, "TriggerLinkFailure");
-}
-
-/**
- * chamelium_trigger_link_failure: trigger a link failure on the provided port.
- */
-void chamelium_trigger_link_failure(struct chamelium *chamelium,
-				    struct chamelium_port *port)
-{
-	xmlrpc_DECREF(chamelium_rpc(chamelium, port, "TriggerLinkFailure",
-				    "(i)", port->id));
 }
 
 bool chamelium_has_audio_support(struct chamelium *chamelium,
@@ -1460,7 +1882,7 @@ static void compared_frames_dump(cairo_surface_t *reference,
 	}
 
 	if (!capture_crc) {
-		chamelium_do_calculate_fb_crc(reference, &local_capture_crc);
+		chamelium_do_calculate_fb_crc(capture, &local_capture_crc);
 		capture_crc = &local_capture_crc;
 	}
 
@@ -1583,6 +2005,27 @@ void chamelium_assert_frame_match_or_dump(struct chamelium *chamelium,
 					  struct igt_fb *fb,
 					  enum chamelium_check check)
 {
+	igt_assert(chamelium_frame_match_or_dump(chamelium, port,
+						 frame, fb, check));
+}
+
+/**
+ * chamelium_frame_match_or_dump:
+ * @chamelium: The chamelium instance the frame dump belongs to
+ * @frame: The chamelium frame dump to match
+ * @fb: pointer to an #igt_fb structure
+ * @check: the type of frame matching check to use
+ *
+ * Returns bool that the provided captured frame matches the reference
+ * frame from the framebuffer. If they do not, this saves the reference
+ * and captured frames to a png file.
+ */
+bool chamelium_frame_match_or_dump(struct chamelium *chamelium,
+				   struct chamelium_port *port,
+				   const struct chamelium_frame_dump *frame,
+				   struct igt_fb *fb,
+				   enum chamelium_check check)
+{
 	cairo_surface_t *reference;
 	cairo_surface_t *capture;
 	igt_crc_t *reference_crc;
@@ -1625,10 +2068,56 @@ void chamelium_assert_frame_match_or_dump(struct chamelium *chamelium,
 		free(capture_crc);
 	}
 
-	igt_assert(match);
+	cairo_surface_destroy(reference);
+	cairo_surface_destroy(capture);
+
+	return match;
+}
+
+/**
+ * chamelium_frame_match_or_dump_frame_pair:
+ * @chamelium: The chamelium instance the frame dump belongs to
+ * @frame0: The chamelium reference frame dump to match
+ * @frame1: The chamelium capture frame dump to match
+ * @check: the type of frame matching check to use
+ *
+ * Returns bool that the provided captured frames matches.
+ * If they do not, this saves the frames to a png file.
+ */
+bool chamelium_frame_match_or_dump_frame_pair(struct chamelium *chamelium,
+					      struct chamelium_port *port,
+					      const struct chamelium_frame_dump *frame0,
+					      const struct chamelium_frame_dump *frame1,
+					      enum chamelium_check check)
+{
+	cairo_surface_t *reference;
+	cairo_surface_t *capture;
+	bool match;
+
+	/* Grab the captured reference frame from chamelium */
+	reference = convert_frame_dump_argb32(frame0);
+
+	/* Grab the captured frame from chamelium */
+	capture = convert_frame_dump_argb32(frame1);
+
+	switch (check) {
+	case CHAMELIUM_CHECK_ANALOG:
+		match = igt_check_analog_frame_match(reference, capture);
+		break;
+	case CHAMELIUM_CHECK_CHECKERBOARD:
+		match = igt_check_checkerboard_frame_match(reference, capture);
+		break;
+	default:
+		igt_assert(false);
+	}
+
+	if (!match && igt_frame_dump_is_enabled())
+		compared_frames_dump(reference, capture, 0, 0);
 
 	cairo_surface_destroy(reference);
 	cairo_surface_destroy(capture);
+
+	return match;
 }
 
 /**
@@ -1947,7 +2436,13 @@ static size_t chamelium_get_video_ports(struct chamelium *chamelium,
 	int res_len, i, port_id;
 	size_t port_ids_len = 0;
 
-	res = chamelium_rpc(chamelium, NULL, "GetSupportedInputs", "()");
+	res = __chamelium_rpc(chamelium, NULL, "GetSupportedInputs", "()");
+	if (chamelium->env.fault_occurred) {
+		igt_debug("Chamelium RPC call failed: %s\n",
+		     chamelium->env.fault_string);
+
+		return -1;
+	}
 	res_len = xmlrpc_array_size(&chamelium->env, res);
 	for (i = 0; i < res_len; i++) {
 		xmlrpc_array_read_item(&chamelium->env, res, i, &res_port);
@@ -1964,6 +2459,23 @@ static size_t chamelium_get_video_ports(struct chamelium *chamelium,
 	xmlrpc_DECREF(res);
 
 	return port_ids_len;
+}
+
+static void chamelium_set_port_path(struct chamelium_port *port,
+									uint32_t connector_id,
+									int drm_fd)
+{
+	uint64_t path_blob_id;
+	drmModePropertyBlobPtr path_blob = NULL;
+
+	if (kmstest_get_property(drm_fd, connector_id, DRM_MODE_OBJECT_CONNECTOR,
+							 "PATH", NULL, &path_blob_id, NULL))
+	{
+		igt_assert(path_blob = drmModeGetPropertyBlob(drm_fd, path_blob_id));
+		port->connector_path = strdup(path_blob->data);
+
+		drmModeFreePropertyBlob(path_blob);
+	}
 }
 
 static bool chamelium_read_port_mappings(struct chamelium *chamelium,
@@ -2005,7 +2517,7 @@ static bool chamelium_read_port_mappings(struct chamelium *chamelium,
 		port->id = g_key_file_get_integer(igt_key_file, group,
 						  "ChameliumPortID",
 						  &error);
-		if (!port->id) {
+		if (error) {
 			igt_warn("Failed to read chamelium port ID for %s: %s\n",
 				 map_name, error->message);
 			ret = false;
@@ -2018,6 +2530,16 @@ static bool chamelium_read_port_mappings(struct chamelium *chamelium,
 				 map_name);
 			ret = false;
 			goto out;
+		}
+
+		if (g_key_file_has_key(igt_key_file, group, "AdapterAllowed", NULL)) {
+			port->adapter_allowed = g_key_file_get_boolean(igt_key_file, group,
+								       "AdapterAllowed", &error);
+			if (error) {
+				igt_warn("Unable to read AdapterAllowed: %s\n", error->message);
+				ret = false;
+				goto out;
+			}
 		}
 
 		for (j = 0;
@@ -2035,6 +2557,9 @@ static bool chamelium_read_port_mappings(struct chamelium *chamelium,
 
 			if (strcmp(name, map_name) == 0)
 				port->connector_id = connector->connector_id;
+
+			chamelium_set_port_path(port, connector->connector_id,
+									drm_fd);
 
 			drmModeFreeConnector(connector);
 		}
@@ -2065,6 +2590,10 @@ static int port_id_from_edid(int drm_fd, drmModeConnector *connector)
 	drmModePropertyBlobRes *edid_blob;
 	const struct edid *edid;
 	char mfg[3];
+
+	/* MST connectors stop being valid on unplug but would still exist in DRM Resources. */
+	if (!connector)
+		return -1;
 
 	if (connector->connection != DRM_MODE_CONNECTED) {
 		igt_debug("Skipping auto-discovery for connector %s-%d: "
@@ -2118,6 +2647,89 @@ out:
 	return port_id;
 }
 
+static bool get_connector_id_for_port(struct chamelium *chamelium,
+				      const int expected_port_id,
+				      uint32_t *attached_connector_id)
+{
+	int i;
+
+	int drm_fd = chamelium->drm_fd;
+	drmModeRes *res = drmModeGetResources(drm_fd);
+	if (!res)
+		return false;
+
+	for (i = 0; i < res->count_connectors; i++) {
+		uint32_t conn_id;
+		size_t j;
+
+		/* Read the EDID and parse the Chamelium port ID we stored there. */
+		drmModeConnector *connector =
+			drmModeGetConnector(drm_fd, res->connectors[i]);
+		int port_id = port_id_from_edid(drm_fd, connector);
+		drmModeFreeConnector(connector);
+		if (port_id != expected_port_id)
+			continue;
+
+		/* If we already have a mapping from the config file, check that it's consistent. */
+		conn_id = res->connectors[i];
+		for (j = 0; j < chamelium->port_count; j++) {
+			struct chamelium_port *port = &chamelium->ports[j];
+			if (port->connector_id == conn_id) {
+				igt_assert_f(
+					port->id == port_id,
+					"Inconsistency detected in .igtrc: "
+					"connector %s is configured with "
+					"Chamelium port %d, but is "
+					"connected to port %d\n",
+					port->name, port->id, port_id);
+				return false;
+			}
+		}
+
+		*attached_connector_id = conn_id;
+		return true;
+	}
+
+	return false;
+}
+
+static void selective_sort_ports(struct chamelium_port *ports) {
+    int mapped_count = 0;
+    int unmapped_count = 0;
+    int mapped_index = 0;
+    int unmapped_index = mapped_count;
+    struct chamelium_port sorted_ports[CHAMELIUM_MAX_PORTS];
+
+    /*
+     * Count the number of mapped and unmapped ports
+     */
+    for (int i = 0; i < CHAMELIUM_MAX_PORTS; i++) {
+        if (ports[i].is_mapped) {
+            mapped_count++;
+        } else {
+            unmapped_count++;
+        }
+    }
+
+    /*
+     * Rearrange the ports such that mapped ports are at the start
+     */
+    unmapped_index = mapped_count;
+
+    for (int i = 0; i < CHAMELIUM_MAX_PORTS; i++) {
+        if (ports[i].is_mapped) {
+            sorted_ports[mapped_index++] = ports[i];
+        } else {
+            sorted_ports[unmapped_index++] = ports[i];
+        }
+    }
+
+    /*
+     * Copy the sorted ports back to the original array
+     */
+    memcpy(ports, sorted_ports, CHAMELIUM_MAX_PORTS * sizeof(struct chamelium_port));
+}
+
 /**
  * chamelium_autodiscover: automagically discover the Chamelium port mapping
  *
@@ -2127,42 +2739,47 @@ out:
  * past (see #chamelium_read_port_mappings), but this function provides an
  * automatic way to do it.
  *
- * We will plug all Chamelium ports with a different EDID on each. Then we'll
- * read the EDID on each DRM connector and infer the Chamelium port ID.
+ * We will plug the Chamelium ports one by one with a different EDID on each. 
+ * Then we'll read the EDID on each DRM connector and infer the Chamelium port ID.
  */
-static bool chamelium_autodiscover(struct chamelium *chamelium, int drm_fd)
+static bool chamelium_autodiscover(struct chamelium *chamelium)
 {
-	int candidate_ports[CHAMELIUM_MAX_PORTS];
-	size_t candidate_ports_len;
-	drmModeRes *res;
-	drmModeConnector *connector;
-	struct chamelium_port *port;
-	size_t i, j, port_count;
-	int port_id;
-	uint32_t conn_id;
-	struct chamelium_edid *edid;
-	bool found;
-	uint32_t discovered_conns[CHAMELIUM_MAX_PORTS] = {0};
-	char conn_name[64];
 	struct timespec start;
+	struct chamelium_edid *edid;
+	size_t port_count;
+	size_t i;
+	bool is_any_port_mapped = false;
 	uint64_t elapsed_ns;
 
-	candidate_ports_len = chamelium_get_video_ports(chamelium,
-							candidate_ports);
+	int candidate_ports[CHAMELIUM_MAX_PORTS];
+	size_t candidate_ports_len =
+		chamelium_get_video_ports(chamelium, candidate_ports);
+	igt_assert(candidate_ports_len > 0);
 
 	igt_debug("Starting Chamelium port auto-discovery on %zu ports\n",
 		  candidate_ports_len);
 	igt_gettime(&start);
 
+	/* Reset Chamelium to turn off all ports and test them one at a time. */
+	chamelium_reset(chamelium);
+
 	edid = chamelium_new_edid(chamelium, igt_kms_get_base_edid());
 
 	/* Set EDID and plug ports we want to auto-discover */
 	port_count = chamelium->port_count;
+	/* Iterate over every port that Chamelium supports and check if it's connected. */
 	for (i = 0; i < candidate_ports_len; i++) {
-		port_id = candidate_ports[i];
+		int j;
+		int wait_interval_ms, wait_timeout_ms;
+		bool ret;
+		drmModeConnector *connector;
+		uint32_t conn_id = 0;
+		int drm_fd = chamelium->drm_fd;
+		char conn_name[64];
 
-		/* Get or add a chamelium_port slot */
-		port = NULL;
+		int port_id = candidate_ports[i];
+		/* Get or add a chamelium_port slot - The port could have been created earlier. */
+		struct chamelium_port *port = NULL;
 		for (j = 0; j < chamelium->port_count; j++) {
 			if (chamelium->ports[j].id == port_id) {
 				port = &chamelium->ports[j];
@@ -2173,117 +2790,92 @@ static bool chamelium_autodiscover(struct chamelium *chamelium, int drm_fd)
 			igt_assert(port_count < CHAMELIUM_MAX_PORTS);
 			port = &chamelium->ports[port_count];
 			port_count++;
-
+			igt_assert(port);
 			port->id = port_id;
 		}
 
+		/* Chameleon V3 works nicely with EDIDs assigned to ports that are not connected. */
 		chamelium_port_set_edid(chamelium, port, edid);
 		chamelium_plug(chamelium, port);
-	}
 
-	/* Reprobe connectors and build the mapping */
-	res = drmModeGetResources(drm_fd);
-	if (!res)
-		return false;
+		/* The ITE chip on Chamelium V3 can only hold 1 EDID at a time, so let's test each port individually. */
+		wait_interval_ms = 1000;
+		wait_timeout_ms = CHAMELIUM_HOTPLUG_DETECTION_DELAY * 1000 +
+				  wait_interval_ms;
+		igt_info(
+			"Polling every %f second(s) for %d seconds for the hotplug to take effect.\n",
+			(float)wait_interval_ms / 1000,
+			CHAMELIUM_HOTPLUG_DETECTION_DELAY);
 
-	for (i = 0; i < res->count_connectors; i++) {
-		conn_id = res->connectors[i];
-
-		/* Read the EDID and parse the Chamelium port ID we stored
-		 * there. */
-		connector = drmModeGetConnector(drm_fd, res->connectors[i]);
-		port_id = port_id_from_edid(drm_fd, connector);
-		drmModeFreeConnector(connector);
-		if (port_id < 0)
-			continue;
-
-		/* If we already have a mapping from the config file, check
-		 * that it's consistent. */
-		found = false;
-		for (j = 0; j < chamelium->port_count; j++) {
-			port = &chamelium->ports[j];
-			if (port->connector_id == conn_id) {
-				found = true;
-				igt_assert_f(port->id == port_id,
-					     "Inconsistency detected in .igtrc: "
-					     "connector %s is configured with "
-					     "Chamelium port %d, but is "
-					     "connected to port %d\n",
-					     port->name, port->id, port_id);
-				break;
-			}
+		ret = igt_wait(get_connector_id_for_port(chamelium, port_id,
+							 &conn_id),
+			       wait_timeout_ms, wait_interval_ms);
+		if (!ret || conn_id < 1) {
+			igt_info("Failed to auto-discover port %d\n", port_id);
+			goto unplug_port;
 		}
-		if (found)
-			continue;
+		port->is_mapped = true;
+		is_any_port_mapped = true;
 
-		/* We got a new mapping */
-		found = false;
-		for (j = 0; j < candidate_ports_len; j++) {
-			if (port_id == candidate_ports[j]) {
-				found = true;
-				discovered_conns[j] = conn_id;
-				break;
-			}
-		}
-		igt_assert_f(found, "Auto-discovered a port (%d) we haven't "
-			     "setup\n", port_id);
-	}
-
-	drmModeFreeResources(res);
-
-	/* We now have a Chamelium port ID ↔ DRM connector ID mapping:
-	 * candidate_ports contains the Chamelium port IDs and
-	 * discovered_conns contains the DRM connector IDs. */
-	for (i = 0; i < candidate_ports_len; i++) {
-		port_id = candidate_ports[i];
-		conn_id = discovered_conns[i];
-		if (!conn_id) {
-			continue;
-		}
-
-		port = &chamelium->ports[chamelium->port_count];
+		/* If we found a connector for our port, increment the number of valid Chamelium ports. */
 		chamelium->port_count++;
 
-		port->id = port_id;
+		/* With a valid port, assign all of its properties. */
 		port->type = chamelium_get_port_type(chamelium, port);
 		port->connector_id = conn_id;
+		port->adapter_allowed = false;
+		chamelium_set_port_path(port, conn_id, drm_fd);
 
+		/* Get and assign Connector name. */
 		connector = drmModeGetConnectorCurrent(drm_fd, conn_id);
 		snprintf(conn_name, sizeof(conn_name), "%s-%u",
 			 kmstest_connector_type_str(connector->connector_type),
 			 connector->connector_type_id);
 		drmModeFreeConnector(connector);
 		port->name = strdup(conn_name);
+
+unplug_port:
+		/* Unplug the port so we can move on to the next one. */
+		chamelium_unplug(chamelium, port);
 	}
 
-	elapsed_ns = igt_nsec_elapsed(&start);
-	igt_debug("Auto-discovery took %fms\n",
-		  (float) elapsed_ns / (1000 * 1000));
+	/* After we're all set, turn on all supported ports */
+	for (i = 0; i < CHAMELIUM_MAX_PORTS; i++) {
+		struct chamelium_port *port = &chamelium->ports[i];
+		if (port->is_mapped)
+			chamelium_plug(chamelium, port);
+	}
+	sleep(CHAMELIUM_HOTPLUG_DETECTION_DELAY);
 
-	return true;
+	/*
+	 * Sort the ports based on the is_mapped flag
+	 */
+	selective_sort_ports(chamelium->ports);
+	elapsed_ns = igt_nsec_elapsed(&start);
+	igt_debug("Auto-discovery took %fms and found %i connector(s)\n",
+		  (float)elapsed_ns / (1000 * 1000), chamelium->port_count);
+
+	return is_any_port_mapped;
 }
 
-static bool chamelium_read_config(struct chamelium *chamelium, int drm_fd)
+static bool chamelium_read_config(struct chamelium *chamelium)
 {
 	GError *error = NULL;
 
 	if (!igt_key_file) {
-		igt_warn("No configuration file available for chamelium\n");
+		igt_debug("No configuration file available for chamelium\n");
 		return false;
 	}
 
 	chamelium->url = g_key_file_get_string(igt_key_file, "Chamelium", "URL",
 					       &error);
 	if (!chamelium->url) {
-		igt_warn("Couldn't read chamelium URL from config file: %s\n",
+		igt_debug("Couldn't read chamelium URL from config file: %s\n",
 			 error->message);
 		return false;
 	}
 
-	if (!chamelium_read_port_mappings(chamelium, drm_fd)) {
-		return false;
-	}
-	return chamelium_autodiscover(chamelium, drm_fd);
+	return true;
 }
 
 /**
@@ -2308,6 +2900,75 @@ static void chamelium_exit_handler(int sig)
 }
 
 /**
+ * chamelium_deinit_rpc_only:
+ * @chamelium: The Chamelium instance to use
+ *
+ * Frees the resources used by a connection to the chamelium that was set up
+ * with #chamelium_init_rpc_only.
+ */
+void chamelium_deinit_rpc_only(struct chamelium *chamelium)
+{
+	xmlrpc_env_clean(&chamelium->env);
+	free(chamelium);
+}
+
+/**
+ * chamelium_init_rpc_only:
+ *
+ * Sets up a connection with a chamelium, using the URL specified in the
+ * Chamelium configuration. The function initializes only the RPC - no port
+ * autodiscovery happens, which means only the functions that do not require
+ * struct #chamelium_port can be called with an instance produced by this
+ * function.
+ *
+ * #chamelium_init is almost always a better choice.
+ *
+ * Returns: A newly initialized chamelium struct, or NULL on lack of
+ * configuration
+ */
+struct chamelium *chamelium_init_rpc_only(void)
+{
+	struct chamelium *chamelium = malloc(sizeof(struct chamelium));
+	struct xmlrpc_clientparms clientparms;
+	struct xmlrpc_curl_xportparms curlparms;
+
+	if (!chamelium)
+		return NULL;
+
+	memset(chamelium, 0, sizeof(*chamelium));
+	memset(&clientparms, 0, sizeof(clientparms));
+	memset(&curlparms, 0, sizeof(curlparms));
+
+	/* curl's timeout is in milliseconds */
+	curlparms.timeout = _RECEIVER_RESPONSIVE_AFTER_RESET_SECONDS * 1000;
+
+	clientparms.transport = "curl";
+	clientparms.transportparmsP = &curlparms;
+	clientparms.transportparm_size = XMLRPC_CXPSIZE(timeout);
+
+	chamelium->drm_fd = -1;
+
+	/* Setup the libxmlrpc context */
+	xmlrpc_env_init(&chamelium->env);
+	xmlrpc_client_setup_global_const(&chamelium->env);
+	xmlrpc_client_create(&chamelium->env, XMLRPC_CLIENT_NO_FLAGS, PACKAGE,
+			     PACKAGE_VERSION, &clientparms, 0, &chamelium->client);
+	if (chamelium->env.fault_occurred) {
+		igt_debug("Failed to init xmlrpc: %s\n",
+			  chamelium->env.fault_string);
+		goto error;
+	}
+
+	if (!chamelium_read_config(chamelium))
+		goto error;
+
+	return chamelium;
+error:
+	chamelium_deinit_rpc_only(chamelium);
+	return NULL;
+}
+
+/**
  * chamelium_init:
  * @chamelium: The Chamelium instance to use
  * @drm_fd: a display initialized with #igt_display_require
@@ -2316,16 +2977,20 @@ static void chamelium_exit_handler(int sig)
  * Chamelium configuration. This must be called first before trying to use the
  * chamelium.
  *
+ * Needs to happen *after* igt_display_require() as otherwise the board will
+ * get reset.
+ *
  * If we fail to establish a connection with the chamelium, fail to find a
  * configured connector, etc. we fail the current test.
  *
  * Returns: A newly initialized chamelium struct, or NULL on error
  */
-struct chamelium *chamelium_init(int drm_fd)
+struct chamelium *chamelium_init(int drm_fd, igt_display_t *display)
 {
-	struct chamelium *chamelium = malloc(sizeof(struct chamelium));
+	struct chamelium *chamelium = chamelium_init_rpc_only();
+	bool mismatching_ports_found = false;
 
-	if (!chamelium)
+	if (chamelium == NULL)
 		return NULL;
 
 	/* A chamelium instance was set up previously, so clean it up before
@@ -2334,32 +2999,76 @@ struct chamelium *chamelium_init(int drm_fd)
 	if (cleanup_instance)
 		chamelium_deinit(cleanup_instance);
 
-	memset(chamelium, 0, sizeof(*chamelium));
-	chamelium->drm_fd = drm_fd;
-	igt_list_init(&chamelium->edids);
+	chamelium->drm_fd = dup(drm_fd);
+	IGT_INIT_LIST_HEAD(&chamelium->edids);
 
-	/* Setup the libxmlrpc context */
-	xmlrpc_env_init(&chamelium->env);
-	xmlrpc_client_setup_global_const(&chamelium->env);
-	xmlrpc_client_create(&chamelium->env, XMLRPC_CLIENT_NO_FLAGS, PACKAGE,
-			     PACKAGE_VERSION, NULL, 0, &chamelium->client);
-	if (chamelium->env.fault_occurred) {
-		igt_debug("Failed to init xmlrpc: %s\n",
-			  chamelium->env.fault_string);
+	/*
+	 * Reset the chamelium and do a disabling modeset for
+	 * TypeC connector to come up nicely
+	 */
+	chamelium_reset(chamelium);
+	igt_modeset_disable_all_outputs(display);
+
+	if (!chamelium_read_port_mappings(chamelium, drm_fd))
 		goto error;
+
+	if (chamelium->port_count == 0) {
+		igt_info("Chamelium configured without port mapping, "
+			 "performing autodiscovery\n");
+
+		if (!chamelium_autodiscover(chamelium))
+			goto error;
+
+		if (chamelium->port_count != 0)
+			igt_info("\nConsider adding the following to your .igtrc:\n");
+		for (int i = 0; i < chamelium->port_count; ++i) {
+			igt_info("[Chamelium:%s]\n", chamelium->ports[i].name);
+			igt_info("ChameliumPortID=%d\n\n", chamelium->ports[i].id);
+		}
 	}
 
-	if (!chamelium_read_config(chamelium, drm_fd))
-		goto error;
+	for (int i = 0; i < chamelium->port_count; i++) {
+		bool type_mismatch = false;
+		struct chamelium_port * port = &chamelium->ports[i];
+		drmModeConnectorPtr connector =
+			chamelium_port_get_connector(chamelium, port, false);
+
+		igt_assert(connector != NULL);
+
+		type_mismatch = port->type != connector->connector_type;
+
+		if (type_mismatch)
+			igt_info("Chamelium port %d is %s, but the DRM connector is %s\n",
+				 port->id, kmstest_connector_type_str(port->type),
+				 kmstest_connector_type_str(connector->connector_type));
+
+		if (type_mismatch && !port->adapter_allowed)
+			mismatching_ports_found = true;
+
+		drmModeFreeConnector(connector);
+	}
 
 	cleanup_instance = chamelium;
 	igt_install_exit_handler(chamelium_exit_handler);
 
-	return chamelium;
+	igt_abort_on_f(mismatching_ports_found,
+		       "Chamelium port(s) with mismatching connector type on the "
+		       "DRM side found - this will most likely cause test failures. "
+		       "If you want to proceed with this this configuration, set the "
+		       "port mapping manually in .igtrc with AdapterAllowed=1. See "
+		       "docs/chamelium.txt for more information.\n");
 
+	/* After a Chamelium init, all ports are now connected, and MST
+	 * connectors are now known to the kernel. MST connectors would spawn
+	 * new connectors that were previously unknown to the kernel. Refresh
+	 * the outputs to grab all supported connectors.*/
+	igt_display_reset_outputs(display);
+
+	return chamelium;
 error:
-	xmlrpc_env_clean(&chamelium->env);
-	free(chamelium);
+	close(chamelium->drm_fd);
+
+	chamelium_deinit_rpc_only(chamelium);
 
 	return NULL;
 }
@@ -2387,8 +3096,13 @@ void chamelium_deinit(struct chamelium *chamelium)
 	for (i = 0; i < chamelium->port_count; i++)
 		chamelium_plug(chamelium, &chamelium->ports[i]);
 
+	igt_assert(chamelium->drm_fd != -1);
+	for (i = 0; i < chamelium->port_count; i++)
+		wait_for_connected_state(chamelium->drm_fd,
+					 &chamelium->ports[i].connector_id, 1);
+
 	/* Destroy any EDIDs we created to make sure we don't leak them */
-	igt_list_for_each_safe(pos, tmp, &chamelium->edids, link) {
+	igt_list_for_each_entry_safe(pos, tmp, &chamelium->edids, link) {
 		for (i = 0; i < CHAMELIUM_MAX_PORTS; i++) {
 			if (pos->ids[i])
 				chamelium_destroy_edid(chamelium, pos->ids[i]);
@@ -2398,13 +3112,114 @@ void chamelium_deinit(struct chamelium *chamelium)
 		free(pos);
 	}
 
+	close(chamelium->drm_fd);
+
 	xmlrpc_client_destroy(chamelium->client);
-	xmlrpc_env_clean(&chamelium->env);
 
 	for (i = 0; i < chamelium->port_count; i++)
 		free(chamelium->ports[i].name);
 
-	free(chamelium);
+	chamelium_deinit_rpc_only(chamelium);
+}
+
+bool chamelium_plug_all(struct chamelium *chamelium)
+{
+	size_t port_count;
+	int port_ids[CHAMELIUM_MAX_PORTS];
+	xmlrpc_value *v;
+
+	port_count = chamelium_get_video_ports(chamelium, port_ids);
+	if (port_count <= 0)
+		return false;
+
+	/*
+	 * A temporary workaround for Chamelium V3: Currently, Cv3 doesn't allow
+	 * all ports to be plugged in at the same time. Cv3 first port has an ID
+	 * of 0 while Cv2 has first port ID as 1.
+	 * TODO(markyacoub): Remove this workaround when V3 is fixed.
+	 */
+	if (port_ids[0] == 0) {
+		igt_debug("This should be Cv3. Skipping plugging all ports\n");
+		return true;
+	}
+
+	for (int i = 0; i < port_count; ++i) {
+		v = __chamelium_rpc(chamelium, NULL, "Plug", "(i)", port_ids[i]);
+
+		if (v != NULL)
+			xmlrpc_DECREF(v);
+
+		if (chamelium->env.fault_occurred) {
+			igt_debug("Chamelium RPC call failed: %s\n",
+			     chamelium->env.fault_string);
+
+			return false;
+		}
+	}
+
+	return true;
+}
+
+bool chamelium_wait_all_configured_ports_connected(struct chamelium *chamelium, int drm_fd)
+{
+	drmModeRes *res;
+	drmModeConnector *connector;
+	char **group_list;
+	char *group;
+
+	int connectors[CHAMELIUM_MAX_PORTS];
+	int connectors_count = 0;
+
+	res = drmModeGetResources(drm_fd);
+
+	group_list = g_key_file_get_groups(igt_key_file, NULL);
+
+	for (int i = 0; group_list[i] != NULL; i++) {
+		char *map_name;
+		group = group_list[i];
+
+		if (!strstr(group, "Chamelium:"))
+			continue;
+
+		igt_assert(chamelium->port_count <= CHAMELIUM_MAX_PORTS);
+
+		map_name = group + (sizeof("Chamelium:") - 1);
+
+		for (int j = 0;
+		     j < res->count_connectors;
+		     j++) {
+			char name[50];
+
+			connector = drmModeGetConnectorCurrent(
+			    drm_fd, res->connectors[j]);
+
+			/* We have to generate the connector name on our own */
+			snprintf(name, 50, "%s-%u",
+				 kmstest_connector_type_str(connector->connector_type),
+				 connector->connector_type_id);
+
+
+			if (strcmp(name, map_name) == 0) {
+				igt_assert(connectors_count < CHAMELIUM_MAX_PORTS);
+				connectors[connectors_count++] = connector->connector_id;
+				break;
+			}
+
+			drmModeFreeConnector(connector);
+		}
+	}
+
+	drmModeFreeResources(res);
+
+	if (connectors_count == 0) {
+		igt_info("No chamelium port mappping, sleeping for %d seconds "
+			 "for the hotplug to take effect\n",
+			 CHAMELIUM_HOTPLUG_DETECTION_DELAY);
+		sleep(CHAMELIUM_HOTPLUG_DETECTION_DELAY);
+		return true;
+	}
+
+	return wait_for_connected_state(drm_fd, connectors, connectors_count);
 }
 
 igt_constructor {

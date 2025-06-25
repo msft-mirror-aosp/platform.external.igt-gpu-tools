@@ -45,7 +45,7 @@ long int gen_level = 40;
 int advanced_flag = 0; /* 0: in unit of byte, 1: in unit of data element size */
 unsigned int warning_flags = WARN_ALWAYS;
 int need_export = 0;
-char *input_filename = "<stdin>";
+const char *input_filename = "<stdin>";
 int errors;
 
 struct brw_context genasm_brw_context;
@@ -397,7 +397,7 @@ int main(int argc, char **argv)
 	    if (entry1 && is_label(entry1) && is_entry_point(entry1)) {
 		// insert NOP instructions until (inst_offset+1) % 4 == 0
 		while (((inst_offset+1) % 4) != 0) {
-		    tmp_entry = calloc(sizeof(*tmp_entry), 1);
+		    tmp_entry = calloc(1, sizeof(*tmp_entry));
 		    tmp_entry->insn.gen.header.opcode = BRW_OPCODE_NOP;
 		    entry->next = tmp_entry;
 		    tmp_entry->next = entry1;

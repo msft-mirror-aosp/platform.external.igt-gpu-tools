@@ -1,7 +1,6 @@
 build_man = get_option('man')
 
 manpages = [
-	'intel_aubdump',
 	'intel_audio_dump',
 	'intel_bios_dumper',
 	'intel_error_decode',
@@ -18,6 +17,7 @@ manpages = [
 	'intel_upload_blit_large_map',
 	'intel_upload_blit_small',
 	'intel_vbt_decode',
+	'lsgpu',
 ]
 
 defs_rst = configure_file(input : 'defs.rst.in',

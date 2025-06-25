@@ -30,7 +30,154 @@
 #include <pthread.h>
 #include <signal.h>
 #include "drm.h"
-#include <strings.h>
+/**
+ * TEST: syncobj wait
+ * Description: Tests for the drm sync object wait API
+ * Category: Core
+ * Mega feature: General Core features
+ * Sub-category: Synchronization
+ * Functionality: semaphore
+ * Feature: synchronization
+ * Test category: GEM_Legacy
+ *
+ * SUBTEST: invalid-multi-wait-all-unsubmitted
+ *
+ * SUBTEST: invalid-multi-wait-all-unsubmitted-signaled
+ *
+ * SUBTEST: invalid-multi-wait-all-unsubmitted-submitted
+ *
+ * SUBTEST: invalid-multi-wait-all-unsubmitted-submitted-signaled
+ *
+ * SUBTEST: invalid-multi-wait-unsubmitted
+ *
+ * SUBTEST: invalid-multi-wait-unsubmitted-signaled
+ *
+ * SUBTEST: invalid-multi-wait-unsubmitted-submitted
+ *
+ * SUBTEST: invalid-multi-wait-unsubmitted-submitted-signaled
+ *
+ * SUBTEST: invalid-reset-bad-pad
+ *
+ * SUBTEST: invalid-reset-illegal-handle
+ *
+ * SUBTEST: invalid-reset-one-illegal-handle
+ *
+ * SUBTEST: invalid-reset-zero-handles
+ *
+ * SUBTEST: invalid-signal-bad-pad
+ *
+ * SUBTEST: invalid-signal-illegal-handle
+ *
+ * SUBTEST: invalid-signal-one-illegal-handle
+ *
+ * SUBTEST: invalid-signal-zero-handles
+ *
+ * SUBTEST: invalid-single-wait-all-unsubmitted
+ *
+ * SUBTEST: invalid-single-wait-unsubmitted
+ *
+ * SUBTEST: invalid-wait-bad-flags
+ *
+ * SUBTEST: invalid-wait-illegal-handle
+ *
+ * SUBTEST: multi-wait-all-for-submit-signaled
+ *
+ * SUBTEST: multi-wait-all-for-submit-submitted
+ *
+ * SUBTEST: multi-wait-all-for-submit-submitted-signaled
+ *
+ * SUBTEST: multi-wait-all-for-submit-unsubmitted
+ *
+ * SUBTEST: multi-wait-all-for-submit-unsubmitted-signaled
+ *
+ * SUBTEST: multi-wait-all-for-submit-unsubmitted-submitted
+ *
+ * SUBTEST: multi-wait-all-signaled
+ *
+ * SUBTEST: multi-wait-all-submitted
+ *
+ * SUBTEST: multi-wait-all-submitted-signaled
+ *
+ * SUBTEST: multi-wait-for-submit-signaled
+ *
+ * SUBTEST: multi-wait-for-submit-submitted
+ *
+ * SUBTEST: multi-wait-for-submit-submitted-signaled
+ *
+ * SUBTEST: multi-wait-for-submit-unsubmitted
+ *
+ * SUBTEST: multi-wait-for-submit-unsubmitted-signaled
+ *
+ * SUBTEST: multi-wait-for-submit-unsubmitted-submitted
+ *
+ * SUBTEST: multi-wait-for-submit-unsubmitted-submitted-signaled
+ *
+ * SUBTEST: multi-wait-signaled
+ *
+ * SUBTEST: multi-wait-submitted
+ *
+ * SUBTEST: multi-wait-submitted-signaled
+ *
+ * SUBTEST: reset-during-wait-for-submit
+ *
+ * SUBTEST: reset-multiple-signaled
+ *
+ * SUBTEST: reset-signaled
+ *
+ * SUBTEST: reset-unsignaled
+ *
+ * SUBTEST: signal
+ *
+ * SUBTEST: single-wait-all-for-submit-signaled
+ *
+ * SUBTEST: single-wait-all-for-submit-submitted
+ *
+ * SUBTEST: single-wait-all-for-submit-unsubmitted
+ *
+ * SUBTEST: single-wait-all-signaled
+ *
+ * SUBTEST: single-wait-all-submitted
+ *
+ * SUBTEST: single-wait-for-submit-signaled
+ *
+ * SUBTEST: single-wait-for-submit-submitted
+ *
+ * SUBTEST: single-wait-for-submit-unsubmitted
+ *
+ * SUBTEST: single-wait-signaled
+ *
+ * SUBTEST: single-wait-submitted
+ *
+ * SUBTEST: wait-all-complex
+ *
+ * SUBTEST: wait-all-delayed-signal
+ *
+ * SUBTEST: wait-all-for-submit-complex
+ *
+ * SUBTEST: wait-all-for-submit-delayed-submit
+ *
+ * SUBTEST: wait-all-for-submit-snapshot
+ *
+ * SUBTEST: wait-all-interrupted
+ *
+ * SUBTEST: wait-all-snapshot
+ *
+ * SUBTEST: wait-any-complex
+ *
+ * SUBTEST: wait-any-interrupted
+ *
+ * SUBTEST: wait-any-snapshot
+ *
+ * SUBTEST: wait-delayed-signal
+ *
+ * SUBTEST: wait-for-submit-complex
+ *
+ * SUBTEST: wait-for-submit-delayed-submit
+ *
+ * SUBTEST: wait-for-submit-snapshot
+ *
+ * SUBTEST: wait-zero-handles
+ */
 
 IGT_TEST_DESCRIPTION("Tests for the drm sync object wait API");
 
@@ -141,7 +288,7 @@ syncobj_trigger_delayed(int fd, uint32_t syncobj, uint64_t nsec)
 static void
 test_wait_bad_flags(int fd)
 {
-	struct local_syncobj_wait wait = { 0 };
+	struct drm_syncobj_wait wait = { 0 };
 	wait.flags = 0xdeadbeef;
 	igt_assert_eq(__syncobj_wait(fd, &wait), -EINVAL);
 }
@@ -149,14 +296,14 @@ test_wait_bad_flags(int fd)
 static void
 test_wait_zero_handles(int fd)
 {
-	struct local_syncobj_wait wait = { 0 };
-	igt_assert_eq(__syncobj_wait(fd, &wait), -EINVAL);
+	struct drm_syncobj_wait wait = { 0 };
+	igt_assert_eq(__syncobj_wait(fd, &wait), 0);
 }
 
 static void
 test_wait_illegal_handle(int fd)
 {
-	struct local_syncobj_wait wait = { 0 };
+	struct drm_syncobj_wait wait = { 0 };
 	uint32_t handle = 0;
 
 	wait.count_handles = 1;
@@ -167,43 +314,43 @@ test_wait_illegal_handle(int fd)
 static void
 test_reset_zero_handles(int fd)
 {
-	struct local_syncobj_array array = { 0 };
+	struct drm_syncobj_array array = { 0 };
 	int ret;
 
-	ret = drmIoctl(fd, LOCAL_IOCTL_SYNCOBJ_RESET, &array);
+	ret = drmIoctl(fd, DRM_IOCTL_SYNCOBJ_RESET, &array);
 	igt_assert(ret == -1 && errno ==  EINVAL);
 }
 
 static void
 test_reset_illegal_handle(int fd)
 {
-	struct local_syncobj_array array = { 0 };
+	struct drm_syncobj_array array = { 0 };
 	uint32_t handle = 0;
 	int ret;
 
 	array.count_handles = 1;
 	array.handles = to_user_pointer(&handle);
-	ret = drmIoctl(fd, LOCAL_IOCTL_SYNCOBJ_RESET, &array);
+	ret = drmIoctl(fd, DRM_IOCTL_SYNCOBJ_RESET, &array);
 	igt_assert(ret == -1 && errno == ENOENT);
 }
 
 static void
 test_reset_one_illegal_handle(int fd)
 {
-	struct local_syncobj_array array = { 0 };
+	struct drm_syncobj_array array = { 0 };
 	uint32_t syncobjs[3];
 	int ret;
 
-	syncobjs[0] = syncobj_create(fd, LOCAL_SYNCOBJ_CREATE_SIGNALED);
+	syncobjs[0] = syncobj_create(fd, DRM_SYNCOBJ_CREATE_SIGNALED);
 	syncobjs[1] = 0;
-	syncobjs[2] = syncobj_create(fd, LOCAL_SYNCOBJ_CREATE_SIGNALED);
+	syncobjs[2] = syncobj_create(fd, DRM_SYNCOBJ_CREATE_SIGNALED);
 
 	igt_assert_eq(syncobj_wait_err(fd, &syncobjs[0], 1, 0, 0), 0);
 	igt_assert_eq(syncobj_wait_err(fd, &syncobjs[2], 1, 0, 0), 0);
 
 	array.count_handles = 3;
 	array.handles = to_user_pointer(syncobjs);
-	ret = drmIoctl(fd, LOCAL_IOCTL_SYNCOBJ_RESET, &array);
+	ret = drmIoctl(fd, DRM_IOCTL_SYNCOBJ_RESET, &array);
 	igt_assert(ret == -1 && errno == ENOENT);
 
 	/* Assert that we didn't actually reset anything */
@@ -217,44 +364,44 @@ test_reset_one_illegal_handle(int fd)
 static void
 test_reset_bad_pad(int fd)
 {
-	struct local_syncobj_array array = { 0 };
+	struct drm_syncobj_array array = { 0 };
 	uint32_t handle = 0;
 	int ret;
 
 	array.pad = 0xdeadbeef;
 	array.count_handles = 1;
 	array.handles = to_user_pointer(&handle);
-	ret = drmIoctl(fd, LOCAL_IOCTL_SYNCOBJ_RESET, &array);
+	ret = drmIoctl(fd, DRM_IOCTL_SYNCOBJ_RESET, &array);
 	igt_assert(ret == -1 && errno == EINVAL);
 }
 
 static void
 test_signal_zero_handles(int fd)
 {
-	struct local_syncobj_array array = { 0 };
+	struct drm_syncobj_array array = { 0 };
 	int ret;
 
-	ret = drmIoctl(fd, LOCAL_IOCTL_SYNCOBJ_SIGNAL, &array);
+	ret = drmIoctl(fd, DRM_IOCTL_SYNCOBJ_SIGNAL, &array);
 	igt_assert(ret == -1 && errno == EINVAL);
 }
 
 static void
 test_signal_illegal_handle(int fd)
 {
-	struct local_syncobj_array array = { 0 };
+	struct drm_syncobj_array array = { 0 };
 	uint32_t handle = 0;
 	int ret;
 
 	array.count_handles = 1;
 	array.handles = to_user_pointer(&handle);
-	ret = drmIoctl(fd, LOCAL_IOCTL_SYNCOBJ_SIGNAL, &array);
+	ret = drmIoctl(fd, DRM_IOCTL_SYNCOBJ_SIGNAL, &array);
 	igt_assert(ret == -1 && errno == ENOENT);
 }
 
 static void
 test_signal_one_illegal_handle(int fd)
 {
-	struct local_syncobj_array array = { 0 };
+	struct drm_syncobj_array array = { 0 };
 	uint32_t syncobjs[3];
 	int ret;
 
@@ -267,7 +414,7 @@ test_signal_one_illegal_handle(int fd)
 
 	array.count_handles = 3;
 	array.handles = to_user_pointer(syncobjs);
-	ret = drmIoctl(fd, LOCAL_IOCTL_SYNCOBJ_SIGNAL, &array);
+	ret = drmIoctl(fd, DRM_IOCTL_SYNCOBJ_SIGNAL, &array);
 	igt_assert(ret == -1 && errno == ENOENT);
 
 	/* Assert that we didn't actually reset anything */
@@ -281,14 +428,14 @@ test_signal_one_illegal_handle(int fd)
 static void
 test_signal_bad_pad(int fd)
 {
-	struct local_syncobj_array array = { 0 };
+	struct drm_syncobj_array array = { 0 };
 	uint32_t handle = 0;
 	int ret;
 
 	array.pad = 0xdeadbeef;
 	array.count_handles = 1;
 	array.handles = to_user_pointer(&handle);
-	ret = drmIoctl(fd, LOCAL_IOCTL_SYNCOBJ_SIGNAL, &array);
+	ret = drmIoctl(fd, DRM_IOCTL_SYNCOBJ_SIGNAL, &array);
 	igt_assert(ret == -1 && errno ==  EINVAL);
 }
 
@@ -305,10 +452,10 @@ flags_for_test_flags(uint32_t test_flags)
 	uint32_t flags = 0;
 
 	if (test_flags & WAIT_FOR_SUBMIT)
-		flags |= LOCAL_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT;
+		flags |= DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT;
 
 	if (test_flags & WAIT_ALL)
-		flags |= LOCAL_SYNCOBJ_WAIT_FLAGS_WAIT_ALL;
+		flags |= DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL;
 
 	return flags;
 }
@@ -433,7 +580,7 @@ static void
 test_reset_during_wait_for_submit(int fd)
 {
 	uint32_t syncobj = syncobj_create(fd, 0);
-	uint32_t flags = LOCAL_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT;
+	uint32_t flags = DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT;
 	struct fd_handle_pair pair;
 	timer_t timer;
 
@@ -455,7 +602,7 @@ static void
 test_signal(int fd)
 {
 	uint32_t syncobj = syncobj_create(fd, 0);
-	uint32_t flags = LOCAL_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT;
+	uint32_t flags = DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT;
 
 	igt_assert_eq(syncobj_wait_err(fd, &syncobj, 1, 0, 0), -EINVAL);
 	igt_assert_eq(syncobj_wait_err(fd, &syncobj, 1, 0, flags), -ETIME);
@@ -512,7 +659,7 @@ test_multi_wait(int fd, uint32_t test_flags, int expect)
 
 struct wait_thread_data {
 	int fd;
-	struct local_syncobj_wait wait;
+	struct drm_syncobj_wait wait;
 };
 
 static void *
@@ -714,7 +861,7 @@ test_wait_complex(int fd, uint32_t test_flags)
 static void
 test_wait_interrupted(int fd, uint32_t test_flags)
 {
-	struct local_syncobj_wait wait = { 0 };
+	struct drm_syncobj_wait wait = { 0 };
 	uint32_t syncobj = syncobj_create(fd, 0);
 	int timeline;
 
@@ -741,7 +888,7 @@ test_wait_interrupted(int fd, uint32_t test_flags)
 static bool
 has_syncobj_wait(int fd)
 {
-	struct local_syncobj_wait wait = { 0 };
+	struct drm_syncobj_wait wait = { 0 };
 	uint32_t handle = 0;
 	uint64_t value;
 	int ret;
@@ -754,7 +901,7 @@ has_syncobj_wait(int fd)
 	/* Try waiting for zero sync objects should fail with EINVAL */
 	wait.count_handles = 1;
 	wait.handles = to_user_pointer(&handle);
-	ret = drmIoctl(fd, LOCAL_IOCTL_SYNCOBJ_WAIT, &wait);
+	ret = drmIoctl(fd, DRM_IOCTL_SYNCOBJ_WAIT, &wait);
 	return ret == -1 && errno == ENOENT;
 }
 
@@ -771,7 +918,7 @@ igt_main
 	igt_subtest("invalid-wait-bad-flags")
 		test_wait_bad_flags(fd);
 
-	igt_subtest("invalid-wait-zero-handles")
+	igt_subtest("wait-zero-handles")
 		test_wait_zero_handles(fd);
 
 	igt_subtest("invalid-wait-illegal-handle")
@@ -913,4 +1060,8 @@ igt_main
 
 	igt_subtest("wait-all-interrupted")
 		test_wait_interrupted(fd, WAIT_ALL);
+
+	igt_fixture {
+		drm_close_driver(fd);
+	}
 }

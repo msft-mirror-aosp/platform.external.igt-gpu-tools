@@ -35,36 +35,70 @@
 #include "igt_tests_common.h"
 
 char test[] = "test";
-char *argv_run[] = { test };
+char *fake_argv[] = { test };
+int fake_argc = ARRAY_SIZE(fake_argv);
+int fork_type_dyn;
 
-static void igt_fork_vs_skip(void)
+__noreturn static void igt_fork_vs_skip(void)
 {
-	igt_fork(i, 1) {
-		igt_skip("skipping");
+	igt_simple_init(fake_argc, fake_argv);
+
+	if (fork_type_dyn) {
+		igt_multi_fork(i, 1) {
+			igt_skip("skipping multi-fork");
+		}
+	} else {
+		igt_fork(i, 1) {
+			igt_skip("skipping fork");
+		}
 	}
 
 	igt_waitchildren();
+
+	igt_exit();
 }
 
-static void igt_fork_vs_assert(void)
+__noreturn static void igt_fork_vs_assert(void)
 {
-	igt_fork(i, 1) {
-		igt_assert(0);
+	igt_simple_init(fake_argc, fake_argv);
+
+	if (fork_type_dyn) {
+		igt_multi_fork(i, 1) {
+			igt_assert(0);
+		}
+	} else {
+		igt_fork(i, 1) {
+			igt_assert(0);
+		}
 	}
 
 	igt_waitchildren();
+
+	igt_exit();
 }
 
-static void igt_fork_leak(void)
+__noreturn static void igt_fork_leak(void)
 {
-	igt_fork(i, 1) {
-		sleep(10);
+	igt_simple_init(fake_argc, fake_argv);
+
+	if (fork_type_dyn) {
+		igt_multi_fork(i, 1) {
+			sleep(10);
+		}
+	} else {
+		igt_fork(i, 1) {
+			sleep(10);
+		}
 	}
+
+	igt_exit();
 }
 
-static void plain_fork_leak(void)
+__noreturn static void plain_fork_leak(void)
 {
 	int pid;
+
+	igt_simple_init(fake_argc, fake_argv);
 
 	switch (pid = fork()) {
 	case -1:
@@ -74,61 +108,92 @@ static void plain_fork_leak(void)
 	default:
 		exit(0);
 	}
+
+	igt_exit();
 }
 
-static void igt_fork_timeout_leak(void)
+__noreturn static void igt_fork_timeout_leak(void)
 {
-	igt_fork(i, 1) {
-		sleep(10);
+	igt_simple_init(fake_argc, fake_argv);
+
+	if (fork_type_dyn) {
+		igt_multi_fork(i, 1) {
+			sleep(10);
+		}
+	} else {
+		igt_fork(i, 1) {
+			sleep(10);
+		}
 	}
 
 	igt_waitchildren_timeout(1, "library test");
+
+	igt_exit();
 }
 
-static int do_fork(void (*test_to_run)(void))
+__noreturn static void subtest_leak(void)
 {
-	int pid, status;
-	int argc;
+	pid_t *children =
+		mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
+	const int num_children = 4096 / sizeof(*children);
 
-	switch (pid = fork()) {
-	case -1:
-		internal_assert(0);
-	case 0:
-		argc = ARRAY_SIZE(argv_run);
-		igt_simple_init(argc, argv_run);
-		test_to_run();
-		igt_exit();
-	default:
-		while (waitpid(pid, &status, 0) == -1 &&
-		       errno == EINTR)
-			;
+	igt_subtest_init(fake_argc, fake_argv);
 
-		return status;
+	igt_subtest("fork-leak") {
+		if (fork_type_dyn) {
+			igt_multi_fork(child, num_children)
+				children[child] = getpid();
+		} else {
+			igt_fork(child, num_children)
+				children[child] = getpid();
+		}
+
+		/* leak the children */
+		igt_assert(0);
 	}
-}
 
+	/* We expect the exit_subtest to cleanup after the igt_fork and igt_multi_fork */
+	for (int i = 0; i < num_children; i++) {
+		if (children[i] > 0)
+			assert(kill(children[i], 0) == -1 && errno == ESRCH);
+	}
+
+	munmap(children, 4096);
+
+	igt_exit();
+}
 
 int main(int argc, char **argv)
 {
 	int ret;
 
-	/* check that igt_assert is forwarded */
-	ret = do_fork(igt_fork_vs_assert);
-	internal_assert_wexited(ret, IGT_EXIT_FAILURE);
+	for (fork_type_dyn = 0;	fork_type_dyn <= 1; ++fork_type_dyn) {
+		printf("Checking %sfork ...\n", fork_type_dyn ? "multi-" : "");
 
-	/* check that igt_skip within a fork blows up */
-	ret = do_fork(igt_fork_vs_skip);
-	internal_assert_wexited(ret, SIGABRT + 128);
+		printf("\ncheck that igt_assert is forwarded\n");
+		ret = do_fork(igt_fork_vs_assert);
+		internal_assert_wexited(ret, IGT_EXIT_FAILURE);
 
-	/* check that failure to clean up fails */
-	ret = do_fork(igt_fork_leak);
-	internal_assert_wsignaled(ret, SIGABRT);
+		printf("\ncheck that igt_skip within a fork blows up\n");
+		ret = do_fork(igt_fork_vs_skip);
+		internal_assert_wexited(ret, SIGABRT + 128);
 
-	/* check that igt_waitchildren_timeout cleans up*/
-	ret = do_fork(igt_fork_timeout_leak);
-	internal_assert_wexited(ret, SIGKILL + 128);
+		printf("\ncheck that failure to clean up fails\n");
+		ret = do_fork(igt_fork_leak);
+		internal_assert_wsignaled(ret, SIGABRT);
 
-	/* check that any other process leaks are caught*/
-	ret = do_fork(plain_fork_leak);
-	internal_assert_wsignaled(ret, SIGABRT);
+		printf("\ncheck that igt_waitchildren_timeout cleans up\n");
+		ret = do_fork(igt_fork_timeout_leak);
+		internal_assert_wexited(ret, SIGKILL + 128);
+
+		printf("\ncheck that any other process leaks are caught\n");
+		ret = do_fork(plain_fork_leak);
+		internal_assert_wsignaled(ret, SIGABRT);
+
+		printf("\ncheck subtest leak %d\n", fork_type_dyn);
+		ret = do_fork(subtest_leak);
+		internal_assert_wexited(ret, IGT_EXIT_FAILURE); /* not asserted! */
+	}
+
+	printf("SUCCESS all tests passed\n");
 }

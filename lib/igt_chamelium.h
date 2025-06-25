@@ -29,12 +29,16 @@
 #include "config.h"
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <xf86drmMode.h>
 
 #include "igt_debugfs.h"
+#include "igt_kms.h"
+#include "igt_list.h"
 
 struct igt_fb;
 struct edid;
+typedef struct _igt_crc igt_crc_t;
 
 struct chamelium;
 struct chamelium_port;
@@ -79,12 +83,11 @@ struct chamelium_infoframe {
 	uint8_t *payload;
 };
 
-struct chamelium_edid;
-
 /**
  * CHAMELIUM_MAX_PORTS: the maximum number of ports supported by igt_chamelium.
  *
- * For now, we have 1 VGA, 1 HDMI and 2 DisplayPort ports.
+ * On V2: 1 VGA, 1 HDMI and 2 DisplayPort ports.
+ * On V3: 2 HDMI and 2 DisplayPort ports.
  */
 #define CHAMELIUM_MAX_PORTS 4
 
@@ -100,7 +103,29 @@ struct chamelium_edid;
  */
 #define CHAMELIUM_MAX_AUDIO_CHANNELS 8
 
-struct chamelium *chamelium_init(int drm_fd);
+extern bool igt_chamelium_allow_fsm_handling;
+
+#define CHAMELIUM_HOTPLUG_TIMEOUT 20 /* seconds */
+
+/**
+ * chamelium_edid:
+ * @chamelium: instance of the chamelium where the EDID will be applied
+ * @base: Unaltered EDID that would be used for all ports. Matches what you
+ * would get from a real monitor.
+ * @raw: EDID to be applied for each port.
+ * @ids: The ID received from Chamelium after it's created for specific ports.
+ */
+struct chamelium_edid {
+	struct chamelium *chamelium;
+	struct edid *base;
+	struct edid *raw[CHAMELIUM_MAX_PORTS];
+	int ids[CHAMELIUM_MAX_PORTS];
+	struct igt_list_head link;
+};
+
+void chamelium_deinit_rpc_only(struct chamelium *chamelium);
+struct chamelium *chamelium_init_rpc_only(void);
+struct chamelium *chamelium_init(int drm_fd, igt_display_t *display);
 void chamelium_deinit(struct chamelium *chamelium);
 void chamelium_reset(struct chamelium *chamelium);
 
@@ -111,8 +136,29 @@ drmModeConnector *chamelium_port_get_connector(struct chamelium *chamelium,
 					       struct chamelium_port *port,
 					       bool reprobe);
 const char *chamelium_port_get_name(struct chamelium_port *port);
+void
+chamelium_require_connector_present(struct chamelium_port **ports,
+				    unsigned int type,
+				    int port_count,
+				    int count);
+drmModeConnection
+chamelium_reprobe_connector(igt_display_t *display,
+			    struct chamelium *chamelium,
+			    struct chamelium_port *port);
+void
+chamelium_wait_for_conn_status_change(igt_display_t *display,
+				      struct chamelium *chamelium,
+				      struct chamelium_port *port,
+				      drmModeConnection status);
+void
+chamelium_reset_state(igt_display_t *display,
+		      struct chamelium *chamelium,
+		      struct chamelium_port *port,
+		      struct chamelium_port **ports,
+		      int port_count);
 
-void chamelium_wait_reachable(struct chamelium *chamelium, int timeout);
+bool chamelium_wait_reachable(struct chamelium *chamelium, int timeout);
+void chamelium_assert_reachable(struct chamelium *chamelium, int timeout);
 void chamelium_plug(struct chamelium *chamelium, struct chamelium_port *port);
 void chamelium_unplug(struct chamelium *chamelium, struct chamelium_port *port);
 bool chamelium_is_plugged(struct chamelium *chamelium,
@@ -132,9 +178,14 @@ struct chamelium_edid *chamelium_new_edid(struct chamelium *chamelium,
 					  const struct edid *edid);
 const struct edid *chamelium_edid_get_raw(struct chamelium_edid *edid,
 					  struct chamelium_port *port);
+struct edid *chamelium_edid_get_editable_raw(struct chamelium_edid *edid,
+					     struct chamelium_port *port);
 void chamelium_port_set_edid(struct chamelium *chamelium,
 			     struct chamelium_port *port,
 			     struct chamelium_edid *edid);
+void chamelium_port_set_tiled_edid(struct chamelium *chamelium,
+				   struct chamelium_port *port,
+				   struct chamelium_edid *edid);
 bool chamelium_port_get_ddc_state(struct chamelium *chamelium,
 				  struct chamelium_port *port);
 void chamelium_port_set_ddc_state(struct chamelium *chamelium,
@@ -161,9 +212,6 @@ struct chamelium_infoframe *
 chamelium_get_last_infoframe(struct chamelium *chamelium,
 			     struct chamelium_port *port,
 			     enum chamelium_infoframe_type type);
-bool chamelium_supports_trigger_link_failure(struct chamelium *chamelium);
-void chamelium_trigger_link_failure(struct chamelium *chamelium,
-				    struct chamelium_port *port);
 bool chamelium_has_audio_support(struct chamelium *chamelium,
 				 struct chamelium_port *port);
 void chamelium_get_audio_channel_mapping(struct chamelium *chamelium,
@@ -204,10 +252,23 @@ void chamelium_assert_frame_match_or_dump(struct chamelium *chamelium,
 					  const struct chamelium_frame_dump *frame,
 					  struct igt_fb *fb,
 					  enum chamelium_check check);
+bool chamelium_frame_match_or_dump(struct chamelium *chamelium,
+				   struct chamelium_port *port,
+				   const struct chamelium_frame_dump *frame,
+				   struct igt_fb *fb,
+				   enum chamelium_check check);
+bool chamelium_frame_match_or_dump_frame_pair(struct chamelium *chamelium,
+					      struct chamelium_port *port,
+					      const struct chamelium_frame_dump *frame0,
+					      const struct chamelium_frame_dump *frame1,
+					      enum chamelium_check check);
 void chamelium_crop_analog_frame(struct chamelium_frame_dump *dump, int width,
 				 int height);
 void chamelium_destroy_frame_dump(struct chamelium_frame_dump *dump);
 void chamelium_destroy_audio_file(struct chamelium_audio_file *audio_file);
 void chamelium_infoframe_destroy(struct chamelium_infoframe *infoframe);
+bool chamelium_plug_all(struct chamelium *chamelium);
+bool chamelium_wait_all_configured_ports_connected(struct chamelium *chamelium,
+						   int drm_fd);
 
 #endif /* IGT_CHAMELIUM_H */

@@ -22,7 +22,20 @@
  *
  */
 
+/**
+ * TEST: kms tv load detect
+ * Category: Display
+ * Description: Test to check tv load detection.
+ * Driver requirement: i915, xe
+ * Mega feature: General Display Features
+ */
+
 #include "igt.h"
+
+/**
+ * SUBTEST: load-detect
+ * Description: Check tv load detection works correctly.
+ */
 
 IGT_TEST_DESCRIPTION("Check tv load detection works correctly.");
 
@@ -34,7 +47,7 @@ igt_main
 	drmModeConnector *tv_connector = NULL, *temp;
 
 	igt_fixture {
-		drm_fd = drm_open_driver_master(DRIVER_INTEL);
+		drm_fd = drm_open_driver_master(DRIVER_ANY);
 
 		res = drmModeGetResources(drm_fd);
 		igt_require(res);
@@ -63,6 +76,7 @@ igt_main
 		igt_require(tv_connector);
 	}
 
+	igt_describe("Check tv load detection works correctly.");
 	igt_subtest("load-detect") {
 		/*
 		 * disable all outputs to make sure we have a
@@ -83,6 +97,7 @@ igt_main
 
 	igt_fixture {
 		drmModeFreeConnector(tv_connector);
-		close(drm_fd);
+		drmModeFreeResources(res);
+		drm_close_driver(drm_fd);
 	}
 }

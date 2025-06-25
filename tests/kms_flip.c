@@ -21,21 +21,29 @@
  * IN THE SOFTWARE.
  */
 
+/**
+ * TEST: kms flip
+ * Category: Display
+ * Description: Tests for validating modeset, dpms and pageflips
+ * Driver requirement: i915, xe
+ * Mega feature: General Display Features
+ */
+
 #include "config.h"
 
 #include "igt.h"
+#include "i915/intel_drrs.h"
 
-#if defined(USE_CAIRO_PIXMAN)
 #include <cairo.h>
-#endif
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
+#include <poll.h>
 #include <stdint.h>
 #include <unistd.h>
-#include <sys/poll.h>
 #include <sys/time.h>
 #include <sys/ioctl.h>
+
 #ifdef HAVE_LINUX_KD_H
 #include <linux/kd.h>
 #elif HAVE_SYS_KD_H
@@ -44,9 +52,182 @@
 #include <time.h>
 #include <pthread.h>
 
+#include "i915/gem_create.h"
 #include "igt_stats.h"
+#include "xe/xe_query.h"
+
+/**
+ * SUBTEST: %s
+ * Description: %arg[1] test to validate pageflips with available fences
+ * Driver requirement: i915
+ *
+ * SUBTEST: 2x-%s
+ * Description: %arg[1] test to validate pageflips along with available fences
+ *              on a pair of connected displays
+ * Driver requirement: i915
+ *
+ * arg[1]:
+ *
+ * @flip-vs-fences:                 Basic
+ * @flip-vs-fences-interruptible:   Interrupt
+ */
+
+/**
+ * SUBTEST: dpms-off-%s
+ * Description: %arg[1] test to validate pageflips by disabling other connectors usng dpms
+ *
+ * arg[1]:
+ *
+ * @confusion:                      Basic
+ * @confusion-interruptible:        Interrupt
+ */
+
+/**
+ * SUBTEST: %s
+ * Description: %arg[1] test to validate pageflips with large BO in size
+ *
+ * arg[1]:
+ *
+ * @bo-too-big:                     Basic
+ * @bo-too-big-interruptible:       Interrupt
+ */
+
+/**
+ * SUBTEST: %s
+ * Description: Basic test to validate %arg[1]
+ *
+ * SUBTEST: 2x-%s
+ * Description: Test to validate %arg[1] on a pair of connected displays
+ *
+ * arg[1]:
+ *
+ * @flip-vs-modeset-vs-hang:      pageflip and modeset by hang injection
+ * @flip-vs-panning-vs-hang:      pageflip with panning by hang injection
+ */
+
+/**
+ * SUBTEST: %s
+ * Description: Basic test to validate %arg[1]
+ *
+ * SUBTEST: 2x-%s
+ * Description: Test to validate %arg[1] on a pair of connected displays
+ *
+ * arg[1]:
+ *
+ * @wf_vblank-ts-check:           wait for the vblank and check timestamps
+ * @blocking-wf_vblank:           wait for the vblank synchronous
+ * @absolute-wf_vblank:           wait for the absolute vblank
+ * @blocking-absolute-wf_vblank:  wait for the absolute vblank synchronous
+ * @busy-flip:                    pageflip with busy buffers
+ * @plain-flip-ts-check:          pageflip and check timestamps
+ * @plain-flip-fb-recreate:       pageflip by recreating the fb
+ * @flip-vs-rmfb:                 pageflip by recreating the fb (rmfb)
+ * @flip-vs-panning:              pageflip with panning
+ * @flip-vs-expired-vblank:       pageflip by checking the vbalnk sequence
+ * @flip-vs-absolute-wf_vblank:   pageflip and wait for the absolute vblank
+ * @flip-vs-blocking-wf-vblank:   pageflip and wait for the absolute vblank synchronous
+ * @nonexisting-fb:               expired framebuffer
+ * @modeset-vs-vblank-race:       modeset and check for vblank
+ */
+
+/**
+ * SUBTEST: %s
+ * Description: %arg[1] test to validate pageflips with suspend cycle
+ *
+ * SUBTEST: 2x-%s
+ * Description: %arg[1] test to validate pageflips with suspend cycle on a pair
+ *              of connected displays
+ *
+ * arg[1]:
+ *
+ * @flip-vs-suspend:                   Basic
+ * @flip-vs-suspend-interruptible:     Interrupt
+ */
+
+/**
+ * SUBTEST: %s
+ * Description: Basic test to validate %arg[1]
+ *
+ * SUBTEST: 2x-%s
+ * Description: Basic test to validate %arg[1] on a pair of connected displays
+ *
+ * SUBTEST: %s-interruptible
+ * Description: Basic test to validate %arg[1]
+ *
+ * SUBTEST: 2x-%s-interruptible
+ * Description: Basic test to validate %arg[1] on a pair of connected displays
+ *
+ * arg[1]:
+ *
+ * @flip-vs-dpms-off-vs-modeset:               pageflips along with modeset and
+ *                                             dpms off.
+ * @single-buffer-flip-vs-dpms-off-vs-modeset: pageflip of same buffer along with
+ *                                             the modeset and dpms off
+ * @dpms-vs-vblank-race:                       vblank along with the dpms & modeset
+ * @flip-vs-dpms-on-nop:                       pageflip and issue nop DPMS ON
+ */
+
+/**
+ * SUBTEST: 2x-flip-vs-dpms
+ * Description: Basic test to validate pageflip along with dpms on a pair of
+ *              connected displays
+ *
+ * SUBTEST: 2x-%s
+ * Description: Basic test to validate %arg[1] on a pair of connected displays
+ *
+ * arg[1]:
+ *
+ * @plain-flip:          pageflip
+ * @flip-vs-modeset:     pageflip along with modeset
+ * @flip-vs-wf_vblank:   pageflip along with waiting for vblank
+ */
+
+/**
+ * SUBTEST: %s-interruptible
+ * Description: Basic test for validating modeset, dpms and pageflips
+ *
+ * SUBTEST: 2x-%s-interruptible
+ * Description: Test for validating modeset, dpms and pageflips with a pair of
+ *              connected displays
+ *
+ * arg[1]:
+ *
+ * @wf_vblank-ts-check:           wait for the vblank and check timestamps
+ * @absolute-wf_vblank:           wait for the absolute vblank
+ * @blocking-absolute-wf_vblank:  wait for the absolute vblank synchronous
+ * @plain-flip:                   pageflip
+ * @plain-flip-ts-check:          pageflip and check timestamps
+ * @plain-flip-fb-recreate:       pageflip by recreating the fb
+ * @flip-vs-rmfb:                 pageflip by recreating the fb (rmfb)
+ * @flip-vs-panning:              pageflip with panning
+ * @flip-vs-expired-vblank:       pageflip by checking the vbalnk sequence
+ * @flip-vs-absolute-wf_vblank:   pageflip and wait for the absolute vblank
+ * @flip-vs-wf_vblank:            pageflip and wait for vblank
+ * @nonexisting-fb:               expired framebuffer
+ * @modeset-vs-vblank-race:       modeset and check for vblank
+ */
+
+/**
+ * SUBTEST: basic-plain-flip
+ * Description: Basic test for validating page flip
+ *
+ * SUBTEST: nonblocking-read
+ * Description: Tests that nonblocking reading fails correctly
+ *
+ * SUBTEST: basic-flip-vs-dpms
+ * Description: Basic test to valide pageflip with dpms
+ *
+ * SUBTEST: basic-flip-vs-%s
+ * Description: Basic test to valide pageflip with %arg[1]
+ *
+ * arg[1]:
+ *
+ * @modeset:      modeset
+ * @wf_vblank:    wait for vblank
+ */
 
 #define TEST_DPMS		(1 << 0)
+#define TEST_DPMS_ON_NOP	(1 << 1)
 
 #define TEST_PAN		(1 << 3)
 #define TEST_MODESET		(1 << 4)
@@ -86,14 +267,16 @@
 #define DRM_CAP_TIMESTAMP_MONOTONIC 6
 #endif
 
+static bool all_pipes = false;
+
 drmModeRes *resources;
 int drm_fd;
-static drm_intel_bufmgr *bufmgr;
-struct intel_batchbuffer *batch;
+static struct buf_ops *bops;
 uint32_t devid;
 int test_time = 3;
 static bool monotonic_timestamp;
 static pthread_t vblank_wait_thread;
+static int max_dotclock;
 
 static drmModeConnector *last_connector;
 
@@ -128,6 +311,15 @@ struct event_state {
 	/* Step between the current and next 'target' sequence number. */
 	int seq_step;
 };
+
+static bool should_skip_ts_checks(void) {
+	/* Mediatek devices have a HW issue with sending their vblank IRQ at the same time interval
+	 * everytime. The drift can be below or above the expected frame time, causing the
+	 * timestamp to drift with a relatively larger standard deviation over a large sample.
+	 * As it's a known issue, skip any Timestamp or Sequence checks for MTK drivers.
+	 */
+	return is_mtk_device(drm_fd);
+}
 
 static bool vblank_dependence(int flags)
 {
@@ -213,19 +405,19 @@ static void emit_fence_stress(struct test_output *o)
 	struct drm_i915_gem_execbuffer2 execbuf;
 	struct drm_i915_gem_exec_object2 *exec;
 	uint32_t buf[2] = { MI_BATCH_BUFFER_END, 0 };
-	drm_intel_bo **bo;
+	struct intel_buf **bo;
 	int i;
 
-	igt_require(bufmgr);
+	igt_require(bops);
 
-	bo = calloc(sizeof(*bo), num_fences);
-	exec = calloc(sizeof(*exec), num_fences+1);
+	igt_assert(num_fences);
+	bo = calloc(num_fences, sizeof(*bo));
+	exec = calloc(num_fences+1, sizeof(*exec));
 	for (i = 0; i < num_fences - 1; i++) {
 		uint32_t tiling = I915_TILING_X;
-		unsigned long pitch = 0;
-		bo[i] = drm_intel_bo_alloc_tiled(bufmgr,
-						 "X tiled bo", 1024, 1024, 4,
-						 &tiling, &pitch, 0);
+		bo[i] = intel_buf_create(bops, 1024, 1024, 32, 0, tiling,
+					 I915_COMPRESSION_NONE);
+
 		exec[i].handle = bo[i]->handle;
 		exec[i].flags = EXEC_OBJECT_NEEDS_FENCE;
 	}
@@ -245,7 +437,7 @@ static void emit_fence_stress(struct test_output *o)
 
 	gem_close(drm_fd, exec[i].handle);
 	for (i = 0; i < num_fences - 1; i++)
-		drm_intel_bo_unreference(bo[i]);
+		intel_buf_destroy(bo[i]);
 	free(bo);
 	free(exec);
 }
@@ -419,7 +611,6 @@ static double mode_frame_time(const struct test_output *o)
 
 static double actual_frame_time(const struct test_output *o)
 {
-	igt_assert(o->flags & TEST_CHECK_TS);
 	return o->vblank_interval;
 }
 
@@ -484,7 +675,7 @@ static void vblank_handler(int fd, unsigned int frame, unsigned int sec,
 	fixup_premature_vblank_ts(o, &o->vblank_state);
 }
 
-static void check_state(const struct test_output *o, const struct event_state *es)
+static bool check_state(const struct test_output *o, const struct event_state *es)
 {
 	struct timeval diff;
 
@@ -498,7 +689,7 @@ static void check_state(const struct test_output *o, const struct event_state *e
 	}
 
 	if (es->count == 0)
-		return;
+		return true;
 
 	timersub(&es->current_ts, &es->last_received_ts, &diff);
 	igt_assert_f(timercmp(&es->last_received_ts, &es->current_ts, <),
@@ -509,10 +700,12 @@ static void check_state(const struct test_output *o, const struct event_state *e
 	/* check only valid if no modeset happens in between, that increments by
 	 * (1 << 23) on each step. This bounding matches the one in
 	 * DRM_IOCTL_WAIT_VBLANK. */
-	if (!(o->flags & (TEST_DPMS | TEST_MODESET | TEST_NO_VBLANK)))
-		igt_assert_f(es->current_seq - (es->last_seq + o->seq_step) <= 1UL << 23,
-			     "unexpected %s seq %u, should be >= %u\n",
-			     es->name, es->current_seq, es->last_seq + o->seq_step);
+	if (!(o->flags & (TEST_DPMS | TEST_MODESET | TEST_NO_VBLANK)) &&
+	    es->current_seq - (es->last_seq + o->seq_step) > 1UL << 23) {
+		igt_debug("unexpected %s seq %u, should be >= %u\n",
+			  es->name, es->current_seq, es->last_seq + o->seq_step);
+		return false;
+	}
 
 	if (o->flags & TEST_CHECK_TS) {
 		double elapsed, expected;
@@ -527,17 +720,25 @@ static void check_state(const struct test_output *o, const struct event_state *e
 			  elapsed, expected, expected * 0.005,
 			  fabs((elapsed - expected) / expected) * 100);
 
-		igt_assert_f(fabs((elapsed - expected) / expected) <= 0.005,
-			     "inconsistent %s ts/seq: last %.06f/%u, current %.06f/%u: elapsed=%.1fus expected=%.1fus\n",
-			     es->name, timeval_float(&es->last_ts), es->last_seq,
-			     timeval_float(&es->current_ts), es->current_seq,
-			     elapsed, expected);
+		if (fabs((elapsed - expected) / expected) > 0.005) {
+			igt_debug("inconsistent %s ts/seq: last %.06f/%u, current %.06f/%u: elapsed=%.1fus expected=%.1fus\n",
+				  es->name, timeval_float(&es->last_ts), es->last_seq,
+				  timeval_float(&es->current_ts), es->current_seq,
+				  elapsed, expected);
 
-		igt_assert_f(es->current_seq == es->last_seq + o->seq_step,
-			     "unexpected %s seq %u, expected %u\n",
-			     es->name, es->current_seq,
-			     es->last_seq + o->seq_step);
+			return false;
+		}
+
+		if (es->current_seq != es->last_seq + o->seq_step) {
+			igt_debug("unexpected %s seq %u, expected %u\n",
+				  es->name, es->current_seq,
+				  es->last_seq + o->seq_step);
+
+			return false;
+		}
 	}
+
+	return true;
 }
 
 static void check_state_correlation(struct test_output *o,
@@ -564,7 +765,7 @@ static void check_state_correlation(struct test_output *o,
 		     es1->name, es2->name, usec_diff / USEC_PER_SEC);
 }
 
-static void check_all_state(struct test_output *o,
+static bool check_all_state(struct test_output *o,
 			    unsigned int completed_events)
 {
 	bool flip, vblank;
@@ -572,14 +773,17 @@ static void check_all_state(struct test_output *o,
 	flip = completed_events & EVENT_FLIP;
 	vblank = completed_events & EVENT_VBLANK;
 
-	if (flip)
-		check_state(o, &o->flip_state);
-	if (vblank)
-		check_state(o, &o->vblank_state);
+	if (flip && !check_state(o, &o->flip_state))
+		return false;
+
+	if (vblank && !check_state(o, &o->vblank_state))
+		return false;
 
 	/* FIXME: Correlation check is broken. */
 	if (flip && vblank && 0)
 		check_state_correlation(o, &o->flip_state, &o->vblank_state);
+
+	return true;
 }
 
 static void recreate_fb(struct test_output *o)
@@ -604,21 +808,14 @@ static void recreate_fb(struct test_output *o)
 	o->fb_info[o->current_fb_id].fb_id = new_fb_id;
 }
 
-static igt_hang_t hang_gpu(int fd)
+static igt_hang_t hang_gpu(int fd, uint64_t ahnd)
 {
-#if defined(USE_INTEL)
-	return igt_hang_ring(fd, I915_EXEC_DEFAULT);
-#else
-	igt_hang_t ret = {};
-	return ret;
-#endif
+	return igt_hang_ring_with_ahnd(fd, I915_EXEC_DEFAULT, ahnd);
 }
 
 static void unhang_gpu(int fd, igt_hang_t hang)
 {
-#if defined(USE_INTEL)
 	igt_post_hang_ring(fd, hang);
-#endif
 }
 
 static bool is_wedged(int fd)
@@ -649,13 +846,20 @@ static int set_mode(struct test_output *o, uint32_t fb, int x, int y)
 				     conn, count, mode);
 		if (ret)
 			return ret;
+
+		if (is_intel_device(drm_fd))
+			intel_drrs_disable(drm_fd, o->pipe);
 	}
 
 	return 0;
 }
 
-/* Return mask of completed events. */
-static unsigned int run_test_step(struct test_output *o)
+/*
+ * Return true if the test steps were run successfully, false in case of a
+ * failure that requires rerunning the test steps. On success events will
+ * contain the mask of completed events.
+ */
+static bool run_test_step(struct test_output *o, unsigned int *events)
 {
 	unsigned int new_fb_id;
 	/* for funny reasons page_flip returns -EBUSY on disabled crtcs ... */
@@ -666,6 +870,7 @@ static unsigned int run_test_step(struct test_output *o)
 	struct vblank_reply vbl_reply;
 	unsigned int target_seq;
 	igt_hang_t hang;
+	uint64_t ahnd = 0;
 
 	target_seq = o->vblank_state.seq_step;
 	/* Absolute waits only works once we have a frame counter. */
@@ -705,7 +910,11 @@ static unsigned int run_test_step(struct test_output *o)
 		end = gettime_us();
 		igt_debug("Vblank took %luus\n", end - start);
 		igt_assert(end - start < 500);
-		igt_assert_eq(reply.sequence, exp_seq);
+		if (reply.sequence != exp_seq) {
+			igt_debug("unexpected vblank seq %u, should be %u\n",
+				  reply.sequence, exp_seq);
+			return false;
+		}
 		igt_assert(timercmp(&reply.ts, &o->flip_state.last_ts, ==));
 	}
 
@@ -736,7 +945,7 @@ static unsigned int run_test_step(struct test_output *o)
 	if (o->flags & TEST_MODESET)
 		igt_assert(set_mode(o, o->fb_ids[o->current_fb_id], 0, 0) == 0);
 
-	if (o->flags & TEST_DPMS)
+	if (o->flags & (TEST_DPMS | TEST_DPMS_ON_NOP))
 		set_dpms(o, DRM_MODE_DPMS_ON);
 
 	if (o->flags & TEST_VBLANK_RACE) {
@@ -747,22 +956,33 @@ static unsigned int run_test_step(struct test_output *o)
 		start = gettime_us();
 		igt_assert(__wait_for_vblank(TEST_VBLANK_BLOCK, o->pipe, 2, 0, &reply) == 0);
 		end = gettime_us();
-		/*
-		 * we waited for two vblanks, so verify that
-		 * we were blocked for ~1-2 frames.
-		 */
-		igt_assert_f(end - start > 0.9 * mode_frame_time(o) &&
-			     end - start < 2.1 * mode_frame_time(o),
-			     "wait for two vblanks took %lu usec (frame time %f usec)\n",
-			     end - start, mode_frame_time(o));
+
+		if (!should_skip_ts_checks()) {
+			/*
+			 * we waited for two vblanks, so verify that
+			 * we were blocked for ~1-2 frames. And due
+			 * to scheduling latencies we give it an extra
+			 * half a frame or so.
+			 */
+			igt_assert_f(end - start > 0.9 * actual_frame_time(o) &&
+							 end - start < 2.6 * actual_frame_time(o),
+						 "wait for two vblanks took %lu usec (frame time %f usec)\n",
+						 end - start, mode_frame_time(o));
+		}
 		join_vblank_wait_thread();
 	}
 
 	igt_print_activity();
 
 	memset(&hang, 0, sizeof(hang));
-	if (do_flip && (o->flags & TEST_HANG))
-		hang = hang_gpu(drm_fd);
+	if (do_flip && (o->flags & TEST_HANG)) {
+		igt_require_intel(drm_fd);
+
+		ahnd = is_i915_device(drm_fd) ?
+			get_reloc_ahnd(drm_fd, 0) :
+			intel_allocator_open(drm_fd, 0, INTEL_ALLOCATOR_RELOC);
+		hang = hang_gpu(drm_fd, ahnd);
+	}
 
 	/* try to make sure we can issue two flips during the same frame */
 	if (do_flip && (o->flags & TEST_EBUSY)) {
@@ -832,8 +1052,11 @@ static unsigned int run_test_step(struct test_output *o)
 		igt_assert(do_page_flip(o, new_fb_id, false) == expected_einval);
 
 	unhang_gpu(drm_fd, hang);
+	put_ahnd(ahnd);
 
-	return completed_events;
+	*events = completed_events;
+
+	return true;
 }
 
 static void update_state(struct event_state *es)
@@ -896,12 +1119,35 @@ static bool mode_compatible(const drmModeModeInfo *a, const drmModeModeInfo *b)
 	return true;
 }
 
+static bool get_compatible_modes(drmModeModeInfo *a, drmModeModeInfo *b,
+				 drmModeConnector *c1, drmModeConnector *c2)
+{
+	int n, m;
+
+	*a = c1->modes[0];
+	*b = c2->modes[0];
+
+	if (!mode_compatible(a, b)) {
+		for (n = 0; n < c1->count_modes; n++) {
+			*a = c1->modes[n];
+			for (m = 0; m < c2->count_modes; m++) {
+				*b = c2->modes[m];
+				if (mode_compatible(a, b))
+					return true;
+			}
+		}
+
+		return false;
+	}
+
+	return true;
+}
+
 static void connector_find_compatible_mode(int crtc_idx0, int crtc_idx1,
 					   struct test_output *o)
 {
 	struct kmstest_connector_config config[2];
-	drmModeModeInfo *mode[2];
-	int n, m;
+	drmModeModeInfo mode[2];
 
 	if (!kmstest_get_connector_config(drm_fd, o->_connector[0],
 					  1 << crtc_idx0, &config[0]))
@@ -913,39 +1159,24 @@ static void connector_find_compatible_mode(int crtc_idx0, int crtc_idx1,
 		return;
 	}
 
-	mode[0] = &config[0].default_mode;
-	mode[1] = &config[1].default_mode;
-	if (!mode_compatible(mode[0], mode[1])) {
-		for (n = 0; n < config[0].connector->count_modes; n++) {
-			mode[0] = &config[0].connector->modes[n];
-			for (m = 0; m < config[1].connector->count_modes; m++) {
-				mode[1] = &config[1].connector->modes[m];
-				if (mode_compatible(mode[0], mode[1]))
-					goto found;
-			}
-		}
+	o->mode_valid = get_compatible_modes(&mode[0], &mode[1],
+					     config[0].connector, config[1].connector);
 
-		/* hope for the best! */
-		mode[1] = mode[0] = &config[0].default_mode;
-	}
-
-found:
 	o->pipe = config[0].pipe;
-	o->fb_width = mode[0]->hdisplay;
-	o->fb_height = mode[0]->vdisplay;
-	o->mode_valid = 1;
+	o->fb_width = mode[0].hdisplay;
+	o->fb_height = mode[0].vdisplay;
 
 	o->kconnector[0] = config[0].connector;
 	o->kencoder[0] = config[0].encoder;
 	o->_crtc[0] = config[0].crtc->crtc_id;
 	o->_pipe[0] = config[0].pipe;
-	o->kmode[0] = *mode[0];
+	o->kmode[0] = mode[0];
 
 	o->kconnector[1] = config[1].connector;
 	o->kencoder[1] = config[1].encoder;
 	o->_crtc[1] = config[1].crtc->crtc_id;
 	o->_pipe[1] = config[1].pipe;
-	o->kmode[1] = *mode[1];
+	o->kmode[1] = mode[1];
 
 	drmModeFreeCrtc(config[0].crtc);
 	drmModeFreeCrtc(config[1].crtc);
@@ -953,8 +1184,6 @@ found:
 
 static void paint_flip_mode(struct igt_fb *fb, bool odd_frame)
 {
-	/* TODO (b/145293089) resolve Cairo/Pixman dependencies */
-#if defined(USE_CAIRO_PIXMAN)
 	cairo_t *cr = igt_get_cairo_ctx(drm_fd, fb);
 	int width = fb->width;
 	int height = fb->height;
@@ -969,8 +1198,7 @@ static void paint_flip_mode(struct igt_fb *fb, bool odd_frame)
 	cairo_set_source_rgb(cr, 1, 1, 1);
 	cairo_fill(cr);
 
-	igt_put_cairo_ctx(drm_fd, fb, cr);
-#endif
+	igt_put_cairo_ctx(cr);
 }
 
 static bool fb_is_bound(struct test_output *o, int fb)
@@ -992,7 +1220,7 @@ static bool fb_is_bound(struct test_output *o, int fb)
 	return true;
 }
 
-static void check_final_state(const struct test_output *o,
+static bool check_final_state(const struct test_output *o,
 			      const struct event_state *es,
 			      unsigned int elapsed)
 {
@@ -1009,11 +1237,16 @@ static void check_final_state(const struct test_output *o,
 		igt_debug("expected %d, counted %d, encoder type %d\n",
 			  (int)(elapsed / actual_frame_time(o)), count,
 			  o->kencoder[0]->encoder_type);
-		igt_assert_f(elapsed >= min && elapsed <= max,
-			     "dropped frames, expected %d, counted %d, encoder type %d\n",
-			     (int)(elapsed / actual_frame_time(o)), count,
-			     o->kencoder[0]->encoder_type);
+		if (elapsed < min || elapsed > max) {
+			igt_debug("dropped frames, expected %d, counted %d, encoder type %d\n",
+				  (int)(elapsed / actual_frame_time(o)), count,
+				  o->kencoder[0]->encoder_type);
+
+			return false;
+		}
 	}
+
+	return true;
 }
 
 /*
@@ -1060,7 +1293,8 @@ static unsigned int wait_for_events(struct test_output *o)
 }
 
 /* Returned the elapsed time in us */
-static unsigned event_loop(struct test_output *o, unsigned duration_ms)
+static bool event_loop(struct test_output *o, unsigned duration_ms,
+		       unsigned *elapsed)
 {
 	unsigned long start, end;
 	int count = 0;
@@ -1070,10 +1304,15 @@ static unsigned event_loop(struct test_output *o, unsigned duration_ms)
 	while (1) {
 		unsigned int completed_events;
 
-		completed_events = run_test_step(o);
+		if (!run_test_step(o, &completed_events))
+			return false;
+
 		if (o->pending_events)
 			completed_events |= wait_for_events(o);
-		check_all_state(o, completed_events);
+
+		if (!check_all_state(o, completed_events))
+			return false;
+
 		update_all_state(o, completed_events);
 
 		if (count && (gettime_us() - start) / 1000 >= duration_ms)
@@ -1088,7 +1327,9 @@ static unsigned event_loop(struct test_output *o, unsigned duration_ms)
 	if (o->pending_events)
 		wait_for_events(o);
 
-	return end - start;
+	*elapsed = end - start;
+
+	return true;
 }
 
 static void free_test_output(struct test_output *o)
@@ -1101,7 +1342,7 @@ static void free_test_output(struct test_output *o)
 	}
 }
 
-static void calibrate_ts(struct test_output *o, int crtc_idx)
+static bool calibrate_ts(struct test_output *o, int crtc_idx)
 {
 #define CALIBRATE_TS_STEPS 16
 	drmVBlank wait;
@@ -1111,6 +1352,7 @@ static void calibrate_ts(struct test_output *o, int crtc_idx)
 	double expected;
 	double mean;
 	double stddev;
+	bool failed = false;
 	int n;
 
 	memset(&wait, 0, sizeof(wait));
@@ -1153,7 +1395,7 @@ static void calibrate_ts(struct test_output *o, int crtc_idx)
 			 * be interrupted with -EINTR, handle this by restarting
 			 * until we poll timeout or success.
 			 */
-			poll_ret = poll(&(struct pollfd){drm_fd, POLLIN}, 1, 1000);
+			poll_ret = poll(&(struct pollfd){drm_fd, POLLIN}, 1, -1);
 
 			if (poll_ret == 1)
 				break;
@@ -1162,7 +1404,18 @@ static void calibrate_ts(struct test_output *o, int crtc_idx)
 			igt_assert_eq(errno, EINTR);
 		}
 		igt_assert(read(drm_fd, &ev, sizeof(ev)) == sizeof(ev));
-		igt_assert_eq(ev.sequence, last_seq + 1);
+
+		if (failed)
+			continue;
+
+		if (ev.sequence != last_seq + 1) {
+			igt_debug("Unexpected frame sequence %d vs. expected %d\n",
+				  ev.sequence, last_seq + 1);
+			failed = true;
+
+			/* Continue to flush all the events queued up */
+			continue;
+		}
 
 		now = ev.tv_sec;
 		now *= 1000000;
@@ -1174,6 +1427,9 @@ static void calibrate_ts(struct test_output *o, int crtc_idx)
 		last_seq = ev.sequence;
 	}
 
+	if (failed)
+		return false;
+
 	expected = mode_frame_time(o);
 
 	mean = igt_stats_get_mean(&stats);
@@ -1181,13 +1437,10 @@ static void calibrate_ts(struct test_output *o, int crtc_idx)
 
 	igt_info("Expected frametime: %.0fus; measured %.1fus +- %.3fus accuracy %.2f%%\n",
 		 expected, mean, stddev, 100 * 3 * stddev / mean);
-	/* 99.7% samples within 0.5% of the mean */
-	/* Removing the check as this level of accuracy is hard to acheive.
-	 * The test fails on many current devices.
-	 */
-	// igt_assert(3 * stddev / mean < 0.005);
-	igt_warn_on_f(!(3 * stddev / mean < 0.005),
-		"VBlank intervals do not form a normal distribution.\n");
+	if (!should_skip_ts_checks())
+		/* 99.7% samples within 0.5% of the mean */
+		igt_assert(3 * stddev / mean < 0.005);
+
 	/* 84% samples within 0.5% of the expected value.
 	 * See comments in check_timings() in kms_setmode.c
 	 */
@@ -1198,81 +1451,109 @@ static void calibrate_ts(struct test_output *o, int crtc_idx)
 	}
 
 	o->vblank_interval = mean;
+
+	return true;
 }
 
-static void run_test_on_crtc_set(struct test_output *o, int *crtc_idxs,
-				 int crtc_count, int duration_ms)
+/*
+ * Some monitors with odd behavior signal a bad link after waking from a power
+ * saving state and the subsequent (successful) modeset. This will result in a
+ * link-retraining (DP) or async modeset (HDMI), which in turn makes the test
+ * miss vblank/flip events and fail.  Work around this by retrying the test
+ * once in case of such a link reset event, which the driver signals with a
+ * hotplug event.
+ */
+static bool needs_retry_after_link_reset(struct udev_monitor *mon)
 {
-	char test_name[128];
-	unsigned elapsed;
-	unsigned bo_size = 0;
-	uint64_t tiling;
-	int i;
-	bool vblank = true;
+	bool hotplug_detected;
 
-	switch (crtc_count) {
-	case RUN_TEST:
-		connector_find_preferred_mode(o->_connector[0], crtc_idxs[0], o);
-		if (!o->mode_valid)
-			return;
-		snprintf(test_name, sizeof(test_name),
-			 "%s on pipe %s, connector %s-%d",
-			 igt_subtest_name(),
-			 kmstest_pipe_name(o->_pipe[0]),
-			 kmstest_connector_type_str(o->kconnector[0]->connector_type),
-			 o->kconnector[0]->connector_type_id);
-		break;
-	case RUN_PAIR:
-		connector_find_compatible_mode(crtc_idxs[0], crtc_idxs[1], o);
-		if (!o->mode_valid)
-			return;
-		snprintf(test_name, sizeof(test_name),
-			 "%s on pipe %s:%s, connector %s-%d:%s-%d",
-			 igt_subtest_name(),
-			 kmstest_pipe_name(o->_pipe[0]),
-			 kmstest_pipe_name(o->_pipe[1]),
-			 kmstest_connector_type_str(o->kconnector[0]->connector_type),
-			 o->kconnector[0]->connector_type_id,
-			 kmstest_connector_type_str(o->kconnector[1]->connector_type),
-			 o->kconnector[1]->connector_type_id);
-		break;
-	default:
-		igt_assert(0);
+	igt_suspend_signal_helper();
+	hotplug_detected = igt_hotplug_detected(mon, 3);
+	igt_resume_signal_helper();
+
+	if (hotplug_detected)
+		igt_debug("Retrying after a hotplug event\n");
+
+	return hotplug_detected;
+}
+
+static void discard_any_stale_events(void) {
+	fd_set fds;
+	int ret;
+	struct timeval timeout = { .tv_sec = 0, .tv_usec = 20000 };
+	FD_ZERO(&fds);
+	FD_SET(drm_fd, &fds);
+	ret = select(drm_fd + 1, &fds, NULL, NULL, &timeout);
+
+	if (ret > 0) {
+		drmEventContext evctx;
+		memset(&evctx, 0, sizeof evctx);
+		evctx.version = 2;
+		igt_info("Stale Event found - Discarding now\n");
+		drmHandleEvent(drm_fd, &evctx);
 	}
+	else {
+		igt_debug("No stale events found\n");
+	}
+}
 
-	igt_assert_eq(o->count, crtc_count);
+static void get_suitable_modes(struct test_output *o)
+{
+	drmModeModeInfo mode[2];
+	int i;
 
+	for (i = 0; i < RUN_PAIR; i++)
+		igt_sort_connector_modes(o->kconnector[i],
+					 sort_drm_modes_by_clk_asc);
+
+	o->mode_valid = get_compatible_modes(&mode[0], &mode[1],
+					     o->kconnector[0], o->kconnector[1]);
+
+	o->fb_width = mode[0].hdisplay;
+	o->fb_height = mode[0].vdisplay;
+	o->kmode[0] = mode[0];
+	o->kmode[1] = mode[1];
+}
+
+static void __run_test_on_crtc_set(struct test_output *o, int *crtc_idxs,
+				   int crtc_count, int duration_ms)
+{
+	struct udev_monitor *mon = igt_watch_uevents();
+	unsigned bo_size = 0;
+	bool vblank = true;
+	bool retried = false, restart = false;
+	bool state_ok;
+	unsigned elapsed;
+	uint64_t modifier;
+	int i, ret;
+
+restart:
 	last_connector = o->kconnector[0];
-
-	igt_info("Beginning %s\n", test_name);
 
 	if (o->flags & TEST_PAN)
 		o->fb_width *= 2;
 
-	tiling = LOCAL_DRM_FORMAT_MOD_NONE;
-	if (o->flags & TEST_FENCE_STRESS) {
-#if defined(USE_INTEL)
-		tiling = LOCAL_I915_FORMAT_MOD_X_TILED;
-#else
-		igt_skip("Requires an intel device.\n");
-#endif
-	}
+	modifier = DRM_FORMAT_MOD_LINEAR;
+	if (o->flags & TEST_FENCE_STRESS)
+		modifier = I915_FORMAT_MOD_X_TILED;
 
 	/* 256 MB is usually the maximum mappable aperture,
 	 * (make it 4x times that to ensure failure) */
 	if (o->flags & TEST_BO_TOOBIG) {
-		bo_size = 4*gem_mappable_aperture_size();
-#if defined(USE_INTEL)
-		igt_require(bo_size < gem_global_aperture_size(drm_fd));
-#endif
+		bo_size = 4*gem_mappable_aperture_size(drm_fd);
+
+		if (is_i915_device(drm_fd))
+			igt_require(bo_size < gem_global_aperture_size(drm_fd));
+		else
+			igt_require(bo_size < (1ULL << xe_va_bits(drm_fd)));
 	}
 
 	o->fb_ids[0] = igt_create_fb(drm_fd, o->fb_width, o->fb_height,
 					 igt_bpp_depth_to_drm_format(o->bpp, o->depth),
-					 tiling, &o->fb_info[0]);
+					 modifier, &o->fb_info[0]);
 	o->fb_ids[1] = igt_create_fb_with_bo_size(drm_fd, o->fb_width, o->fb_height,
 						  igt_bpp_depth_to_drm_format(o->bpp, o->depth),
-						  tiling, IGT_COLOR_YCBCR_BT709,
+						  modifier, IGT_COLOR_YCBCR_BT709,
 						  IGT_COLOR_YCBCR_LIMITED_RANGE,
 						  &o->fb_info[1], bo_size, 0);
 
@@ -1288,17 +1569,45 @@ static void run_test_on_crtc_set(struct test_output *o, int *crtc_idxs,
 	for (i = 0; i < o->count; i++)
 		kmstest_dump_mode(&o->kmode[i]);
 
+retry:
+	/* Discard any pending event that hasn't been consumed from a previous retry or subtest. */
+	discard_any_stale_events();
+
+	memset(&o->vblank_state, 0, sizeof(o->vblank_state));
+	memset(&o->flip_state, 0, sizeof(o->flip_state));
+	o->flip_state.name = "flip";
+	o->vblank_state.name = "vblank";
+
 	kmstest_unset_all_crtcs(drm_fd, resources);
 
-	if (set_mode(o, o->fb_ids[0], 0, 0)) {
-		/* We may fail to apply the mode if there are hidden
-		 * constraints, such as bandwidth on the third pipe.
-		 */
-		igt_assert_f(crtc_count > 1 || crtc_idxs[0] < 2,
-			     "set_mode may only fail on the 3rd pipe or in multiple crtc tests\n");
-		igt_info("\n%s: SKIPPED\n\n", test_name);
+	igt_flush_uevents(mon);
+
+	ret = set_mode(o, o->fb_ids[0], 0, 0);
+
+	/* In case of DP-MST find suitable mode(s) to fit into the link BW. */
+	if (ret < 0 && errno == ENOSPC &&
+	    crtc_count == RUN_PAIR) {
+
+		if (restart) {
+			igt_info("No suitable modes found to fit into the link BW.\n");
+			goto out;
+		}
+
+		get_suitable_modes(o);
+
+		if (o->mode_valid) {
+			igt_remove_fb(drm_fd, &o->fb_info[2]);
+			igt_remove_fb(drm_fd, &o->fb_info[1]);
+			igt_remove_fb(drm_fd, &o->fb_info[0]);
+
+			restart = true;
+			goto restart;
+		}
+
 		goto out;
 	}
+
+	igt_assert(!ret);
 	igt_assert(fb_is_bound(o, o->fb_ids[0]));
 
 	vblank = kms_has_vblank(drm_fd);
@@ -1310,8 +1619,13 @@ static void run_test_on_crtc_set(struct test_output *o, int *crtc_idxs,
 	}
 
 	/* quiescent the hw a bit so ensure we don't miss a single frame */
-	if (o->flags & TEST_CHECK_TS)
-		calibrate_ts(o, crtc_idxs[0]);
+	if (o->flags & TEST_CHECK_TS && !calibrate_ts(o, crtc_idxs[0])) {
+		igt_assert(!retried && needs_retry_after_link_reset(mon));
+
+		retried = true;
+
+		goto retry;
+	}
 
 	if (o->flags & TEST_BO_TOOBIG) {
 		int err = do_page_flip(o, o->fb_ids[1], true);
@@ -1337,14 +1651,20 @@ static void run_test_on_crtc_set(struct test_output *o, int *crtc_idxs,
 	/* We run the vblank and flip actions in parallel by default. */
 	o->seq_step = max(o->vblank_state.seq_step, o->flip_state.seq_step);
 
-	elapsed = event_loop(o, duration_ms);
+	state_ok = event_loop(o, duration_ms, &elapsed);
 
 	if (o->flags & TEST_FLIP && !(o->flags & TEST_NOEVENT))
-		check_final_state(o, &o->flip_state, elapsed);
+		state_ok &= check_final_state(o, &o->flip_state, elapsed);
 	if (o->flags & TEST_VBLANK)
-		check_final_state(o, &o->vblank_state, elapsed);
+		state_ok &= check_final_state(o, &o->vblank_state, elapsed);
 
-	igt_info("\n%s: PASSED\n\n", test_name);
+	if (!state_ok) {
+		igt_assert(!retried && needs_retry_after_link_reset(mon));
+
+		retried = true;
+
+		goto retry;
+	}
 
 out:
 	igt_remove_fb(drm_fd, &o->fb_info[2]);
@@ -1354,14 +1674,110 @@ out:
 	last_connector = NULL;
 
 	free_test_output(o);
+
+	igt_cleanup_uevents(mon);
 }
 
-static int run_test(int duration, int flags)
+static void run_test_on_crtc_set(struct test_output *o, int *crtc_idxs,
+				 int crtc_count, int total_crtcs,
+				 int duration_ms)
+{
+	char test_name[128];
+	int i;
+
+	switch (crtc_count) {
+	case RUN_TEST:
+		connector_find_preferred_mode(o->_connector[0], crtc_idxs[0], o);
+		if (!o->mode_valid)
+			return;
+		snprintf(test_name, sizeof(test_name),
+			 "%s-%s%d",
+			 kmstest_pipe_name(o->_pipe[0]),
+			 kmstest_connector_type_str(o->kconnector[0]->connector_type),
+			 o->kconnector[0]->connector_type_id);
+		break;
+	case RUN_PAIR:
+		connector_find_compatible_mode(crtc_idxs[0], crtc_idxs[1], o);
+		if (!o->mode_valid)
+			return;
+		snprintf(test_name, sizeof(test_name),
+			 "%s%s-%s%d-%s%d",
+			 kmstest_pipe_name(o->_pipe[0]),
+			 kmstest_pipe_name(o->_pipe[1]),
+			 kmstest_connector_type_str(o->kconnector[0]->connector_type),
+			 o->kconnector[0]->connector_type_id,
+			 kmstest_connector_type_str(o->kconnector[1]->connector_type),
+			 o->kconnector[1]->connector_type_id);
+		break;
+	default:
+		igt_assert(0);
+	}
+
+	igt_assert_eq(o->count, crtc_count);
+
+	/*
+	 * Handle BW limitations on intel hardware:
+	 *
+	 * if force joiner (or) mode resolution > 5K (or) mode clock > max_dotclock, then ignore
+	 *  - last crtc in single/multi-connector config
+	 *  - consecutive crtcs in multi-connector config
+	 *
+	 * in multi-connector config ignore if
+	 *  - previous crtc (force joiner or mode resolution > 5K or mode clock > max_dotclock) and
+	 *  - current & previous crtcs are consecutive
+	 */
+	if (!is_intel_device(drm_fd))
+		goto test;
+
+	for (i = 0; i < crtc_count; i++) {
+		char conn_name[24], prev_conn_name[24];
+
+		snprintf(conn_name, sizeof(conn_name),
+			 "%s-%d",
+			 kmstest_connector_type_str(o->kconnector[i]->connector_type),
+			 o->kconnector[i]->connector_type_id);
+
+		if (i > 0)
+			snprintf(prev_conn_name, sizeof(prev_conn_name),
+				 "%s-%d",
+				 kmstest_connector_type_str(o->kconnector[i - 1]->connector_type),
+				 o->kconnector[i - 1]->connector_type_id);
+
+		if (((igt_check_force_joiner_status(drm_fd, conn_name) ||
+		      igt_bigjoiner_possible(drm_fd, &o->kmode[i], max_dotclock)) &&
+		     ((crtc_idxs[i] >= (total_crtcs - 1)) ||
+		      ((i < (crtc_count - 1)) && (abs(crtc_idxs[i + 1] - crtc_idxs[i]) <= 1)))) ||
+		    ((i > 0) && (igt_check_force_joiner_status(drm_fd, prev_conn_name) ||
+				 igt_bigjoiner_possible(drm_fd, &o->kmode[i - 1], max_dotclock)) &&
+		     (abs(crtc_idxs[i] - crtc_idxs[i - 1]) <= 1))) {
+
+			igt_debug("Combo: %s is not possible with selected mode(s).\n", test_name);
+			return;
+		}
+	}
+
+test:
+	igt_dynamic_f("%s", test_name)
+		__run_test_on_crtc_set(o, crtc_idxs, crtc_count, duration_ms);
+}
+
+static void run_test(int duration, int flags)
 {
 	struct test_output o;
 	int i, n, modes = 0;
 
-	igt_require((flags & TEST_HANG) == 0 || !is_wedged(drm_fd));
+	/* No tiling support in XE. */
+	if (is_xe_device(drm_fd) && flags & TEST_FENCE_STRESS)
+		return;
+
+	if (flags & TEST_BO_TOOBIG && !is_intel_device(drm_fd))
+		return;
+
+	if ((flags & TEST_HANG) == 0 && is_i915_device(drm_fd))
+		igt_require(!is_wedged(drm_fd));
+
+	igt_require(!(flags & TEST_FENCE_STRESS) ||
+		    (is_i915_device(drm_fd) && gem_available_fences(drm_fd)));
 
 	resources = drmModeGetResources(drm_fd);
 	igt_require(resources);
@@ -1369,12 +1785,15 @@ static int run_test(int duration, int flags)
 	/* Count output configurations to scale test runtime. */
 	for (i = 0; i < resources->count_connectors; i++) {
 		for (n = 0; n < resources->count_crtcs; n++) {
+			/* Limit the execution to 2 CRTCs (first & last) for hang tests */
+			if ((flags & TEST_HANG) && !all_pipes &&
+			    n != 0 && n != (resources->count_crtcs - 1))
+				continue;
+
 			memset(&o, 0, sizeof(o));
 			o.count = 1;
 			o._connector[0] = resources->connectors[i];
 			o.flags = flags;
-			o.flip_state.name = "flip";
-			o.vblank_state.name = "vblank";
 			o.bpp = 32;
 			o.depth = 24;
 
@@ -1387,38 +1806,55 @@ static int run_test(int duration, int flags)
 	}
 
 	igt_require(modes);
-	duration = duration * 1000 / modes;
-	duration = max(500, duration);
+
+	if (duration) {
+		duration = duration * 1000 / modes;
+		duration = max(500, duration);
+	}
 
 	/* Find any connected displays */
 	for (i = 0; i < resources->count_connectors; i++) {
 		for (n = 0; n < resources->count_crtcs; n++) {
 			int crtc_idx;
 
+			/* Limit the execution to 2 CRTCs (first & last) for hang tests */
+			if ((flags & TEST_HANG) && !all_pipes &&
+			    n != 0 && n != (resources->count_crtcs - 1))
+				continue;
+
 			memset(&o, 0, sizeof(o));
 			o.count = 1;
 			o._connector[0] = resources->connectors[i];
 			o.flags = flags;
-			o.flip_state.name = "flip";
-			o.vblank_state.name = "vblank";
 			o.bpp = 32;
 			o.depth = 24;
 
 			crtc_idx = n;
-			run_test_on_crtc_set(&o, &crtc_idx, RUN_TEST, duration);
+			run_test_on_crtc_set(&o, &crtc_idx, RUN_TEST,
+					     resources->count_crtcs, duration);
 		}
 	}
 
 	drmModeFreeResources(resources);
-	return 1;
 }
 
-static int run_pair(int duration, int flags)
+static void run_pair(int duration, int flags)
 {
 	struct test_output o;
 	int i, j, m, n, modes = 0;
 
-	igt_require((flags & TEST_HANG) == 0 || !is_wedged(drm_fd));
+	/* No tiling support in XE. */
+	if (is_xe_device(drm_fd) && flags & TEST_FENCE_STRESS)
+		return;
+
+	if (flags & TEST_BO_TOOBIG && !is_intel_device(drm_fd))
+		return;
+
+	if ((flags & TEST_HANG) == 0 && is_i915_device(drm_fd))
+		igt_require(!is_wedged(drm_fd));
+
+	igt_require(!(flags & TEST_FENCE_STRESS) ||
+		    (is_i915_device(drm_fd) && gem_available_fences(drm_fd)));
 
 	resources = drmModeGetResources(drm_fd);
 	igt_require(resources);
@@ -1433,8 +1869,6 @@ static int run_pair(int duration, int flags)
 					o._connector[0] = resources->connectors[i];
 					o._connector[1] = resources->connectors[j];
 					o.flags = flags;
-					o.flip_state.name = "flip";
-					o.vblank_state.name = "vblank";
 					o.bpp = 32;
 					o.depth = 24;
 
@@ -1450,9 +1884,12 @@ static int run_pair(int duration, int flags)
 
 	/* If we have fewer than 2 connected outputs then we won't have any
 	 * configuration at all. So skip in that case. */
-	igt_require_f(modes, "At least two displays required\n");
-	duration = duration * 1000 / modes;
-	duration = max(duration, 500);
+	igt_require_f(modes, "At least two displays with same modes are required\n");
+
+	if (duration) {
+		duration = duration * 1000 / modes;
+		duration = max(duration, 500);
+	}
 
 	/* Find a pair of connected displays */
 	for (i = 0; i < resources->count_connectors; i++) {
@@ -1466,16 +1903,21 @@ static int run_pair(int duration, int flags)
 					o._connector[0] = resources->connectors[i];
 					o._connector[1] = resources->connectors[j];
 					o.flags = flags;
-					o.flip_state.name = "flip";
-					o.vblank_state.name = "vblank";
 					o.bpp = 32;
 					o.depth = 24;
 
 					crtc_idxs[0] = n;
 					crtc_idxs[1] = m;
 
+					/* Limit the execution to 2 CRTCs (first & last) for hang tests */
+					if ((flags & TEST_HANG) && !all_pipes &&
+					    ((n != 0 && n != resources->count_crtcs) ||
+					    m != resources->count_crtcs - 1))
+						continue;
+
 					run_test_on_crtc_set(&o, crtc_idxs,
 							     RUN_PAIR,
+							     resources->count_crtcs,
 							     duration);
 				}
 			}
@@ -1483,7 +1925,6 @@ static int run_pair(int duration, int flags)
 	}
 
 	drmModeFreeResources(resources);
-	return 1;
 }
 
 static void get_timestamp_format(void)
@@ -1500,10 +1941,8 @@ static void get_timestamp_format(void)
 
 static void kms_flip_exit_handler(int sig)
 {
-	igt_fixture {
-		if (last_connector)
-			kmstest_set_connector_dpms(drm_fd, last_connector, DRM_MODE_DPMS_ON);
-	}
+	if (last_connector)
+		kmstest_set_connector_dpms(drm_fd, last_connector, DRM_MODE_DPMS_ON);
 }
 
 static void test_nonblocking_read(int in)
@@ -1531,7 +1970,23 @@ static void test_nonblocking_read(int in)
 	close(fd);
 }
 
-igt_main
+static int opt_handler(int opt, int opt_index, void *data)
+{
+	switch (opt) {
+		case 'e':
+			all_pipes = true;
+			break;
+		default:
+			return IGT_OPT_HANDLER_ERROR;
+	}
+
+	return IGT_OPT_HANDLER_SUCCESS;
+}
+
+const char *help_str =
+	"  -e \tRun on all pipes. (By default subtests will run on two pipes)\n";
+
+igt_main_args("e", NULL, help_str, opt_handler, NULL)
 {
 	struct {
 		int duration;
@@ -1545,27 +2000,28 @@ igt_main
 					"absolute-wf_vblank" },
 		{ 30,  TEST_VBLANK | TEST_VBLANK_BLOCK | TEST_VBLANK_ABSOLUTE,
 					"blocking-absolute-wf_vblank" },
-		{ 10, TEST_FLIP | TEST_BASIC, "plain-flip" },
+		{ 2, TEST_FLIP | TEST_BASIC, "plain-flip" },
 		{ 1, TEST_FLIP | TEST_EBUSY, "busy-flip" },
 		{ 30, TEST_FLIP | TEST_FENCE_STRESS , "flip-vs-fences" },
 		{ 30, TEST_FLIP | TEST_CHECK_TS, "plain-flip-ts-check" },
 		{ 30, TEST_FLIP | TEST_CHECK_TS | TEST_FB_RECREATE,
 			"plain-flip-fb-recreate" },
 		{ 30, TEST_FLIP | TEST_RMFB | TEST_MODESET , "flip-vs-rmfb" },
-		{ 20, TEST_FLIP | TEST_DPMS | TEST_EINVAL | TEST_BASIC, "flip-vs-dpms" },
+		{ 2, TEST_FLIP | TEST_DPMS | TEST_EINVAL | TEST_BASIC, "flip-vs-dpms" },
+		{ 2, TEST_FLIP | TEST_DPMS_ON_NOP | TEST_CHECK_TS, "flip-vs-dpms-on-nop" },
 		{ 30,  TEST_FLIP | TEST_PAN, "flip-vs-panning" },
-		{ 20, TEST_FLIP | TEST_MODESET | TEST_EINVAL | TEST_BASIC, "flip-vs-modeset" },
+		{ 2, TEST_FLIP | TEST_MODESET | TEST_EINVAL | TEST_BASIC, "flip-vs-modeset" },
 		{ 30,  TEST_FLIP | TEST_VBLANK_EXPIRED_SEQ,
 					"flip-vs-expired-vblank" },
 
 		{ 30, TEST_FLIP | TEST_VBLANK | TEST_VBLANK_ABSOLUTE |
 		      TEST_CHECK_TS, "flip-vs-absolute-wf_vblank" },
-		{ 10, TEST_FLIP | TEST_VBLANK | TEST_CHECK_TS | TEST_BASIC,
+		{ 2, TEST_FLIP | TEST_VBLANK | TEST_CHECK_TS | TEST_BASIC,
 					"flip-vs-wf_vblank" },
 		{ 30, TEST_FLIP | TEST_VBLANK | TEST_VBLANK_BLOCK |
 			TEST_CHECK_TS, "flip-vs-blocking-wf-vblank" },
-		{ 30, TEST_FLIP | TEST_MODESET | TEST_HANG | TEST_NOEVENT, "flip-vs-modeset-vs-hang" },
-		{ 30, TEST_FLIP | TEST_PAN | TEST_HANG, "flip-vs-panning-vs-hang" },
+		{ 1, TEST_FLIP | TEST_MODESET | TEST_HANG | TEST_NOEVENT, "flip-vs-modeset-vs-hang" },
+		{ 1, TEST_FLIP | TEST_PAN | TEST_HANG, "flip-vs-panning-vs-hang" },
 
 		{ 1, TEST_DPMS_OFF | TEST_MODESET | TEST_FLIP,
 					"flip-vs-dpms-off-vs-modeset" },
@@ -1573,38 +2029,42 @@ igt_main
 					"single-buffer-flip-vs-dpms-off-vs-modeset" },
 		{ 30, TEST_FLIP | TEST_NO_2X_OUTPUT | TEST_DPMS_OFF_OTHERS , "dpms-off-confusion" },
 		{ 0, TEST_ENOENT | TEST_NOEVENT, "nonexisting-fb" },
-		{ 10, TEST_DPMS_OFF | TEST_DPMS | TEST_VBLANK_RACE, "dpms-vs-vblank-race" },
-		{ 10, TEST_MODESET | TEST_VBLANK_RACE, "modeset-vs-vblank-race" },
+		{ 10, TEST_DPMS_OFF | TEST_DPMS | TEST_VBLANK_RACE | TEST_CHECK_TS, "dpms-vs-vblank-race" },
+		{ 10, TEST_MODESET | TEST_VBLANK_RACE | TEST_CHECK_TS, "modeset-vs-vblank-race" },
 		{ 0, TEST_BO_TOOBIG | TEST_NO_2X_OUTPUT, "bo-too-big" },
 		{ 10, TEST_FLIP | TEST_SUSPEND, "flip-vs-suspend" },
 	};
+	igt_display_t display;
 	int i;
 
 	igt_fixture {
 		drm_fd = drm_open_driver_master(DRIVER_ANY);
 
-		igt_enable_connectors(drm_fd);
+		igt_display_require(&display, drm_fd);
 
 		kmstest_set_vt_graphics_mode();
 		igt_install_exit_handler(kms_flip_exit_handler);
 		get_timestamp_format();
 
-#if defined(USE_INTEL)
 		if (is_i915_device(drm_fd)) {
-			bufmgr = drm_intel_bufmgr_gem_init(drm_fd, 4096);
-			if (bufmgr) {
-				devid = intel_get_drm_devid(drm_fd);
-				batch = intel_batchbuffer_alloc(bufmgr, devid);
-			}
+			bops = buf_ops_create(drm_fd);
 		}
-#endif
+
+		if (should_skip_ts_checks()) {
+			igt_info("Skipping timestamp checks\n");
+			for (i = 0; i < sizeof(tests) / sizeof(tests[0]); i++)
+				tests[i].flags &= ~(TEST_CHECK_TS | TEST_VBLANK_EXPIRED_SEQ);
+		}
+		max_dotclock = igt_get_max_dotclock(drm_fd);
 	}
 
+	igt_describe("Tests that nonblocking reading fails correctly");
 	igt_subtest("nonblocking-read")
 		test_nonblocking_read(drm_fd);
 
 	for (i = 0; i < sizeof(tests) / sizeof (tests[0]); i++) {
-		igt_subtest_f("%s%s",
+		igt_describe("Basic test for validating modeset, dpms and pageflips");
+		igt_subtest_with_dynamic_f("%s%s",
 			      tests[i].flags & TEST_BASIC ? "basic-" : "",
 			      tests[i].name)
 			run_test(tests[i].duration, tests[i].flags);
@@ -1612,7 +2072,8 @@ igt_main
 		if (tests[i].flags & TEST_NO_2X_OUTPUT)
 			continue;
 
-		igt_subtest_f( "2x-%s", tests[i].name)
+		igt_describe("Test for validating modeset, dpms and pageflips with a pair of connected displays");
+		igt_subtest_with_dynamic_f("2x-%s", tests[i].name)
 			run_pair(tests[i].duration, tests[i].flags);
 	}
 
@@ -1625,20 +2086,34 @@ igt_main
 			continue;
 
 		/*
+		 * -EINVAL are negative API tests, they are rejected before
+		 *  any waits and so not subject to interruptiblity.
+		 *
 		 * -EBUSY needs to complete in a single vblank, skip them for
 		 * interruptible tests
+		 *
+		 * HANGs are slow enough and interruptible hang testing is
+		 * an oxymoron (can't force the wait-for-hang if being
+		 * interrupted all the time).
 		 */
-		if (tests[i].flags & TEST_EBUSY)
+		if (tests[i].flags & (TEST_EINVAL | TEST_EBUSY | TEST_HANG))
 			continue;
 
-		igt_subtest_f( "%s-interruptible", tests[i].name)
+		igt_describe("Interrupt test for validating modeset, dpms and pageflips");
+		igt_subtest_with_dynamic_f("%s-interruptible", tests[i].name)
 			run_test(tests[i].duration, tests[i].flags);
 
 		if (tests[i].flags & TEST_NO_2X_OUTPUT)
 			continue;
 
-		igt_subtest_f( "2x-%s-interruptible", tests[i].name)
+		 igt_describe("Interrupt test for validating modeset, dpms and pageflips with pair of connected displays");
+		igt_subtest_with_dynamic_f("2x-%s-interruptible", tests[i].name)
 			run_pair(tests[i].duration, tests[i].flags);
 	}
 	igt_stop_signal_helper();
+
+	igt_fixture {
+		igt_display_fini(&display);
+		drm_close_driver(drm_fd);
+	}
 }

@@ -70,57 +70,82 @@
  *
  * Pointer to the register range, initialized using intel_register_access_init()
  * or intel_mmio_use_dump_file(). It is not recommended to use this directly.
+ * This pointer is valid only for one drm device.
  */
 void *igt_global_mmio;
 
-static struct _mmio_data {
-	int inited;
-	bool safe;
-	uint32_t i915_devid;
-	struct intel_register_map map;
-	int key;
-} mmio_data;
-
 /**
  * intel_mmio_use_dump_file:
+ * @mmio_data:  mmio structure for IO operations
  * @file: name of the register dump file to open
  *
- * Sets up #igt_global_mmio to point at the data contained in @file. This allows
- * the same code to get reused for dumping and decoding from running hardware as
- * from register dumps.
+ * Sets also up mmio_data->igt_mmio to point at the data contained
+ * in @file. This allows the same code to get reused for dumping and decoding
+ * from running hardware as from register dumps.
+ *
+ * Users are expected to call intel_mmio_unmap_dump_file() after use.
  */
 void
-intel_mmio_use_dump_file(char *file)
+intel_mmio_use_dump_file(struct intel_mmio_data *mmio_data, char *file)
 {
 	int fd;
 	struct stat st;
 
+	memset(mmio_data, 0, sizeof(struct intel_mmio_data));
 	fd = open(file, O_RDWR);
 	igt_fail_on_f(fd == -1,
 		      "Couldn't open %s\n", file);
 
 	fstat(fd, &st);
-	igt_global_mmio = mmap(NULL, st.st_size, PROT_READ|PROT_WRITE, MAP_PRIVATE, fd, 0);
-	igt_fail_on_f(igt_global_mmio == MAP_FAILED,
+	mmio_data->igt_mmio = mmap(NULL, st.st_size, PROT_READ|PROT_WRITE, MAP_PRIVATE, fd, 0);
+	igt_fail_on_f(mmio_data->igt_mmio == MAP_FAILED,
 		      "Couldn't mmap %s\n", file);
+
+	mmio_data->mmio_size = st.st_size;
+	igt_global_mmio = mmio_data->igt_mmio;
+
 	close(fd);
 }
 
 /**
+ * intel_mmio_unmap_dump_file:
+ * @mmio_data:  mmio structure initialized with intel_mmio_use_dump_file()
+ *
+ * Unmaps a dump file mmapped with intel_mmio_use_dump_file()
+ */
+void intel_mmio_unmap_dump_file(struct intel_mmio_data *mmio_data)
+{
+	if (igt_warn_on_f(mmio_data->dev,
+			  "test bug: arg initialized with a method other than intel_mmio_use_dump_file()\n"))
+		return;
+	if (igt_warn_on_f(!mmio_data->mmio_size,
+			  "test bug: arg not initialized\n"))
+		return;
+
+	igt_global_mmio = NULL;
+	igt_debug_on(munmap(mmio_data->igt_mmio, mmio_data->mmio_size) < 0);
+	mmio_data->mmio_size = 0;
+}
+
+/**
  * intel_mmio_use_pci_bar:
+ * @mmio_data:  mmio structure for IO operations
  * @pci_dev: intel gracphis pci device
  *
- * Sets up #igt_global_mmio to point at the mmio bar.
+ * Fill a mmio_data stucture with igt_mmio to point at the mmio bar.
  *
  * @pci_dev can be obtained from intel_get_pci_device().
+ *
+ * Users are expected to call intel_mmio_unmap_pci_bar() after use.
  */
 void
-intel_mmio_use_pci_bar(struct pci_device *pci_dev)
+intel_mmio_use_pci_bar(struct intel_mmio_data *mmio_data, struct pci_device *pci_dev)
 {
 	uint32_t devid, gen;
 	int mmio_bar, mmio_size;
 	int error;
 
+	memset(mmio_data, 0, sizeof(struct intel_mmio_data));
 	devid = pci_dev->device_id;
 	if (IS_GEN2(devid))
 		mmio_bar = 1;
@@ -128,21 +153,47 @@ intel_mmio_use_pci_bar(struct pci_device *pci_dev)
 		mmio_bar = 0;
 
 	gen = intel_gen(devid);
-	if (gen < 3)
-		mmio_size = 512*1024;
-	else if (gen < 5)
-		mmio_size = 512*1024;
+	if (gen >= 12)
+		mmio_size = pci_dev->regions[mmio_bar].size;
+	else if (gen >= 5)
+		mmio_size = 2 * 1024 * 1024;
 	else
-		mmio_size = 2*1024*1024;
+		mmio_size = 512 * 1024;
 
 	error = pci_device_map_range (pci_dev,
 				      pci_dev->regions[mmio_bar].base_addr,
 				      mmio_size,
 				      PCI_DEV_MAP_FLAG_WRITABLE,
-				      &igt_global_mmio);
+				      &mmio_data->igt_mmio);
 
 	igt_fail_on_f(error != 0,
 		      "Couldn't map MMIO region\n");
+
+	mmio_data->mmio_size = mmio_size;
+	mmio_data->dev = pci_dev;
+	igt_global_mmio = mmio_data->igt_mmio;
+}
+
+/**
+ * intel_mmio_unmap_pci_bar:
+ * @mmio_data:  mmio structure initialized with intel_mmio_use_pci_bar()
+ *
+ * Unmaps a PCI BAR region mmapped with intel_mmio_use_pci_bar()
+ */
+void intel_mmio_unmap_pci_bar(struct intel_mmio_data *mmio_data)
+{
+	if (igt_warn_on_f(mmio_data->pci_device_id,
+			  "test bug: arg initialized with a method other than intel_mmio_use_pci_bar()\n"))
+		return;
+	if (igt_warn_on_f(!mmio_data->dev,
+			  "test bug: arg not initialized with intel_mmio_use_pci_bar()\n"))
+		return;
+
+	igt_global_mmio = NULL;
+	igt_debug_on(pci_device_unmap_range(mmio_data->dev,
+					    mmio_data->igt_mmio, mmio_data->mmio_size) < 0);
+	mmio_data->dev = NULL;
+	mmio_data->mmio_size = 0;
 }
 
 static void
@@ -153,6 +204,7 @@ release_forcewake_lock(int fd)
 
 /**
  * intel_register_access_init:
+ * @mmio_data:  mmio structure for IO operations
  * @pci_dev: intel graphics pci device
  * @safe: use safe register access tables
  *
@@ -160,76 +212,81 @@ release_forcewake_lock(int fd)
  * handling and also allows register access to be checked with an explicit
  * whitelist.
  *
- * It also initializes #igt_global_mmio like intel_mmio_use_pci_bar().
+ * It also initializes mmio_data->igt_mmio like intel_mmio_use_pci_bar().
  *
  * @pci_dev can be obtained from intel_get_pci_device().
+ *
+ * Users are expected to call intel_register_access_fini() after use.
  */
 int
-intel_register_access_init(struct pci_device *pci_dev, int safe, int fd)
+intel_register_access_init(struct intel_mmio_data *mmio_data, struct pci_device *pci_dev, int safe)
 {
 	int ret;
 
-	/* after old API is deprecated, remove this */
-	if (igt_global_mmio == NULL)
-		intel_mmio_use_pci_bar(pci_dev);
+	intel_mmio_use_pci_bar(mmio_data, pci_dev);
 
-	igt_assert(igt_global_mmio != NULL);
+	igt_assert(mmio_data->igt_mmio != NULL);
 
-	if (mmio_data.inited)
-		return -1;
-
-	mmio_data.safe = (safe != 0 &&
+	mmio_data->safe = (safe != 0 &&
 			intel_gen(pci_dev->device_id) >= 4) ? true : false;
-	mmio_data.i915_devid = pci_dev->device_id;
-	if (mmio_data.safe)
-		mmio_data.map = intel_get_register_map(mmio_data.i915_devid);
+	mmio_data->pci_device_id = pci_dev->device_id;
+	if (mmio_data->safe)
+		mmio_data->map = intel_get_register_map(mmio_data->pci_device_id);
 
 	/* Find where the forcewake lock is. Forcewake doesn't exist
 	 * gen < 6, but the debugfs should do the right things for us.
 	 */
-	ret = igt_open_forcewake_handle(fd);
-	if (ret == -1)
-		mmio_data.key = FAKEKEY;
+	ret = igt_open_forcewake_handle_for_pcidev(pci_dev);
+	if (ret < 0)
+		mmio_data->key = FAKEKEY;
 	else
-		mmio_data.key = ret;
+		mmio_data->key = ret;
 
-	mmio_data.inited++;
 	return 0;
 }
 
 static int
-intel_register_access_needs_wake(void)
+intel_register_access_needs_wake(struct intel_mmio_data *mmio_data)
 {
-	return mmio_data.key != FAKEKEY;
+	return mmio_data->key != FAKEKEY;
 }
 
 /**
  * intel_register_access_needs_fakewake:
+ * @mmio_data:  mmio structure for IO operations
  *
  * Returns:
  * Non-zero when forcewake initialization failed.
  */
-int intel_register_access_needs_fakewake(void)
+int intel_register_access_needs_fakewake(struct intel_mmio_data *mmio_data)
 {
-	return mmio_data.key == FAKEKEY;
+	return mmio_data->key == FAKEKEY;
 }
 
 /**
  * intel_register_access_fini:
+ * @mmio_data:  mmio structure initialized with intel_register_access_init()
  *
  * Clean up the register access helper initialized with
  * intel_register_access_init().
  */
 void
-intel_register_access_fini(void)
+intel_register_access_fini(struct intel_mmio_data *mmio_data)
 {
-	if (mmio_data.key && intel_register_access_needs_wake())
-		release_forcewake_lock(mmio_data.key);
-	mmio_data.inited--;
+	if (igt_warn_on_f(!mmio_data->pci_device_id,
+			  "test bug: arg not initialized with intel_register_access_init()\n"))
+		return;
+
+	if (mmio_data->key && intel_register_access_needs_wake(mmio_data))
+		release_forcewake_lock(mmio_data->key);
+
+	mmio_data->pci_device_id = 0;
+	intel_mmio_unmap_pci_bar(mmio_data);
 }
 
 /**
  * intel_register_read:
+ * @mmio_data:  mmio structure for IO operations
  * @reg: register offset
  *
  * 32-bit read of the register at @offset. This function only works when the new
@@ -242,20 +299,18 @@ intel_register_access_fini(void)
  * The value read from the register.
  */
 uint32_t
-intel_register_read(uint32_t reg)
+intel_register_read(struct intel_mmio_data *mmio_data, uint32_t reg)
 {
 	struct intel_register_range *range;
 	uint32_t ret;
 
-	igt_assert(mmio_data.inited);
+	if (intel_gen(mmio_data->pci_device_id) >= 6)
+		igt_assert(mmio_data->key != -1);
 
-	if (intel_gen(mmio_data.i915_devid) >= 6)
-		igt_assert(mmio_data.key != -1);
-
-	if (!mmio_data.safe)
+	if (!mmio_data->safe)
 		goto read_out;
 
-	range = intel_get_register_range(mmio_data.map,
+	range = intel_get_register_range(mmio_data->map,
 					 reg,
 					 INTEL_RANGE_READ);
 
@@ -266,13 +321,14 @@ intel_register_read(uint32_t reg)
 	}
 
 read_out:
-	ret = *(volatile uint32_t *)((volatile char *)igt_global_mmio + reg);
+	ret = ioread32(mmio_data->igt_mmio, reg);
 out:
 	return ret;
 }
 
 /**
  * intel_register_write:
+ * @mmio_data:  mmio structure for IO operations
  * @reg: register offset
  * @val: value to write
  *
@@ -283,19 +339,17 @@ out:
  * white lists.
  */
 void
-intel_register_write(uint32_t reg, uint32_t val)
+intel_register_write(struct intel_mmio_data *mmio_data, uint32_t reg, uint32_t val)
 {
 	struct intel_register_range *range;
 
-	igt_assert(mmio_data.inited);
+	if (intel_gen(mmio_data->pci_device_id) >= 6)
+		igt_assert(mmio_data->key != -1);
 
-	if (intel_gen(mmio_data.i915_devid) >= 6)
-		igt_assert(mmio_data.key != -1);
-
-	if (!mmio_data.safe)
+	if (!mmio_data->safe)
 		goto write_out;
 
-	range = intel_get_register_range(mmio_data.map,
+	range = intel_get_register_range(mmio_data->map,
 					 reg,
 					 INTEL_RANGE_WRITE);
 
@@ -303,105 +357,5 @@ intel_register_write(uint32_t reg, uint32_t val)
 		      "Register write blocked for safety ""(*0x%08x = 0x%x)\n", reg, val);
 
 write_out:
-	*(volatile uint32_t *)((volatile char *)igt_global_mmio + reg) = val;
-}
-
-
-/**
- * INREG:
- * @reg: register offset
- *
- * 32-bit read of the register at offset @reg. This function only works when the
- * new register access helper is initialized with intel_register_access_init().
- *
- * This function directly accesses the #igt_global_mmio without safety checks.
- *
- * Returns:
- * The value read from the register.
- */
-uint32_t INREG(uint32_t reg)
-{
-	return *(volatile uint32_t *)((volatile char *)igt_global_mmio + reg);
-}
-
-/**
- * INREG16:
- * @reg: register offset
- *
- * 16-bit read of the register at offset @reg. This function only works when the
- * new register access helper is initialized with intel_register_access_init().
- *
- * This function directly accesses the #igt_global_mmio without safety checks.
- *
- * Returns:
- * The value read from the register.
- */
-uint16_t INREG16(uint32_t reg)
-{
-	return *(volatile uint16_t *)((volatile char *)igt_global_mmio + reg);
-}
-
-/**
- * INREG8:
- * @reg: register offset
- *
- * 8-bit read of the register at offset @reg. This function only works when the
- * new register access helper is initialized with intel_register_access_init().
- *
- * This function directly accesses the #igt_global_mmio without safety checks.
- *
- * Returns:
- * The value read from the register.
- */
-uint8_t INREG8(uint32_t reg)
-{
-	return *((volatile uint8_t *)igt_global_mmio + reg);
-}
-
-/**
- * OUTREG:
- * @reg: register offset
- * @val: value to write
- *
- * 32-bit write of @val to the register at offset @reg. This function only works
- * when the new register access helper is initialized with
- * intel_register_access_init().
- *
- * This function directly accesses the #igt_global_mmio without safety checks.
- */
-void OUTREG(uint32_t reg, uint32_t val)
-{
-	*(volatile uint32_t *)((volatile char *)igt_global_mmio + reg) = val;
-}
-
-/**
- * OUTREG16:
- * @reg: register offset
- * @val: value to write
- *
- * 16-bit write of @val to the register at offset @reg. This function only works
- * when the new register access helper is initialized with
- * intel_register_access_init().
- *
- * This function directly accesses the #igt_global_mmio without safety checks.
- */
-void OUTREG16(uint32_t reg, uint16_t val)
-{
-	*(volatile uint16_t *)((volatile char *)igt_global_mmio + reg) = val;
-}
-
-/**
- * OUTREG8:
- * @reg: register offset
- * @val: value to write
- *
- * 8-bit write of @val to the register at offset @reg. This function only works
- * when the new register access helper is initialized with
- * intel_register_access_init().
- *
- * This function directly accesses the #igt_global_mmio without safety checks.
- */
-void OUTREG8(uint32_t reg, uint8_t val)
-{
-	*((volatile uint8_t *)igt_global_mmio + reg) = val;
+	iowrite32(mmio_data->igt_mmio, reg, val);
 }

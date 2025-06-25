@@ -1,7 +1,9 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#ifdef __linux__
 #include <linux/limits.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -128,6 +130,7 @@ static void add_subtests(struct job_list *job_list, struct settings *settings,
 		}
 	} else {
 		fprintf(stderr, "Test binary %s died unexpectedly\n", binary);
+		exit(1);
 	}
 }
 
@@ -227,8 +230,28 @@ static bool job_list_from_test_list(struct job_list *job_list,
 			continue;
 
 		if (sscanf(line, "igt@%ms", &binary) == 1) {
-			if ((delim = strchr(binary, '@')) != NULL)
+			if ((delim = strchr(binary, '@')) != NULL) {
 				*delim++ = '\0';
+			} else {
+				/*
+				 * No subtests specified. Check
+				 * whether the user means "all
+				 * subtests" or if the test doesn't
+				 * have any.
+				 */
+				if (entry.binary) {
+					/* First flush the entry we're building for multiple-mode */
+					add_job_list_entry(job_list, entry.binary, entry.subtests, entry.subtest_count);
+					memset(&entry, 0, sizeof(entry));
+					any = true;
+				}
+
+				add_subtests(job_list, settings, binary,
+					     &settings->include_regexes,
+					     &settings->exclude_regexes);
+				any = true;
+				continue;
+			}
 
 			if (!settings->multiple_mode) {
 				char **subtests = NULL;
@@ -248,17 +271,12 @@ static bool job_list_from_test_list(struct job_list *job_list,
 			 * If the currently built entry has the same
 			 * binary, add a subtest. Otherwise submit
 			 * what's already built and start a new one.
+			 *
+			 * If the new test has a dynamic subtest
+			 * specified, also start a new entry.
 			 */
-			if (entry.binary && !strcmp(entry.binary, binary)) {
-				if (!delim) {
-					/* ... except we didn't get a subtest */
-					fprintf(stderr,
-						"Error: Unexpected test without subtests "
-						"after same test had subtests\n");
-					free(binary);
-					fclose(f);
-					return false;
-				}
+			if (entry.binary && !strcmp(entry.binary, binary) &&
+			    strchr(delim, '@') == NULL) {
 				entry.subtest_count++;
 				entry.subtests = realloc(entry.subtests,
 							 entry.subtest_count *
@@ -275,8 +293,18 @@ static bool job_list_from_test_list(struct job_list *job_list,
 			}
 
 			memset(&entry, 0, sizeof(entry));
-			entry.binary = strdup(binary);
-			if (delim) {
+
+			if (strchr(delim, '@') != NULL) {
+				/* Dynamic subtest specified. Add to job list alone. */
+				char **subtests;
+
+				subtests = malloc(sizeof(char*));
+				subtests[0] = strdup(delim);
+
+				add_job_list_entry(job_list, strdup(binary), subtests, 1);
+				any = true;
+			} else {
+				entry.binary = strdup(binary);
 				entry.subtests = malloc(sizeof(*entry.subtests));
 				entry.subtests[0] = strdup(delim);
 				entry.subtest_count = 1;
@@ -355,6 +383,17 @@ void generate_piglit_name(const char *binary, const char *subtest,
 
 	free(lc_binary);
 	free(lc_subtest);
+}
+
+void generate_piglit_name_for_dynamic(const char *base_piglit_name,
+				      const char *dynamic_subtest,
+				      char *namebuf, size_t namebuf_size)
+{
+	char *lc_dynamic = lowercase(dynamic_subtest);
+
+	snprintf(namebuf, namebuf_size, "%s@%s", base_piglit_name, lc_dynamic);
+
+	free(lc_dynamic);
 }
 
 void init_job_list(struct job_list *job_list)

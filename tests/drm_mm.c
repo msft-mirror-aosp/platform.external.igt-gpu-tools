@@ -23,10 +23,62 @@
 
 #include "igt.h"
 #include "igt_kmod.h"
+/**
+ * TEST: drm mm
+ * Description: Basic sanity check of DRM's range manager (struct drm_mm)
+ * Category: Core
+ * Mega feature: General Core features
+ * Sub-category: Memory management tests
+ * Functionality: drm_mm
+ * Feature: mapping
+ * Test category: GEM_Legacy
+ *
+ * SUBTEST: drm_mm
+ *
+ * SUBTEST: drm_mm@align
+ *
+ * SUBTEST: drm_mm@align32
+ *
+ * SUBTEST: drm_mm@align64
+ *
+ * SUBTEST: drm_mm@bottomup
+ *
+ * SUBTEST: drm_mm@color
+ *
+ * SUBTEST: drm_mm@color_evict
+ *
+ * SUBTEST: drm_mm@color_evict_range
+ *
+ * SUBTEST: drm_mm@debug
+ *
+ * SUBTEST: drm_mm@evict
+ *
+ * SUBTEST: drm_mm@evict_range
+ *
+ * SUBTEST: drm_mm@frag
+ *
+ * SUBTEST: drm_mm@highest
+ *
+ * SUBTEST: drm_mm@init
+ *
+ * SUBTEST: drm_mm@insert
+ *
+ * SUBTEST: drm_mm@insert_range
+ *
+ * SUBTEST: drm_mm@lowest
+ *
+ * SUBTEST: drm_mm@replace
+ *
+ * SUBTEST: drm_mm@reserve
+ *
+ * SUBTEST: drm_mm@sanitycheck
+ *
+ * SUBTEST: drm_mm@topdown
+ */
 
 IGT_TEST_DESCRIPTION("Basic sanity check of DRM's range manager (struct drm_mm)");
 
 igt_main
 {
-	igt_kselftests("test-drm_mm", NULL, NULL, NULL);
+	igt_kunit("drm_mm_test", NULL, NULL);
 }

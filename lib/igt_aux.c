@@ -31,16 +31,18 @@
 #endif
 #include <stdio.h>
 #include <fcntl.h>
+#include <limits.h> // PATH_MAX
+#include <pwd.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <signal.h>
 #include <pciaccess.h>
+#include <poll.h>
 #include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
-#include <sys/poll.h>
 #include <sys/wait.h>
 #include <sys/resource.h>
 #include <sys/time.h>
@@ -51,9 +53,15 @@
 #include <assert.h>
 #include <grp.h>
 
-#ifndef ANDROID
-#include <proc/readproc.h>
-#include <libudev.h>
+#ifdef HAVE_LIBPROCPS
+#  include <proc/readproc.h>
+#elif HAVE_LIBPROC2
+#  include <libproc2/pids.h>
+#endif
+
+#include <dirent.h>
+#ifdef __linux__
+#  include <libudev.h>
 #endif
 
 #include "drmtest.h"
@@ -62,6 +70,7 @@
 #include "igt_aux.h"
 #include "igt_debugfs.h"
 #include "igt_gt.h"
+#include "igt_params.h"
 #include "igt_rand.h"
 #include "igt_sysfs.h"
 #include "config.h"
@@ -85,7 +94,7 @@
  * fit into any other topic.
  */
 
-static struct __igt_sigiter_global {
+static __thread struct __igt_sigiter_global {
 	pid_t tid;
 	timer_t timer;
 	struct timespec offset;
@@ -277,7 +286,7 @@ bool __igt_sigiter_continue(struct __igt_sigiter *iter, bool enable)
 
 static struct igt_helper_process signal_helper;
 long long int sig_stat;
-static void __attribute__((noreturn)) signal_helper_process(pid_t pid)
+__noreturn static void signal_helper_process(pid_t pid)
 {
 	/* Interrupt the parent process at 500Hz, just to be annoying */
 	while (1) {
@@ -323,10 +332,10 @@ void igt_fork_signal_helper(void)
 	 * and we send the signal at exactly the wrong time).
 	 */
 	signal(SIGCONT, sig_handler);
-	setpgrp(); /* define a new process group for the tests */
+	setpgid(0, 0); /* define a new process group for the tests */
 
 	igt_fork_helper(&signal_helper) {
-		setpgrp(); /* Escape from the test process group */
+		setpgid(0, 0); /* Escape from the test process group */
 
 		/* Pass along the test process group identifier,
 		 * negative pid => send signal to everyone in the group.
@@ -392,7 +401,7 @@ void igt_resume_signal_helper(void)
 }
 
 static struct igt_helper_process shrink_helper;
-static void __attribute__((noreturn)) shrink_helper_process(int fd, pid_t pid)
+__noreturn static void shrink_helper_process(int fd, pid_t pid)
 {
 	while (1) {
 		igt_drop_caches_set(fd, DROP_SHRINK_ALL);
@@ -430,8 +439,6 @@ void igt_stop_shrink_helper(void)
 	igt_stop_helper(&shrink_helper);
 }
 
-#ifndef ANDROID
-
 static void show_kernel_stack(pid_t pid)
 {
 	char buf[80], *str;
@@ -452,7 +459,7 @@ static void show_kernel_stack(pid_t pid)
 }
 
 static struct igt_helper_process hang_detector;
-static void __attribute__((noreturn))
+__noreturn static void
 hang_detector_process(int fd, pid_t pid, dev_t rdev)
 {
 	struct udev_monitor *mon =
@@ -488,7 +495,6 @@ hang_detector_process(int fd, pid_t pid, dev_t rdev)
 
 			str = udev_device_get_property_value(dev, "ERROR");
 			if (str && atoi(str) == 1) {
-				igt_debugfs_dump(fd, "i915_error_state");
 				show_kernel_stack(pid);
 				kill(pid, SIGIO);
 			}
@@ -500,7 +506,7 @@ hang_detector_process(int fd, pid_t pid, dev_t rdev)
 	exit(0);
 }
 
-static void sig_abort(int sig)
+__noreturn static void sig_abort(int sig)
 {
 	errno = 0; /* inside a signal, last errno reporting is confusing */
 	igt_assert(!"GPU hung");
@@ -518,8 +524,7 @@ void igt_fork_hang_detector(int fd)
 	 * they are a test failure!) and so the loss of per-engine reset
 	 * functionality is not an issue.
 	 */
-	igt_assert(igt_sysfs_set_parameter
-		   (fd, "reset", "%d", 1 /* only global reset */));
+	igt_assert(igt_params_set(fd, "reset", "%d", 1 /* only global reset */));
 
 	signal(SIGIO, sig_abort);
 	igt_fork_helper(&hang_detector)
@@ -528,9 +533,15 @@ void igt_fork_hang_detector(int fd)
 
 void igt_stop_hang_detector(void)
 {
+	/*
+	 * Give the uevent time to arrive. No sleep at all misses about 20% of
+	 * hangs (at least, in the i915_hangman/detector test). A sleep of 1ms
+	 * seems to miss about 2%, 10ms loses <1%, so 100ms should be safe.
+	 */
+	usleep(100 * 1000);
+
 	igt_stop_helper(&hang_detector);
 }
-#endif
 
 /**
  * igt_check_boolean_env_var:
@@ -692,11 +703,17 @@ void igt_print_activity(void)
 }
 
 static int autoresume_delay;
+bool __console_suspend_saved_state;
+bool __pm_debug_messages_state;
+
+#define SYSFS_MODULE_PRINTK "/sys/module/printk/parameters/"
+#define CONSOLE_SUSPEND_DISABLE false
 
 static const char *suspend_state_name[] = {
 	[SUSPEND_STATE_FREEZE] = "freeze",
 	[SUSPEND_STATE_STANDBY] = "standby",
-	[SUSPEND_STATE_MEM] = "mem",
+	[SUSPEND_STATE_S3] = "mem", /* Forces Suspend-to-Ram (S3) */
+	[SUSPEND_STATE_MEM] = "mem", /* Respects system default */
 	[SUSPEND_STATE_DISK] = "disk",
 };
 
@@ -709,7 +726,13 @@ static const char *suspend_test_name[] = {
 	[SUSPEND_TEST_CORE] = "core",
 };
 
-static enum igt_suspend_test get_suspend_test(int power_dir)
+static const char *mem_sleep_name[] = {
+	[MEM_SLEEP_S2IDLE] = "s2idle",
+	[MEM_SLEEP_SHALLOW] = "shallow",
+	[MEM_SLEEP_DEEP] = "deep"
+};
+
+static enum igt_suspend_test get_pm_test(int power_dir)
 {
 	char *test_line;
 	char *test_name;
@@ -742,10 +765,15 @@ static enum igt_suspend_test get_suspend_test(int power_dir)
 	return test;
 }
 
-static void set_suspend_test(int power_dir, enum igt_suspend_test test)
+static void set_pm_test(int power_dir, enum igt_suspend_test test)
 {
 	igt_assert(test < SUSPEND_TEST_NUM);
 
+	/*
+	 * When pm_test is available, it needs to be cleared or set to specific
+	 * test before /sys/power/state is written (which is also done by
+	 * rtcwake)
+	 */
 	if (faccessat(power_dir, "pm_test", W_OK, 0)) {
 		igt_require(test == SUSPEND_TEST_NONE);
 		return;
@@ -807,29 +835,146 @@ static void suspend_via_sysfs(int power_dir, enum igt_suspend_state state)
 				 suspend_state_name[state]));
 }
 
-static uint32_t get_supported_suspend_states(int power_dir)
+static bool is_state_supported(int power_dir, enum igt_suspend_state state)
 {
+	const char *str;
 	char *states;
-	char *state_name;
-	uint32_t state_mask;
 
 	igt_assert((states = igt_sysfs_get(power_dir, "state")));
-	state_mask = 0;
-	for (state_name = strtok(states, " "); state_name;
-	     state_name = strtok(NULL, " ")) {
-		enum igt_suspend_state state;
 
-		for (state = SUSPEND_STATE_FREEZE; state < SUSPEND_STATE_NUM;
-		     state++)
-			if (strcmp(state_name, suspend_state_name[state]) == 0)
-				break;
-		igt_assert(state < SUSPEND_STATE_NUM);
-		state_mask |= 1 << state;
-	}
+	str = strstr(states, suspend_state_name[state]);
+
+	if (!str)
+		igt_info("State %s not supported.\nSupported States: %s\n",
+			 suspend_state_name[state], states);
 
 	free(states);
+	return str;
+}
 
-	return state_mask;
+static int get_mem_sleep(void)
+{
+	char *mem_sleep_states;
+	char *mem_sleep_state;
+	enum igt_mem_sleep mem_sleep;
+	int power_dir;
+
+	igt_require((power_dir = open("/sys/power", O_RDONLY)) >= 0);
+
+	if (faccessat(power_dir, "mem_sleep", R_OK, 0))
+		return MEM_SLEEP_NONE;
+
+	igt_assert((mem_sleep_states = igt_sysfs_get(power_dir, "mem_sleep")));
+	for (mem_sleep_state = strtok(mem_sleep_states, " "); mem_sleep_state;
+	     mem_sleep_state = strtok(NULL, " ")) {
+		if (mem_sleep_state[0] == '[') {
+			mem_sleep_state[strlen(mem_sleep_state) - 1] = '\0';
+			mem_sleep_state++;
+			break;
+		}
+	}
+
+	if (!mem_sleep_state) {
+		free(mem_sleep_states);
+		return MEM_SLEEP_NONE;
+	}
+
+	for (mem_sleep = MEM_SLEEP_S2IDLE; mem_sleep < MEM_SLEEP_NUM; mem_sleep++) {
+		if (strcmp(mem_sleep_name[mem_sleep], mem_sleep_state) == 0)
+			break;
+	}
+
+	igt_assert_f(mem_sleep < MEM_SLEEP_NUM, "Invalid mem_sleep state\n");
+
+	free(mem_sleep_states);
+	close(power_dir);
+	return mem_sleep;
+}
+
+static void set_mem_sleep(int power_dir, enum igt_mem_sleep sleep)
+{
+	igt_assert(sleep < MEM_SLEEP_NUM);
+
+	igt_assert_eq(faccessat(power_dir, "mem_sleep", W_OK, 0), 0);
+
+	igt_assert(igt_sysfs_set(power_dir, "mem_sleep",
+				 mem_sleep_name[sleep]));
+}
+
+static bool is_mem_sleep_state_supported(int power_dir, enum igt_mem_sleep state)
+{
+	const char *str;
+	char *mem_sleep_states;
+
+	igt_assert((mem_sleep_states = igt_sysfs_get(power_dir, "mem_sleep")));
+
+	str = strstr(mem_sleep_states, mem_sleep_name[state]);
+
+	if (!str)
+		igt_info("mem_sleep state %s not supported.\nSupported mem_sleep states: %s\n",
+			 mem_sleep_name[state], mem_sleep_states);
+
+	free(mem_sleep_states);
+	return str;
+}
+
+static void igt_aux_pm_suspend_dbg_restore_exit_handler(int sig)
+{
+	int sysfs_fd, power_dir;
+
+	sysfs_fd = open(SYSFS_MODULE_PRINTK, O_RDONLY);
+	if (sysfs_fd < 0)
+		return;
+
+	igt_sysfs_set_boolean(sysfs_fd, "console_suspend", __console_suspend_saved_state);
+	close(sysfs_fd);
+
+	power_dir = open("/sys/power", O_RDONLY);
+	if (power_dir <  0)
+		return;
+
+	if (!faccessat(power_dir, "pm_debug_messages", R_OK |  W_OK, 0))
+		igt_sysfs_set_boolean(power_dir, "pm_debug_messages", __pm_debug_messages_state);
+
+	close(power_dir);
+}
+
+/**
+ * igt_aux_enable_pm_suspend_dbg:
+ * @power_dir: /sys/power/ dir fd
+ *
+ * Enhance the System wide suspend/resume debugging by
+ * disabling console suspend and enabling PM debug messages.
+ * Disabling console suspend dump the suspend/resume logs over serial console.
+ * That will be useful to debug CI Suspend/Resume issues tagged
+ * with 'Incomplete' result.
+ * pm_debug_messages sysfs enables Linux PM Core debug messages, which will
+ * be useful to debug system wide suspend/resume related issues.
+ */
+static void igt_aux_enable_pm_suspend_dbg(int power_dir)
+{
+	int sysfs_fd;
+
+	sysfs_fd = open(SYSFS_MODULE_PRINTK, O_RDONLY);
+	if (sysfs_fd > 0) {
+		__console_suspend_saved_state = igt_sysfs_get_boolean(sysfs_fd, "console_suspend");
+
+		if (!__igt_sysfs_set_boolean(sysfs_fd, "console_suspend", CONSOLE_SUSPEND_DISABLE))
+			igt_warn("Unable to disable console suspend\n");
+
+	} else {
+		igt_warn("Unable to open printk parameters Err:%d\n", errno);
+	}
+
+	/* pm_debug_messages depends on  CONFIG_PM_SLEEP_DEBUG */
+	if (!faccessat(power_dir, "pm_debug_messages", R_OK |  W_OK, 0)) {
+		__pm_debug_messages_state = igt_sysfs_get_boolean(power_dir, "pm_debug_messages");
+		igt_sysfs_set_boolean(power_dir, "pm_debug_messages", true);
+	}
+
+	igt_install_exit_handler(igt_aux_pm_suspend_dbg_restore_exit_handler);
+
+	close(sysfs_fd);
 }
 
 /**
@@ -858,26 +1003,40 @@ void igt_system_suspend_autoresume(enum igt_suspend_state state,
 {
 	int power_dir;
 	enum igt_suspend_test orig_test;
-
-	/* FIXME: Simulation doesn't like suspend/resume, and not even a lighter
-	 * approach using /sys/power/pm_test to just test our driver's callbacks
-	 * seems to fare better. We need to investigate what's going on. */
-	igt_skip_on_simulation();
+	enum igt_mem_sleep orig_mem_sleep = MEM_SLEEP_NONE;
 
 	igt_require((power_dir = open("/sys/power", O_RDONLY)) >= 0);
-	igt_require(get_supported_suspend_states(power_dir) & (1 << state));
+	igt_require(is_state_supported(power_dir, state));
 	igt_require(test == SUSPEND_TEST_NONE ||
 		    faccessat(power_dir, "pm_test", R_OK | W_OK, 0) == 0);
 
-	orig_test = get_suspend_test(power_dir);
-	set_suspend_test(power_dir, test);
+	igt_skip_on_f(state == SUSPEND_STATE_DISK &&
+		      !igt_get_total_swap_mb(),
+		      "Suspend to disk requires swap space.\n");
+
+	orig_test = get_pm_test(power_dir);
+	igt_aux_enable_pm_suspend_dbg(power_dir);
+
+	if (state == SUSPEND_STATE_S3) {
+		orig_mem_sleep = get_mem_sleep();
+		igt_skip_on_f(!is_mem_sleep_state_supported(power_dir, MEM_SLEEP_DEEP),
+			      "S3 not supported in this system.\n");
+		set_mem_sleep(power_dir, MEM_SLEEP_DEEP);
+		igt_skip_on_f(get_mem_sleep() != MEM_SLEEP_DEEP,
+			      "S3 not possible in this system.\n");
+	}
+
+	set_pm_test(power_dir, test);
 
 	if (test == SUSPEND_TEST_NONE)
 		suspend_via_rtcwake(state);
 	else
 		suspend_via_sysfs(power_dir, state);
 
-	set_suspend_test(power_dir, orig_test);
+	if (orig_mem_sleep)
+		set_mem_sleep(power_dir, orig_mem_sleep);
+
+	set_pm_test(power_dir, orig_test);
 	close(power_dir);
 }
 
@@ -909,8 +1068,6 @@ void igt_set_autoresume_delay(int delay_secs)
 {
 	int delay_fd;
 	char delay_str[10];
-
-	igt_skip_on_simulation();
 
 	delay_fd = open("/sys/module/suspend/parameters/pm_test_delay", O_RDWR);
 
@@ -981,7 +1138,7 @@ void igt_drop_root(void)
  * Waits for a key press when run interactively and when the corresponding debug
  * var is set in the --interactive-debug=$var variable. Multiple keys
  * can be specified as a comma-separated list or alternatively "all" if a wait
- * should happen for all cases.
+ * should happen for all cases. Calling this function with "all" will assert.
  *
  * When not connected to a terminal interactive_debug is ignored
  * and execution immediately continues.
@@ -1002,6 +1159,9 @@ void igt_debug_wait_for_keypress(const char *var)
 	if (!igt_interactive_debug)
 		return;
 
+	if (strstr(var, "all"))
+		igt_assert_f(false, "Bug in test: Do not call igt_debug_wait_for_keypress with \"all\"\n");
+
 	if (!strstr(igt_interactive_debug, var) &&
 	    !strstr(igt_interactive_debug, "all"))
 		return;
@@ -1017,7 +1177,7 @@ void igt_debug_wait_for_keypress(const char *var)
 }
 
 /**
- * igt_debug_manual_check:
+ * igt_debug_interactive_mode_check:
  * @var: var lookup to to enable this wait
  * @expected: message to be printed as expected behaviour before wait for keys Y/n
  *
@@ -1037,7 +1197,7 @@ void igt_debug_wait_for_keypress(const char *var)
  *
  * Force test fail when N/n is pressed.
  */
-void igt_debug_manual_check(const char *var, const char *expected)
+void igt_debug_interactive_mode_check(const char *var, const char *expected)
 {
 	struct termios oldt, newt;
 	char key;
@@ -1125,149 +1285,125 @@ void igt_unlock_mem(void)
 	locked_mem = NULL;
 }
 
-
-#define MODULE_PARAM_DIR "/sys/module/i915/parameters/"
-#define PARAM_NAME_MAX_SZ 32
-#define PARAM_VALUE_MAX_SZ 16
-#define PARAM_FILE_PATH_MAX_SZ (strlen(MODULE_PARAM_DIR) + PARAM_NAME_MAX_SZ)
-
-struct module_param_data {
-	char name[PARAM_NAME_MAX_SZ];
-	char original_value[PARAM_VALUE_MAX_SZ];
-
-	struct module_param_data *next;
+struct igt_process {
+#ifdef HAVE_LIBPROCPS
+	PROCTAB * proc;
+	proc_t *proc_info;
+#elif HAVE_LIBPROC2
+	struct pids_info *info;
+	struct pids_stack *stack;
+#endif
+	pid_t tid;
+	pid_t euid;
+	pid_t egid;
+	char *comm;
 };
-struct module_param_data *module_params = NULL;
 
-static void igt_module_param_exit_handler(int sig)
+static void open_process(struct igt_process *prcs)
 {
-	const size_t dir_len = strlen(MODULE_PARAM_DIR);
-	char file_path[PARAM_FILE_PATH_MAX_SZ];
-	struct module_param_data *data;
-	int fd;
+#ifdef HAVE_LIBPROCPS
+	prcs->proc = openproc(PROC_FILLCOM | PROC_FILLSTAT | PROC_FILLARG);
+	igt_assert_f(prcs->proc != NULL, "procps open failed\n");
+	prcs->proc_info = NULL;
+#elif HAVE_LIBPROC2
+	enum pids_item Items[] = { PIDS_ID_PID, PIDS_ID_EUID, PIDS_ID_EGID, PIDS_CMD };
+	int err;
 
-	/* We don't need to assert string sizes on this function since they were
-	 * already checked before being stored on the lists. Besides,
-	 * igt_assert() is not AS-Safe. */
-	strcpy(file_path, MODULE_PARAM_DIR);
+	prcs->info = NULL;
+	err = procps_pids_new(&prcs->info, Items, 4);
+	igt_assert_f(err >= 0, "procps-ng open failed\n");
+	prcs->stack = NULL;
+#endif
+	prcs->tid = 0;
+	prcs->comm = NULL;
+}
 
-	for (data = module_params; data != NULL; data = data->next) {
-		strcpy(file_path + dir_len, data->name);
+static void close_process(struct igt_process *prcs)
+{
+#ifdef HAVE_LIBPROCPS
+	if (prcs->proc_info)
+		freeproc(prcs->proc_info);
 
-		fd = open(file_path, O_RDWR);
-		if (fd >= 0) {
-			int size = strlen (data->original_value);
+	closeproc(prcs->proc);
+	prcs->proc_info = NULL;
+	prcs->proc = NULL;
+#elif HAVE_LIBPROC2
+	procps_pids_unref(&prcs->info);
+	prcs->info = NULL;
+#endif
+	prcs->tid = 0;
+	prcs->comm = NULL;
+}
 
-			if (size != write(fd, data->original_value, size)) {
-				const char msg[] = "WARNING: Module parameters "
-					"may not have been reset to their "
-					"original values\n";
-				assert(write(STDERR_FILENO, msg, sizeof(msg))
-				       == sizeof(msg));
-			}
+static bool get_process_ids(struct igt_process *prcs)
+{
+#ifdef HAVE_LIBPROCPS
+	if (prcs->proc_info)
+		freeproc(prcs->proc_info);
 
-			close(fd);
-		}
+	prcs->tid = 0;
+	prcs->comm = NULL;
+	prcs->proc_info = readproc(prcs->proc, NULL);
+
+	if (prcs->proc_info) {
+		prcs->tid = prcs->proc_info->tid;
+		prcs->euid = prcs->proc_info->euid;
+		prcs->egid = prcs->proc_info->egid;
+		prcs->comm = prcs->proc_info->cmd;
 	}
-	/* free() is not AS-Safe, so we can't call it here. */
+#elif HAVE_LIBPROC2
+	enum rel_items { EU_PID, EU_EUID, EU_EGID, EU_CMD }; // order at open
+
+	prcs->tid = 0;
+	prcs->comm = NULL;
+	prcs->stack = procps_pids_get(prcs->info, PIDS_FETCH_TASKS_ONLY);
+	if (prcs->stack) {
+#if defined(HAVE_LIBPROC2_POST_4_0_5_API)
+		prcs->tid = PIDS_VAL(EU_PID, s_int, prcs->stack);
+		prcs->euid = PIDS_VAL(EU_EUID, s_int, prcs->stack);
+		prcs->egid = PIDS_VAL(EU_EGID, s_int, prcs->stack);
+		prcs->comm = PIDS_VAL(EU_CMD, str, prcs->stack);
+#else
+		prcs->tid = PIDS_VAL(EU_PID, s_int, prcs->stack, prcs->info);
+		prcs->euid = PIDS_VAL(EU_EUID, s_int, prcs->stack, prcs->info);
+		prcs->egid = PIDS_VAL(EU_EGID, s_int, prcs->stack, prcs->info);
+		prcs->comm = PIDS_VAL(EU_CMD, str, prcs->stack, prcs->info);
+#endif
+	}
+#endif
+	return prcs->tid != 0;
 }
 
 /**
- * igt_save_module_param:
- * @name: name of the i915.ko module parameter
- * @file_path: full sysfs file path for the parameter
+ * igt_is_mountpoint() - Check if a path is a mounted filesystem
+ * @path: Root directory to test
  *
- * Reads the current value of an i915.ko module parameter, saves it on an array,
- * then installs an exit handler to restore it when the program exits.
- *
- * It is safe to call this function multiple times for the same parameter.
- *
- * Notice that this function is called by igt_set_module_param(), so that one -
- * or one of its wrappers - is the only function the test programs need to call.
+ * Returns: true if @path is the root of a mounted filesystem
  */
-static void igt_save_module_param(const char *name, const char *file_path)
+bool igt_is_mountpoint(const char *path)
 {
-	struct module_param_data *data;
-	size_t n;
-	int fd;
+	char buf[strlen(path) + 4];
+	struct stat st;
+	dev_t dev;
 
-	/* Check if this parameter is already saved. */
-	for (data = module_params; data != NULL; data = data->next)
-		if (strncmp(data->name, name, PARAM_NAME_MAX_SZ) == 0)
-			return;
+	igt_assert_lt(snprintf(buf, sizeof(buf), "%s/.", path), sizeof(buf));
+	if (stat(buf, &st))
+		return false;
 
-	if (!module_params)
-		igt_install_exit_handler(igt_module_param_exit_handler);
+	if (!S_ISDIR(st.st_mode))
+		return false;
 
-	data = calloc(1, sizeof (*data));
-	igt_assert(data);
+	dev = st.st_dev;
 
-	strncpy(data->name, name, PARAM_NAME_MAX_SZ - 1);
+	igt_assert_lt(snprintf(buf, sizeof(buf), "%s/..", path), sizeof(buf));
+	if (stat(buf, &st))
+		return false;
 
-	fd = open(file_path, O_RDONLY);
-	igt_assert(fd >= 0);
+	if (!S_ISDIR(st.st_mode))
+		return false;
 
-	n = read(fd, data->original_value, PARAM_VALUE_MAX_SZ);
-	igt_assert_f(n > 0 && n < PARAM_VALUE_MAX_SZ,
-		     "Need to increase PARAM_VALUE_MAX_SZ\n");
-
-	igt_assert(close(fd) == 0);
-
-	data->next = module_params;
-	module_params = data;
+	return dev != st.st_dev;
 }
-
-/**
- * igt_set_module_param:
- * @name: i915.ko parameter name
- * @val: i915.ko parameter value
- *
- * This function sets the desired value for the given i915.ko parameter. It also
- * takes care of saving and restoring the values that were already set before
- * the test was run.
- *
- * Please consider using igt_set_module_param_int() for the integer and bool
- * parameters.
- */
-void igt_set_module_param(const char *name, const char *val)
-{
-	char file_path[PARAM_FILE_PATH_MAX_SZ];
-	size_t len = strlen(val);
-	int fd;
-
-	igt_assert_f(strlen(name) < PARAM_NAME_MAX_SZ,
-		     "Need to increase PARAM_NAME_MAX_SZ\n");
-	strcpy(file_path, MODULE_PARAM_DIR);
-	strcpy(file_path + strlen(MODULE_PARAM_DIR), name);
-
-	igt_save_module_param(name, file_path);
-
-	fd = open(file_path, O_RDWR);
-	igt_assert(write(fd, val, len) == len);
-	igt_assert(close(fd) == 0);
-}
-
-/**
- * igt_set_module_param_int:
- * @name: i915.ko parameter name
- * @val: i915.ko parameter value
- *
- * This is a wrapper for igt_set_module_param() that takes an integer instead of
- * a string. Please see igt_set_module_param().
- */
-void igt_set_module_param_int(const char *name, int val)
-{
-	char str[PARAM_VALUE_MAX_SZ];
-	int n;
-
-	n = snprintf(str, PARAM_VALUE_MAX_SZ, "%d\n", val);
-	igt_assert_f(n < PARAM_VALUE_MAX_SZ,
-		     "Need to increase PARAM_VALUE_MAX_SZ\n");
-
-	igt_set_module_param(name, str);
-}
-
-#ifndef ANDROID
 
 /**
  * igt_is_process_running:
@@ -1280,23 +1416,27 @@ void igt_set_module_param_int(const char *name, int val)
  */
 int igt_is_process_running(const char *comm)
 {
-	PROCTAB *proc;
-	proc_t *proc_info;
+	struct igt_process pc;
 	bool found = false;
+	int len;
 
-	proc = openproc(PROC_FILLCOM | PROC_FILLSTAT);
-	igt_assert(proc != NULL);
+	if (!comm)
+		return false;
+	len = strlen(comm);
+	if (!len)
+		return false;
 
-	while ((proc_info = readproc(proc, NULL))) {
-		if (!strncasecmp(proc_info->cmd, comm, sizeof(proc_info->cmd))) {
-			freeproc(proc_info);
+	open_process(&pc);
+	while (get_process_ids(&pc)) {
+		if (strlen(pc.comm) != len)
+			continue;
+		if (!strncasecmp(pc.comm, comm, len)) {
 			found = true;
 			break;
 		}
-		freeproc(proc_info);
 	}
+	close_process(&pc);
 
-	closeproc(proc);
 	return found;
 }
 
@@ -1314,26 +1454,28 @@ int igt_is_process_running(const char *comm)
  */
 int igt_terminate_process(int sig, const char *comm)
 {
-	PROCTAB *proc;
-	proc_t *proc_info;
+	struct igt_process pc;
 	int err = 0;
+	int len;
 
-	proc = openproc(PROC_FILLCOM | PROC_FILLSTAT | PROC_FILLARG);
-	igt_assert(proc != NULL);
+	if (!comm)
+		return 0;
+	len = strlen(comm);
+	if (!len)
+		return 0;
 
-	while ((proc_info = readproc(proc, NULL))) {
-		if (!strncasecmp(proc_info->cmd, comm, sizeof(proc_info->cmd))) {
-
-			if (kill(proc_info->tid, sig) < 0)
+	open_process(&pc);
+	while (get_process_ids(&pc)) {
+		if (strlen(pc.comm) != len)
+			continue;
+		if (!strncasecmp(pc.comm, comm, len)) {
+			if (kill(pc.tid, sig) < 0)
 				err = -errno;
-
-			freeproc(proc_info);
 			break;
 		}
-		freeproc(proc_info);
 	}
+	close_process(&pc);
 
-	closeproc(proc);
 	return err;
 }
 
@@ -1395,6 +1537,7 @@ __igt_show_stat(struct pinfo *info)
 	igt_info("\n");
 }
 
+
 static void
 igt_show_stat_header(void)
 {
@@ -1403,9 +1546,9 @@ igt_show_stat_header(void)
 }
 
 static void
-igt_show_stat(proc_t *info, int *state, const char *fn)
+igt_show_stat(const pid_t tid, const char *cmd, int *state, const char *fn)
 {
-	struct pinfo p = { .pid = info->tid, .comm = info->cmd, .fn = fn };
+	struct pinfo p = { .pid = tid, .comm = cmd, .fn = fn };
 
 	if (!*state)
 		igt_show_stat_header();
@@ -1415,18 +1558,20 @@ igt_show_stat(proc_t *info, int *state, const char *fn)
 }
 
 static void
-__igt_lsof_fds(proc_t *proc_info, int *state, char *proc_path, const char *dir)
+__igt_lsof_fds(const pid_t tid, const char *cmd, int *state, char *proc_path, const char *dir)
 {
+	/* default fds or kernel threads */
+	static const char *default_fds[] = { "/dev/pts", "/dev/null" };
 	struct dirent *d;
 	struct stat st;
 	char path[PATH_MAX];
 	char *fd_lnk;
+	DIR *dp;
 
-	/* default fds or kernel threads */
-	const char *default_fds[] = { "/dev/pts", "/dev/null" };
+	dp = opendir(proc_path);
+	if (!dp)
+		return;
 
-	DIR *dp = opendir(proc_path);
-	igt_assert(dp);
 again:
 	while ((d = readdir(dp))) {
 		char *copy_fd_lnk;
@@ -1462,7 +1607,7 @@ again:
 		dirn = dirname(copy_fd_lnk);
 
 		if (!strncmp(dir, dirn, strlen(dir)))
-			igt_show_stat(proc_info, state, fd_lnk);
+			igt_show_stat(tid, cmd, state, fd_lnk);
 
 		free(copy_fd_lnk);
 		free(fd_lnk);
@@ -1478,23 +1623,19 @@ again:
 static void
 __igt_lsof(const char *dir)
 {
-	PROCTAB *proc;
-	proc_t *proc_info;
-
 	char path[30];
 	char *name_lnk;
 	struct stat st;
 	int state = 0;
+	struct igt_process pc;
 
-	proc = openproc(PROC_FILLCOM | PROC_FILLSTAT | PROC_FILLARG);
-	igt_assert(proc != NULL);
-
-	while ((proc_info = readproc(proc, NULL))) {
+	open_process(&pc);
+	while (get_process_ids(&pc)) {
 		ssize_t read;
 
 		/* check current working directory */
 		memset(path, 0, sizeof(path));
-		snprintf(path, sizeof(path), "/proc/%d/cwd", proc_info->tid);
+		snprintf(path, sizeof(path), "/proc/%d/cwd", pc.tid);
 
 		if (stat(path, &st) == -1)
 			continue;
@@ -1505,19 +1646,17 @@ __igt_lsof(const char *dir)
 		name_lnk[read] = '\0';
 
 		if (!strncmp(dir, name_lnk, strlen(dir)))
-			igt_show_stat(proc_info, &state, name_lnk);
+			igt_show_stat(pc.tid, pc.comm, &state, name_lnk);
 
 		/* check also fd, seems that lsof(8) doesn't look here */
 		memset(path, 0, sizeof(path));
-		snprintf(path, sizeof(path), "/proc/%d/fd", proc_info->tid);
+		snprintf(path, sizeof(path), "/proc/%d/fd", pc.tid);
 
-		__igt_lsof_fds(proc_info, &state, path, dir);
+		__igt_lsof_fds(pc.tid, pc.comm, &state, path, dir);
 
 		free(name_lnk);
-		freeproc(proc_info);
 	}
-
-	closeproc(proc);
+	close_process(&pc);
 }
 
 /**
@@ -1551,7 +1690,290 @@ igt_lsof(const char *dpath)
 
 	free(sanitized);
 }
-#endif
+
+static void pulseaudio_unload_module(const uid_t euid, const gid_t egid)
+{
+	struct igt_helper_process pa_proc = {};
+	char xdg_dir[PATH_MAX];
+	const char *homedir;
+	struct passwd *pw;
+
+	igt_fork_helper(&pa_proc) {
+		pw = getpwuid(euid);
+		homedir = pw->pw_dir;
+		snprintf(xdg_dir, sizeof(xdg_dir), "/run/user/%d", euid);
+
+		igt_info("Request pulseaudio to stop using audio device\n");
+
+		setgid(egid);
+		setuid(euid);
+		clearenv();
+		setenv("HOME", homedir, 1);
+		setenv("XDG_RUNTIME_DIR",xdg_dir, 1);
+
+		system("for i in $(pacmd list-sources|grep module:|cut -d : -f 2); do pactl unload-module $i; done");
+	}
+	igt_wait_helper(&pa_proc);
+}
+
+static int pipewire_pulse_pid = 0;
+static int pipewire_pw_reserve_pid = 0;
+static struct igt_helper_process pw_reserve_proc = {};
+
+
+static void pipewire_reserve_wait(void)
+{
+	char xdg_dir[PATH_MAX];
+	const char *homedir;
+	struct passwd *pw;
+	int tid = 0, euid, egid;
+
+	igt_fork_helper(&pw_reserve_proc) {
+		struct igt_process pc;
+
+		igt_info("Preventing pipewire-pulse to use the audio drivers\n");
+		open_process(&pc);
+		while (get_process_ids(&pc)) {
+			tid = pc.tid;
+			euid = pc.euid;
+			egid = pc.egid;
+			if (pipewire_pulse_pid == tid)
+				break;
+		}
+		close_process(&pc);
+
+		/* Sanity check: if it can't find the process, it means it has gone */
+		if (pipewire_pulse_pid != tid)
+			exit(0);
+
+		pw = getpwuid(euid);
+		homedir = pw->pw_dir;
+		snprintf(xdg_dir, sizeof(xdg_dir), "/run/user/%d", euid);
+		setgid(egid);
+		setuid(euid);
+		clearenv();
+		setenv("HOME", homedir, 1);
+		setenv("XDG_RUNTIME_DIR",xdg_dir, 1);
+
+		/*
+		 * pw-reserve will run in background. It will only exit when
+		 * igt_kill_children() is called later on. So, it shouldn't
+		 * call igt_waitchildren(). Instead, just exit with the return
+		 * code from pw-reserve.
+		 */
+		exit(system("pw-reserve -n Audio0 -r"));
+	}
+}
+
+/* Maximum time waiting for pw-reserve to start running */
+#define PIPEWIRE_RESERVE_MAX_TIME 1000 /* milisseconds */
+
+int pipewire_pulse_start_reserve(void)
+{
+	bool is_pw_reserve_running = false;
+	int attempts = 0;
+
+	if (!pipewire_pulse_pid)
+		return 0;
+
+	pipewire_reserve_wait();
+
+	/*
+	 * Note: using pw-reserve to stop using audio only works with
+	 * pipewire version 0.3.50 or upper.
+	 */
+	for (attempts = 0; attempts < PIPEWIRE_RESERVE_MAX_TIME; attempts++) {
+		struct igt_process pc;
+
+		usleep(1000);
+		open_process(&pc);
+		while (get_process_ids(&pc)) {
+			if (!strcmp(pc.comm, "pw-reserve")) {
+				is_pw_reserve_running = true;
+				pipewire_pw_reserve_pid = pc.tid;
+				break;
+			}
+		}
+		close_process(&pc);
+
+		if (is_pw_reserve_running)
+			break;
+	}
+	if (!is_pw_reserve_running) {
+		igt_warn("Failed to remove audio drivers from pipewire\n");
+		return 1;
+	}
+	/* Let's grant some time for pw_reserve to notify pipewire via D-BUS */
+	usleep(50000);
+
+	/*
+	 * pw-reserve is running, and should have stopped using the audio
+	 * drivers. We can now remove the driver.
+	 */
+
+	return 0;
+}
+
+void pipewire_pulse_stop_reserve(void)
+{
+	if (!pipewire_pulse_pid)
+		return;
+
+	igt_stop_helper(&pw_reserve_proc);
+}
+
+/**
+ * __igt_lsof_audio_and_kill_proc() - check if a given process is using an
+ *	audio device. If so, stop or prevent them to use such devices.
+ *
+ * @proc_info: process struct, as returned by readproc()
+ * @proc_path: path of the process under procfs
+ * @pipewire_pulse_pid: PID of pipewire-pulse process
+ *
+ * No processes can be using an audio device by the time it gets removed.
+ * This function checks if a process is using an audio device from /dev/snd.
+ * If so, it will check:
+ * 	- if the process is pulseaudio, it can't be killed, as systemd will
+ * 	  respawn it. So, instead, send a request for it to stop bind the
+ * 	  audio devices.
+ *	- if the process is pipewire-pulse, it can't be killed, as systemd will
+ *	  respawn it. So, instead, the caller should call pw-reserve, remove
+ *	  the kernel driver and then stop pw-reserve. On such case, this
+ *	  function returns the PID of pipewire-pulse, but won't touch it.
+ * If the check fails, it means that the process can simply be killed.
+ */
+static int
+__igt_lsof_audio_and_kill_proc(const pid_t tid, const char *cmd, const uid_t euid, const gid_t egid, char *proc_path)
+{
+	const char *audio_dev = "/dev/snd/";
+	char path[PATH_MAX * 2];
+	struct dirent *d;
+	struct stat st;
+	char *fd_lnk;
+	int fail = 0;
+	ssize_t read;
+	DIR *dp;
+
+	/*
+	 * Terminating pipewire-pulse require an special procedure, which
+	 * is only available at version 0.3.50 and upper. Just trying to
+	 * kill pipewire will start a race between IGT and systemd. If IGT
+	 * wins, the audio driver will be unloaded before systemd tries to
+	 * reload it, but if systemd wins, the audio device will be re-opened
+	 * and used before IGT has a chance to remove the audio driver.
+	 * Pipewire version 0.3.50 should bring a standard way:
+	 *
+	 * 1) start a thread running:
+	 *	 pw-reserve -n Audio0 -r
+	 * 2) unload/unbind the the audio driver(s);
+	 * 3) stop the pw-reserve thread.
+	 */
+	if (!strcmp(cmd, "pipewire-pulse")) {
+		igt_info("process %d (%s) is using audio device. Should be requested to stop using them.\n",
+			 tid, cmd);
+		pipewire_pulse_pid = tid;
+		return 0;
+	}
+	/*
+	 * pipewire-pulse itself doesn't hook into a /dev/snd device. Instead,
+	 * the actual binding happens at the Pipewire Session Manager, e.g.
+	 * either wireplumber or pipewire media-session.
+	 *
+	 * Just killing such processes won't produce any effect, as systemd
+	 * will respawn them. So, just ignore here, they'll honor pw-reserve,
+	 * when the time comes.
+	 */
+	if (!strcmp(cmd, "pipewire-media-session"))
+		return 0;
+	if (!strcmp(cmd, "wireplumber"))
+		return 0;
+
+	dp = opendir(proc_path);
+	if (!dp && errno == ENOENT)
+		return 0;
+	if (!dp)
+		return 1;
+
+	while ((d = readdir(dp))) {
+		if (*d->d_name == '.')
+			continue;
+
+		memset(path, 0, sizeof(path));
+		snprintf(path, sizeof(path), "%s/%s", proc_path, d->d_name);
+
+		if (lstat(path, &st) == -1)
+			continue;
+
+		fd_lnk = malloc(st.st_size + 1);
+
+		igt_assert((read = readlink(path, fd_lnk, st.st_size + 1)));
+		fd_lnk[read] = '\0';
+
+		if (strncmp(audio_dev, fd_lnk, strlen(audio_dev))) {
+			free(fd_lnk);
+			continue;
+		}
+
+		free(fd_lnk);
+
+		/*
+		 * In order to avoid racing against pa/systemd, ensure that
+		 * pulseaudio will close all audio files. This should be
+		 * enough to unbind audio modules and won't cause race issues
+		 * with systemd trying to reload it.
+		 */
+		if (!strcmp(cmd, "pulseaudio")) {
+			pulseaudio_unload_module(euid, egid);
+			break;
+		}
+
+		/* For all other processes, just kill them */
+		igt_info("process %d (%s) is using audio device. Should be terminated.\n",
+				tid, cmd);
+
+		if (kill(tid, SIGTERM) < 0) {
+			igt_info("Fail to terminate %s (pid: %d) with SIGTERM\n",
+				cmd, tid);
+			if (kill(tid, SIGABRT) < 0) {
+				fail++;
+				igt_info("Fail to terminate %s (pid: %d) with SIGABRT\n",
+					cmd, tid);
+			}
+		}
+
+		break;
+	}
+
+	closedir(dp);
+	return fail;
+}
+
+/*
+ * This function identifies each process running on the machine that is
+ * opening an audio device and tries to stop it.
+ *
+ * Special care should be taken with pipewire and pipewire-pulse, as those
+ * daemons are respanned if they got killed.
+ */
+int
+igt_lsof_kill_audio_processes(void)
+{
+	char path[PATH_MAX];
+	int fail = 0;
+	struct igt_process pc;
+
+	open_process(&pc);
+	pipewire_pulse_pid = 0;
+	while (get_process_ids(&pc)) {
+		if (snprintf(path, sizeof(path), "/proc/%d/fd", pc.tid) < 1)
+			fail++;
+		else
+			fail += __igt_lsof_audio_and_kill_proc(pc.tid, pc.comm, pc.euid, pc.egid, path);
+	}
+	close_process(&pc);
+
+	return fail;
+}
 
 static struct igt_siglatency {
 	timer_t timer;
@@ -1679,4 +2101,26 @@ uint64_t vfs_file_max(void)
 		}
 	}
 	return max;
+}
+
+void *igt_memdup(const void *ptr, size_t len)
+{
+	void *dup;
+
+	dup = malloc(len);
+	if (dup)
+		memcpy(dup, ptr, len);
+
+	return dup;
+}
+
+/**
+ * igt_wait_and_close: helper to wait on a fence-fd and then close it
+ *
+ * @fence_fd: the fence-fd to wait on and close
+ */
+void igt_wait_and_close(int fence_fd)
+{
+	poll(&(struct pollfd){fence_fd, POLLIN}, 1, -1);
+	close(fence_fd);
 }

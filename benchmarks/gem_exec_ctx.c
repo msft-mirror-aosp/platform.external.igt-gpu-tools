@@ -39,17 +39,15 @@
 #include <time.h>
 
 #include "drm.h"
-#include "ioctl_wrappers.h"
 #include "drmtest.h"
+#include "i915/gem_create.h"
 #include "intel_io.h"
 #include "intel_reg.h"
 #include "igt_stats.h"
+#include "ioctl_wrappers.h"
 
 enum mode { NOP, CREATE, SWITCH, DEFAULT };
 #define SYNC 0x1
-
-#define LOCAL_I915_EXEC_NO_RELOC (1<<11)
-#define LOCAL_I915_EXEC_HANDLE_LUT (1<<12)
 
 static double elapsed(const struct timespec *start,
 		      const struct timespec *end)
@@ -99,8 +97,8 @@ static int loop(unsigned ring,
 	execbuf.buffers_ptr = (uintptr_t)&obj;
 	execbuf.buffer_count = 1;
 	execbuf.flags = ring;
-	execbuf.flags |= LOCAL_I915_EXEC_HANDLE_LUT;
-	execbuf.flags |= LOCAL_I915_EXEC_NO_RELOC;
+	execbuf.flags |= I915_EXEC_HANDLE_LUT;
+	execbuf.flags |= I915_EXEC_NO_RELOC;
 	if (mode != DEFAULT) {
 		execbuf.rsvd1 = __gem_context_create_local(fd);
 		if (execbuf.rsvd1 == 0)

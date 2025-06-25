@@ -33,11 +33,11 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <sys/mman.h>
-#include <intel_bufmgr.h>
 #include <i915_drm.h>
 
 #include "i915/gem_context.h"
 #include "i915/gem_scheduler.h"
+#include "i915/intel_memory_region.h"
 
 /**
  * igt_ioctl:
@@ -48,11 +48,7 @@
  * This is a wrapper around drmIoctl(), which can be augmented with special code
  * blocks like #igt_while_interruptible.
  */
-extern int (*igt_ioctl)(int fd, unsigned long request, void *arg);
-
-/* libdrm interfacing */
-drm_intel_bo * gem_handle_to_libdrm_bo(drm_intel_bufmgr *bufmgr, int fd,
-				       const char *name, uint32_t handle);
+extern __thread int (*igt_ioctl)(int fd, unsigned long request, void *arg);
 
 /* ioctl_wrappers.c:
  *
@@ -69,16 +65,16 @@ uint32_t gem_open(int fd, uint32_t name);
 void gem_close(int fd, uint32_t handle);
 int __gem_write(int fd, uint32_t handle, uint64_t offset, const void *buf, uint64_t length);
 void gem_write(int fd, uint32_t handle, uint64_t offset,  const void *buf, uint64_t length);
+int __gem_read(int fd, uint32_t handle, uint64_t offset, void *buf, uint64_t length);
 void gem_read(int fd, uint32_t handle, uint64_t offset, void *buf, uint64_t length);
+bool gem_has_pwrite(int fd);
+bool gem_has_pread(int fd);
+void gem_require_pread_pwrite(int fd);
 int __gem_set_domain(int fd, uint32_t handle, uint32_t read, uint32_t write);
 void gem_set_domain(int fd, uint32_t handle, uint32_t read, uint32_t write);
 int gem_wait(int fd, uint32_t handle, int64_t *timeout_ns);
 void gem_sync(int fd, uint32_t handle);
-bool gem_create__has_stolen_support(int fd);
-uint32_t __gem_create_stolen(int fd, uint64_t size);
-uint32_t gem_create_stolen(int fd, uint64_t size);
-int __gem_create(int fd, uint64_t size, uint32_t *handle);
-uint32_t gem_create(int fd, uint64_t size);
+uint32_t gem_buffer_create_fb_obj(int fd, uint64_t size);
 void gem_execbuf_wr(int fd, struct drm_i915_gem_execbuffer2 *execbuf);
 int __gem_execbuf_wr(int fd, struct drm_i915_gem_execbuffer2 *execbuf);
 void gem_execbuf(int fd, struct drm_i915_gem_execbuffer2 *execbuf);
@@ -88,29 +84,8 @@ int __gem_execbuf(int fd, struct drm_i915_gem_execbuffer2 *execbuf);
 #define I915_GEM_DOMAIN_WC 0x80
 #endif
 
-/**
- * gem_require_stolen_support:
- * @fd: open i915 drm file descriptor
- *
- * Test macro to query whether support for allocating objects from stolen
- * memory is available. Automatically skips through igt_require() if not.
- */
-#define gem_require_stolen_support(fd) \
-			igt_require(gem_create__has_stolen_support(fd) && \
-				    (gem_total_stolen_size(fd) > 0))
-
 int gem_madvise(int fd, uint32_t handle, int state);
 
-#define LOCAL_I915_GEM_USERPTR       0x33
-#define LOCAL_IOCTL_I915_GEM_USERPTR DRM_IOWR (DRM_COMMAND_BASE + LOCAL_I915_GEM_USERPTR, struct local_i915_gem_userptr)
-struct local_i915_gem_userptr {
-	uint64_t user_ptr;
-	uint64_t user_size;
-	uint32_t flags;
-#define LOCAL_I915_USERPTR_READ_ONLY (1<<0)
-#define LOCAL_I915_USERPTR_UNSYNCHRONIZED (1<<31)
-	uint32_t handle;
-};
 void gem_userptr(int fd, void *ptr, uint64_t size, int read_only, uint32_t flags, uint32_t *handle);
 int __gem_userptr(int fd, void *ptr, uint64_t size, int read_only, uint32_t flags, uint32_t *handle);
 
@@ -119,7 +94,6 @@ void gem_sw_finish(int fd, uint32_t handle);
 bool gem_bo_busy(int fd, uint32_t handle);
 
 /* feature test helpers */
-void igt_require_gem(int fd);
 bool gem_has_llc(int fd);
 bool gem_has_bsd(int fd);
 bool gem_has_blt(int fd);
@@ -130,13 +104,7 @@ bool gem_uses_full_ppgtt(int fd);
 int gem_gpu_reset_type(int fd);
 bool gem_gpu_reset_enabled(int fd);
 bool gem_engine_reset_enabled(int fd);
-int gem_available_fences(int fd);
-uint64_t gem_total_mappable_size(int fd);
 uint64_t gem_total_stolen_size(int fd);
-uint64_t gem_available_aperture_size(int fd);
-uint64_t gem_aperture_size(int fd);
-uint64_t gem_global_aperture_size(int fd);
-uint64_t gem_mappable_aperture_size(void);
 bool gem_has_softpin(int fd);
 bool gem_has_exec_fence(int fd);
 
@@ -174,40 +142,10 @@ off_t prime_get_size(int dma_buf_fd);
 void prime_sync_start(int dma_buf_fd, bool write);
 void prime_sync_end(int dma_buf_fd, bool write);
 
-/* addfb2 fb modifiers */
-struct local_drm_mode_fb_cmd2 {
-	uint32_t fb_id;
-	uint32_t width, height;
-	uint32_t pixel_format;
-	uint32_t flags;
-	uint32_t handles[4];
-	uint32_t pitches[4];
-	uint32_t offsets[4];
-	uint64_t modifier[4];
-};
-
-#define LOCAL_DRM_MODE_FB_MODIFIERS	(1<<1)
-
-#define LOCAL_DRM_FORMAT_MOD_VENDOR_INTEL	0x01
-
-#define local_fourcc_mod_code(vendor, val) \
-		((((uint64_t)LOCAL_DRM_FORMAT_MOD_VENDOR_## vendor) << 56) | \
-		(val & 0x00ffffffffffffffL))
-
-#define LOCAL_DRM_FORMAT_MOD_NONE	(0)
-#define LOCAL_I915_FORMAT_MOD_X_TILED	local_fourcc_mod_code(INTEL, 1)
-#define LOCAL_I915_FORMAT_MOD_Y_TILED	local_fourcc_mod_code(INTEL, 2)
-#define LOCAL_I915_FORMAT_MOD_Yf_TILED	local_fourcc_mod_code(INTEL, 3)
-#define LOCAL_I915_FORMAT_MOD_Y_TILED_CCS	local_fourcc_mod_code(INTEL, 4)
-#define LOCAL_I915_FORMAT_MOD_Yf_TILED_CCS	local_fourcc_mod_code(INTEL, 5)
-
-#define LOCAL_DRM_IOCTL_MODE_ADDFB2	DRM_IOWR(0xB8, \
-						 struct local_drm_mode_fb_cmd2)
-
-#define LOCAL_DRM_CAP_ADDFB2_MODIFIERS	0x10
-
 bool igt_has_fb_modifiers(int fd);
 void igt_require_fb_modifiers(int fd);
+int igt_has_drm_cap(int fd, uint64_t capability);
+bool igt_has_set_caching(uint32_t devid);
 
 /**
  * __kms_addfb:
@@ -236,9 +174,29 @@ static inline uint64_t to_user_pointer(const void *ptr)
  *
  * Casts a 64bit value from an ioctl into a pointer.
  */
-static inline void *from_user_pointer(uint64_t u64)
+static inline void *from_user_pointer(uint64_t u64p)
 {
-	return (void *)(uintptr_t)u64;
+	return (void *)(uintptr_t)u64p;
+}
+
+/**
+ * lower_32_bits:
+ *
+ * return bits 0-31 of a number.
+ */
+static inline uint32_t lower_32_bits(uint64_t x)
+{
+	return x & 0xffffffff;
+}
+
+/**
+ * upper_32_bits:
+ *
+ * return bits 32-63 of a number.
+ */
+static inline uint32_t upper_32_bits(uint64_t x)
+{
+	return x >> 32;
 }
 
 #endif /* IOCTL_WRAPPERS_H */

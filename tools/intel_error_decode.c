@@ -49,7 +49,6 @@
 #include <sys/stat.h>
 #include <err.h>
 #include <assert.h>
-#include <intel_bufmgr.h>
 #include <zlib.h>
 #include <ctype.h>
 
@@ -58,6 +57,7 @@
 #include "instdone.h"
 #include "intel_reg.h"
 #include "drmtest.h"
+#include "i915/intel_decode.h"
 
 static uint32_t
 print_head(unsigned int reg)
@@ -445,7 +445,7 @@ static bool maybe_ascii(const void *data, int check)
 	return true;
 }
 
-static void decode(struct drm_intel_decode *ctx,
+static void decode(struct intel_decode *ctx,
 		   const char *buffer_name,
 		   const char *ring_name,
 		   uint64_t gtt_offset,
@@ -465,10 +465,10 @@ static void decode(struct drm_intel_decode *ctx,
 		       (unsigned)((head_offset + gtt_offset) & 0xffffffff));
 	printf("\n");
 
-	if (decode) {
-		drm_intel_decode_set_batch_pointer(ctx, data, gtt_offset,
+	if (decode && ctx) {
+		intel_decode_set_batch_pointer(ctx, data, gtt_offset,
 						   *count);
-		drm_intel_decode(ctx);
+		intel_decode(ctx);
 	} else if (maybe_ascii(data, 16)) {
 		printf("%*s\n", 4 * *count, (char *)data);
 	} else {
@@ -566,7 +566,7 @@ static int ascii85_decode(const char *in, uint32_t **out, bool inflate)
 static void
 read_data_file(FILE *file)
 {
-	struct drm_intel_decode *decode_ctx = NULL;
+	struct intel_decode *decode_ctx = NULL;
 	uint32_t devid = PCI_CHIP_I855_GM;
 	uint32_t *data = NULL;
 	uint32_t head[MAX_RINGS];
@@ -605,8 +605,11 @@ read_data_file(FILE *file)
 				const char *name;
 				int do_decode;
 			} buffers[] = {
+				{ "ring", "ring", 1 },
+				{ "batch", "batch", 1 },
 				{ "ringbuffer", "ring", 1 },
 				{ "gtt_offset", "batch", 1 },
+				{ "NULL context", "NULL context", 0 },
 				{ "hw context", "HW context", 1 },
 				{ "hw status", "HW status", 0 },
 				{ "wa context", "WA context", 1 },
@@ -614,6 +617,7 @@ read_data_file(FILE *file)
 				{ "user", "user", 0 },
 				{ "semaphores", "semaphores", 0 },
 				{ "guc log buffer", "GuC log", 0 },
+				{ "guc ct buffer", "GuC CTB", 0 },
 				{ },
 			}, *b;
 			char *new_ring_name;
@@ -689,7 +693,7 @@ read_data_file(FILE *file)
 				printf("Detected GEN%i chipset\n",
 						intel_gen(devid));
 
-				decode_ctx = drm_intel_decode_context_alloc(devid);
+				decode_ctx = intel_decode_context_alloc(devid);
 			}
 
 			matched = sscanf(line, "  CTL: 0x%08x\n", &reg);
@@ -704,7 +708,10 @@ read_data_file(FILE *file)
 			matched = sscanf(line, "  ACTHD: 0x%08x\n", &reg);
 			if (matched == 1) {
 				print_acthd(reg, ring_length);
-				drm_intel_decode_set_head_tail(decode_ctx, reg, 0xffffffff);
+				if (decode_ctx)
+					intel_decode_set_head_tail(decode_ctx,
+								       reg,
+								       0xffffffff);
 			}
 
 			matched = sscanf(line, "  PGTBL_ER: 0x%08x\n", &reg);

@@ -39,17 +39,35 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
+#include <poll.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
-#include <sys/poll.h>
 #include <pthread.h>
-#include <sched.h>
 #include "drm.h"
+
+#include "igt_types.h"
 
 IGT_TEST_DESCRIPTION("Call read(drm) and see if it behaves.");
 
-static void sighandler(int sig)
+/**
+ * TEST: drm read
+ * Description: boundary testing of read(drm_fd)
+ * Category: Core
+ * Mega feature: General Core features
+ * Sub-category: uapi
+ * Functionality: drm_mm
+ *
+ * SUBTEST: invalid-buffer
+ * SUBTEST: fault-buffer
+ * SUBTEST: empty-block
+ * SUBTEST: empty-nonblock
+ * SUBTEST: short-buffer-block
+ * SUBTEST: short-buffer-nonblock
+ * SUBTEST: short-buffer-wakeup
+ */
+
+static void sighandler(int sig, siginfo_t * info, void *context)
 {
 }
 
@@ -104,10 +122,11 @@ static void teardown(int fd)
 static void test_invalid_buffer(int in)
 {
 	int fd = setup(in, 0);
+	void *add = (void *)-1;
 
 	alarm(1);
 
-	igt_assert_eq(read(fd, (void *)-1, 0), -1);
+	igt_assert_eq(read(fd, add, 4096), -1);
 	igt_assert_eq(errno, EFAULT);
 
 	teardown(fd);
@@ -253,16 +272,19 @@ static void test_short_buffer_wakeup(int in, enum pipe pipe)
 
 igt_main
 {
-	int fd;
 	igt_display_t display;
 	struct igt_fb fb;
 	enum pipe pipe;
-
-	signal(SIGALRM, sighandler);
-	siginterrupt(SIGALRM, 1);
+	igt_fd_t(fd);
 
 	igt_fixture {
+		struct sigaction alarm_action = {};
 		igt_output_t *output;
+
+		igt_assert_neq(sigaction(SIGALRM, NULL, &alarm_action), -1);
+		alarm_action.sa_flags &= ~SA_RESTART;
+		alarm_action.sa_sigaction = sighandler;
+		igt_assert_neq(sigaction(SIGALRM, &alarm_action, NULL), -1);
 
 		fd = drm_open_driver_master(DRIVER_ANY);
 		kmstest_set_vt_graphics_mode();
@@ -275,7 +297,7 @@ igt_main
 
 			igt_create_pattern_fb(fd, mode->hdisplay, mode->vdisplay,
 					      DRM_FORMAT_XRGB8888,
-					      LOCAL_DRM_FORMAT_MOD_NONE, &fb);
+					      DRM_FORMAT_MOD_LINEAR, &fb);
 
 			igt_output_set_pipe(output, pipe);
 			igt_plane_set_fb(igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY), &fb);

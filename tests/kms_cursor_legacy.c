@@ -22,12 +22,202 @@
  *
  */
 
-#include <sched.h>
-#include <sys/poll.h>
+/**
+ * TEST: kms cursor legacy
+ * Category: Display
+ * Description: Stress legacy cursor ioctl
+ * Driver requirement: i915, xe
+ * Mega feature: General Display Features
+ */
 
+#include <poll.h>
+#include <sched.h>
+
+#include "i915/gem.h"
 #include "igt.h"
+#include "igt_psr.h"
 #include "igt_rand.h"
 #include "igt_stats.h"
+#include "igt_sysfs.h"
+
+/**
+ * SUBTEST: %s-%s
+ * Description: Test checks how many cursor updates we can fit between vblanks
+ *              on single/all pipes with different modes, priority and number
+ *              of processes
+ *
+ * arg[1]:
+ *
+ * @single:      Single
+ * @torture:     Torture
+ * @forked:      Forked
+ *
+ * arg[2]:
+ *
+ * @bo:          BO
+ * @move:        Move
+ */
+
+/**
+ * SUBTEST: basic-busy-flip-before-cursor-%s
+ * Description: Cursor test with %arg[1] mode
+ *
+ * SUBTEST: basic-busy-flip-before-cursor-varying-size
+ * Description: Change the size of cursor b/w 64*64 to maxw x maxh.
+ *
+ * arg[1]:
+ *
+ * @atomic:	atomic
+ * @legacy:	legacy
+ */
+
+/**
+ * SUBTEST: basic-flip-after-cursor-%s
+ * Description: Cursor test with %arg[1]
+ *
+ * SUBTEST: basic-flip-before-cursor-%s
+ * Description: Cursor test with %arg[1]
+ *
+ * arg[1]:
+ *
+ * @atomic:        atomic mode
+ * @legacy:        legacy mode
+ * @varying-size:  varying size
+ */
+
+/**
+ * SUBTEST: %s-flip-before-cursor-%s
+ * Description: Adds variety of tests:
+ *		- varying-size: change the size of cursor b/w 64*64 to maxw x maxh.\n
+ *		- atomic-transition: alternates between a full screen sprite plane
+ *		                     and full screen primary plane.\n"
+ *		- toggle: which toggles cursor visibility and make sure cursor moves
+ *		          between updates.
+ *
+ * arg[1]:
+ *
+ * @short:
+ * @short-busy:
+ *
+ * arg[2]:
+ *
+ * @atomic-transitions:
+ * @atomic-transitions-varying-size:
+ * @toggle:
+ */
+
+/**
+ * SUBTEST: short-flip-after-cursor-%s
+ * Description: Adds variety of tests:
+ *		- varying-size: change the size of cursor b/w 64*64 to maxw x maxh.\n
+ *		- atomic-transition: alternates between a full screen sprite plane
+ *		                     and full screen primary plane.\n"
+ *		- toggle: which toggles cursor visibility and make sure cursor moves
+ *		          between updates.
+ *
+ * arg[1]:
+ *
+ * @atomic-transitions:
+ * @atomic-transitions-varying-size:
+ * @toggle:
+ */
+
+/**
+ * SUBTEST: long-nonblocking-modeset-vs-cursor-atomic
+ * Description: Test checks how many cursor updates we can fit between vblanks
+ *              on all pipes with different modes, priority and number of processes
+ *
+ * SUBTEST: nonblocking-modeset-vs-cursor-atomic
+ * Description: Test checks how many cursor updates we can fit between vblanks
+ *              on all pipes with different modes, priority and number of processes
+ *
+ * SUBTEST: 2x-%s-%s
+ * Description: This test executes flips on both CRTCs while running cursor
+ *              updates in parallel
+ *
+ * arg[1]:
+ *
+ * @flip-vs-cursor:
+ * @flip-vs-cursor:
+ * @long-flip-vs-cursor:
+ * @long-flip-vs-cursor:
+ *
+ * arg[2]:
+ *
+ * @atomic:
+ * @legacy:
+ */
+
+/**
+ * SUBTEST: 2x-%s-atomic
+ * Description: This test executes flips on both CRTCs while running cursor
+ *              updates in parallel
+ *
+ * arg[1]:
+ *
+ * @long-nonblocking-modeset-vs-cursor:
+ * @nonblocking-modeset-vs-cursor:
+ */
+
+/**
+ * SUBTEST: %s-%s
+ * Description: The essence of the basic test is that neither the cursor nor the
+ *              nonblocking flip stall the application of the next
+ *
+ * arg[1]:
+ *
+ * @cursor-vs-flip:
+ * @cursorA-vs-flipA:
+ * @cursorA-vs-flipB:
+ * @cursorB-vs-flipA:
+ * @cursorB-vs-flipB:
+ * @flip-vs-cursor:
+ *
+ * arg[2]:
+ *
+ * @atomic:
+ * @atomic-transitions:
+ * @atomic-transitions-varying-size:
+ * @legacy:
+ * @toggle:
+ * @varying-size:
+ */
+
+/**
+ * SUBTEST: 2x-%s-%s
+ * Description: This test executes flips on both CRTCs while running cursor updates in parallel
+ *
+ * arg[1]:
+ *
+ * @cursor-vs-flip:
+ * @cursor-vs-flip:
+ * @long-cursor-vs-flip:
+ * @long-cursor-vs-flip:
+ *
+ * arg[2]:
+ *
+ * @atomic:
+ * @legacy:
+ */
+
+/**
+ * SUBTEST: flip-vs-cursor-crc-%s
+ * Description: this test perform a page flip followed by a cursor update
+ *
+ * SUBTEST: flip-vs-cursor-busy-crc-%s
+ * Description: this test perform a busy bo update followed by a cursor update
+ *
+ * arg[1]:
+ *
+ * @atomic:
+ * @legacy:
+ */
+
+/**
+ * SUBTEST: modeset-atomic-cursor-hotspot
+ * Description: Test changes the cursor hotspot and checks that the property is
+ *              updated accordignly
+ */
 
 #if defined(__x86_64__) || defined(__i386__)
 #define cpu_relax()	__builtin_ia32_pause()
@@ -49,6 +239,27 @@ IGT_TEST_DESCRIPTION("Stress legacy cursor ioctl");
 
 igt_pipe_crc_t *pipe_crc;
 
+static int try_commit(igt_display_t *display)
+{
+	return (display->is_atomic) ?
+			igt_display_try_commit_atomic(display,
+					DRM_MODE_ATOMIC_TEST_ONLY |
+					DRM_MODE_ATOMIC_ALLOW_MODESET,
+					NULL) :
+			igt_display_try_commit2(display, COMMIT_LEGACY);
+}
+
+static void override_output_modes(igt_display_t *display,
+				  igt_output_t *output1,
+				  igt_output_t *output2)
+{
+	bool found = igt_override_all_active_output_modes_to_fit_bw(display);
+	igt_require_f(found, "No valid mode combo found.\n");
+
+	igt_output_set_pipe(output1, PIPE_NONE);
+	igt_output_set_pipe(output2, PIPE_NONE);
+}
+
 static void stress(igt_display_t *display,
 		   enum pipe pipe, int num_children, unsigned mode,
 		   int timeout)
@@ -57,7 +268,7 @@ static void stress(igt_display_t *display,
 	uint64_t *results;
 	bool torture;
 	int n;
-	unsigned crtc_id[IGT_MAX_PIPES], num_crtcs;
+	unsigned crtc_id[IGT_MAX_PIPES] = {0}, num_crtcs;
 
 	torture = false;
 	if (num_children < 0) {
@@ -83,8 +294,10 @@ static void stress(igt_display_t *display,
 		}
 	} else {
 		num_crtcs = 1;
-		arg.crtc_id = crtc_id[0] = display->pipes[pipe].crtc_id;
-		do_ioctl(display->drm_fd, DRM_IOCTL_MODE_CURSOR, &arg);
+		if(display->pipes[pipe].enabled) {
+			arg.crtc_id = crtc_id[0] = display->pipes[pipe].crtc_id;
+			do_ioctl(display->drm_fd, DRM_IOCTL_MODE_CURSOR, &arg);
+		}
 	}
 
 	arg.flags = mode;
@@ -102,7 +315,8 @@ static void stress(igt_display_t *display,
 		hars_petruska_f54_1_random_perturb(child);
 		igt_until_timeout(timeout) {
 			arg.crtc_id = crtc_id[hars_petruska_f54_1_random_unsafe() % num_crtcs];
-			do_ioctl(display->drm_fd, DRM_IOCTL_MODE_CURSOR, &arg);
+			if (arg.crtc_id)
+				do_ioctl(display->drm_fd, DRM_IOCTL_MODE_CURSOR, &arg);
 			count++;
 		}
 
@@ -151,34 +365,25 @@ static void stress(igt_display_t *display,
 	munmap(results, PAGE_SIZE);
 }
 
-static igt_output_t *set_fb_on_crtc(igt_display_t *display, enum pipe pipe, struct igt_fb *fb_info)
+static void set_fb_on_crtc(igt_display_t *display, enum pipe pipe,
+			   igt_output_t *output, struct igt_fb *fb_info)
 {
-	igt_output_t *output;
+	drmModeModeInfoPtr mode;
+	igt_plane_t *primary;
 
-	for_each_valid_output_on_pipe(display, pipe, output) {
-		drmModeModeInfoPtr mode;
-		igt_plane_t *primary;
+	igt_output_set_pipe(output, pipe);
+	mode = igt_output_get_mode(output);
 
-		if (output->pending_pipe != PIPE_NONE)
-			continue;
+	igt_create_pattern_fb(display->drm_fd,
+		      mode->hdisplay, mode->vdisplay,
+		      DRM_FORMAT_XRGB8888, DRM_FORMAT_MOD_LINEAR, fb_info);
 
-		igt_output_set_pipe(output, pipe);
-		mode = igt_output_get_mode(output);
-
-		igt_create_pattern_fb(display->drm_fd,
-			      mode->hdisplay, mode->vdisplay,
-			      DRM_FORMAT_XRGB8888, I915_TILING_NONE, fb_info);
-
-		primary = igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY);
-		igt_plane_set_fb(primary, fb_info);
-
-		return output;
-	}
-
-	return NULL;
+	primary = igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY);
+	igt_plane_set_fb(primary, fb_info);
 }
 
-static void set_cursor_on_pipe(igt_display_t *display, enum pipe pipe, struct igt_fb *fb)
+static	igt_plane_t
+*set_cursor_on_pipe(igt_display_t *display, enum pipe pipe, struct igt_fb *fb)
 {
 	igt_plane_t *plane, *cursor = NULL;
 
@@ -192,6 +397,14 @@ static void set_cursor_on_pipe(igt_display_t *display, enum pipe pipe, struct ig
 
 	igt_require(cursor);
 	igt_plane_set_fb(cursor, fb);
+
+	return cursor;
+}
+
+static void set_cursor_hotspot(igt_plane_t *cursor, int  hot_x, int hot_y)
+{
+	igt_output_set_prop_value(cursor, IGT_PLANE_HOTSPOT_X, hot_x);
+	igt_output_set_prop_value(cursor, IGT_PLANE_HOTSPOT_Y, hot_y);
 }
 
 static void populate_cursor_args(igt_display_t *display, enum pipe pipe,
@@ -207,36 +420,44 @@ static void populate_cursor_args(igt_display_t *display, enum pipe pipe,
 	arg[1] = *arg;
 }
 
-static enum pipe find_connected_pipe(igt_display_t *display, bool second)
+static enum pipe
+find_connected_pipe(igt_display_t *display, bool second, igt_output_t **output)
 {
-	enum pipe pipe, first = PIPE_NONE;
-	igt_output_t *output;
-	igt_output_t *first_output = NULL;
+	enum pipe pipe;
+	bool first_output = false;
 	bool found = false;
 
 	if (!second) {
 		igt_pipe_crc_free(pipe_crc);
 		pipe_crc = NULL;
-
-		/* Clear display, events will be eaten by commit.. */
-		igt_display_reset(display);
 	}
 
-	for_each_pipe_with_valid_output(display, pipe, output) {
-		if (first == pipe || output == first_output)
-			continue;
+	/* Clear display, events will be eaten by commit.. */
+	igt_display_reset(display);
 
-		if (second) {
-			first = pipe;
-			first_output = output;
-			second = false;
-			continue;
+	for_each_pipe(display, pipe) {
+		for_each_valid_output_on_pipe(display, pipe, *output) {
+			if((*output)->pending_pipe != PIPE_NONE)
+				continue;
+
+			igt_output_set_pipe(*output, pipe);
+			if (intel_pipe_output_combo_valid(display)) {
+				found = true;
+
+				if (second) {
+					first_output = true;
+					second = false;
+					found = false;
+				}
+				break;
+			}
+			igt_output_set_pipe(*output, PIPE_NONE);
 		}
-
-		found = true;
-		break;
+		if (found)
+			break;
 	}
 
+	igt_display_reset(display);
 	if (first_output)
 		igt_require_f(found, "No second valid output found\n");
 	else
@@ -251,7 +472,7 @@ static void flip_nonblocking(igt_display_t *display, enum pipe pipe_id, bool ato
 	igt_plane_t *primary = igt_pipe_get_plane_type(pipe, DRM_PLANE_TYPE_PRIMARY);
 	int ret;
 
-	igt_set_timeout(1, "Scheduling page flip\n");
+	igt_set_timeout(5, "Scheduling page flip\n");
 	if (!atomic) {
 		/* Schedule a nonblocking flip for the next vblank */
 		do {
@@ -278,8 +499,13 @@ enum flip_test {
 	flip_test_last = flip_test_atomic_transitions_varying_size
 };
 
-static bool cursor_slowpath(enum flip_test mode)
+static bool cursor_slowpath(igt_display_t *display, enum flip_test mode)
 {
+	/* Intel display 9 and newer will handle cursor movement as fastsets */
+	if (is_intel_device(display->drm_fd) &&
+	    intel_display_ver(intel_get_drm_devid(display->drm_fd)) >= 9)
+	    return true;
+
 	/* cursor moving doesn't take slowpath, everything else does. */
 	if (mode == flip_test_legacy || mode == flip_test_atomic)
 		return false;
@@ -325,6 +551,7 @@ static void transition_nonblocking(igt_display_t *display, enum pipe pipe_id,
 
 		igt_assert(ret == -EINVAL);
 
+		igt_plane_set_fb(primary, prim_fb);
 		igt_plane_set_fb(sprite, prim_fb);
 	}
 	igt_display_commit_atomic(display, DRM_MODE_ATOMIC_NONBLOCK | DRM_MODE_PAGE_FLIP_EVENT, display);
@@ -351,7 +578,7 @@ static void prepare_flip_test(igt_display_t *display,
 
 		igt_skip_on(width <= 64 && height <= 64);
 		igt_create_color_fb(display->drm_fd, width, height,
-				    DRM_FORMAT_ARGB8888, 0, 1., 0., .7, cursor_fb2);
+				    DRM_FORMAT_ARGB8888, DRM_FORMAT_MOD_LINEAR, 1., 0., .7, cursor_fb2);
 
 		arg[0].flags = arg[1].flags = DRM_MODE_CURSOR_BO;
 		arg[1].handle = cursor_fb2->gem_handle;
@@ -377,7 +604,7 @@ static void prepare_flip_test(igt_display_t *display,
 		            display->pipes[flip_pipe].planes[1].type != DRM_PLANE_TYPE_CURSOR);
 
 		igt_create_color_pattern_fb(display->drm_fd, prim_fb->width, prim_fb->height,
-					    DRM_FORMAT_ARGB8888, 0, .1, .1, .1, argb_fb);
+					    DRM_FORMAT_ARGB8888, DRM_FORMAT_MOD_LINEAR, .1, .1, .1, argb_fb);
 	}
 }
 
@@ -388,12 +615,15 @@ static void flip(igt_display_t *display,
 	struct drm_mode_cursor arg[2];
 	uint64_t *results;
 	struct igt_fb fb_info, fb_info2, argb_fb, cursor_fb, cursor_fb2;
+	igt_output_t *output, *output2;
+	igt_plane_t *cursor;
 
 	results = mmap(NULL, PAGE_SIZE, PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
 	igt_assert(results != MAP_FAILED);
 
-	flip_pipe = find_connected_pipe(display, !!flip_pipe);
-	cursor_pipe = find_connected_pipe(display, !!cursor_pipe);
+	flip_pipe = find_connected_pipe(display, !!flip_pipe, &output);
+	cursor_pipe = find_connected_pipe(display, !!cursor_pipe, &output2);
+	igt_skip_on(!output || !output2);
 
 	igt_info("Using pipe %s for page flip, pipe %s for cursor\n",
 		  kmstest_pipe_name(flip_pipe), kmstest_pipe_name(cursor_pipe));
@@ -401,14 +631,30 @@ static void flip(igt_display_t *display,
 	if (mode >= flip_test_atomic)
 		igt_require(display->is_atomic);
 
-	igt_require(set_fb_on_crtc(display, flip_pipe, &fb_info));
-	if (flip_pipe != cursor_pipe)
-		igt_require(set_fb_on_crtc(display, cursor_pipe, &fb_info2));
+	if (mode == flip_test_atomic_transitions ||
+		mode == flip_test_atomic_transitions_varying_size) {
+		igt_require(igt_pipe_get_plane_type(&display->pipes[flip_pipe],
+					DRM_PLANE_TYPE_OVERLAY));
+	}
 
-	igt_create_color_fb(display->drm_fd, fb_info.width, fb_info.height, DRM_FORMAT_ARGB8888, 0, .5, .5, .5, &cursor_fb);
+	set_fb_on_crtc(display, flip_pipe, output, &fb_info);
+	if (flip_pipe != cursor_pipe) {
+		set_fb_on_crtc(display, cursor_pipe, output2, &fb_info2);
 
-	igt_create_color_fb(display->drm_fd, 64, 64, DRM_FORMAT_ARGB8888, 0, 1., 1., 1., &cursor_fb);
-	set_cursor_on_pipe(display, cursor_pipe, &cursor_fb);
+		if (try_commit(display)) {
+			override_output_modes(display, output, output2);
+
+			set_fb_on_crtc(display, flip_pipe, output, &fb_info);
+			set_fb_on_crtc(display, cursor_pipe, output2, &fb_info2);
+		}
+	}
+
+	igt_create_color_fb(display->drm_fd, fb_info.width, fb_info.height,
+			    DRM_FORMAT_ARGB8888, DRM_FORMAT_MOD_LINEAR, .5, .5, .5, &cursor_fb);
+
+	igt_create_color_fb(display->drm_fd, 64, 64, DRM_FORMAT_ARGB8888,
+			    DRM_FORMAT_MOD_LINEAR, 1., 1., 1., &cursor_fb);
+	cursor = set_cursor_on_pipe(display, cursor_pipe, &cursor_fb);
 	populate_cursor_args(display, cursor_pipe, arg, &cursor_fb);
 
 	prepare_flip_test(display, mode, flip_pipe, cursor_pipe, arg, &fb_info, &argb_fb, &cursor_fb2);
@@ -455,6 +701,18 @@ static void flip(igt_display_t *display,
 
 	munmap(results, PAGE_SIZE);
 
+	/* Clean-up */
+	igt_plane_set_fb(cursor, NULL);
+	igt_plane_set_fb(igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY),
+			 NULL);
+	igt_output_set_pipe(output, PIPE_NONE);
+	if (flip_pipe != cursor_pipe) {
+		igt_plane_set_fb(igt_output_get_plane_type(output2, DRM_PLANE_TYPE_PRIMARY),
+			 NULL);
+		igt_output_set_pipe(output2, PIPE_NONE);
+	}
+	igt_display_commit2(display, display->is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY);
+
 	igt_remove_fb(display->drm_fd, &fb_info);
 	if (flip_pipe != cursor_pipe)
 		igt_remove_fb(display->drm_fd, &fb_info2);
@@ -463,28 +721,6 @@ static void flip(igt_display_t *display,
 		igt_remove_fb(display->drm_fd, &argb_fb);
 	if (cursor_fb2.gem_handle)
 		igt_remove_fb(display->drm_fd, &cursor_fb2);
-}
-
-static inline uint32_t pipe_select(enum pipe pipe)
-{
-	if (pipe > 1)
-		return pipe << DRM_VBLANK_HIGH_CRTC_SHIFT;
-	else if (pipe > 0)
-		return DRM_VBLANK_SECONDARY;
-	else
-		return 0;
-}
-
-static unsigned get_vblank(int fd, enum pipe pipe, unsigned flags)
-{
-	union drm_wait_vblank vbl;
-
-	memset(&vbl, 0, sizeof(vbl));
-	vbl.request.type = DRM_VBLANK_RELATIVE | pipe_select(pipe) | flags;
-	if (drmIoctl(fd, DRM_IOCTL_WAIT_VBLANK, &vbl))
-		return 0;
-
-	return vbl.reply.sequence;
 }
 
 enum basic_flip_cursor {
@@ -503,17 +739,36 @@ static void basic_flip_cursor(igt_display_t *display,
 	struct drm_event_vblank vbl;
 	struct igt_fb fb_info, cursor_fb, cursor_fb2, argb_fb;
 	unsigned vblank_start;
-	enum pipe pipe = find_connected_pipe(display, false);
+	enum pipe pipe;
+	uint64_t ahnd = 0;
 	igt_spin_t *spin;
 	int i, miss1 = 0, miss2 = 0, delta;
+	igt_output_t *output;
+	igt_plane_t *cursor;
+
+	if (flags & BASIC_BUSY)
+	{
+		igt_require_intel(display->drm_fd);
+
+		ahnd = is_i915_device(display->drm_fd) ?
+			get_reloc_ahnd(display->drm_fd, 0) :
+			intel_allocator_open(display->drm_fd, 0, INTEL_ALLOCATOR_RELOC);
+	}
 
 	if (mode >= flip_test_atomic)
 		igt_require(display->is_atomic);
 
-	igt_require(set_fb_on_crtc(display, pipe, &fb_info));
+	pipe = find_connected_pipe(display, false, &output);
+	igt_require(output);
 
-	igt_create_color_fb(display->drm_fd, 64, 64, DRM_FORMAT_ARGB8888, 0, 1., 1., 1., &cursor_fb);
-	set_cursor_on_pipe(display, pipe, &cursor_fb);
+	igt_info("Using pipe %s & %s\n",
+		 kmstest_pipe_name(pipe), igt_output_name(output));
+
+	set_fb_on_crtc(display, pipe, output, &fb_info);
+
+	igt_create_color_fb(display->drm_fd, 64, 64, DRM_FORMAT_ARGB8888,
+			    DRM_FORMAT_MOD_LINEAR, 1., 1., 1., &cursor_fb);
+	cursor = set_cursor_on_pipe(display, pipe, &cursor_fb);
 	populate_cursor_args(display, pipe, arg, &cursor_fb);
 
 	prepare_flip_test(display, mode, pipe, pipe, arg, &fb_info, &argb_fb, &cursor_fb2);
@@ -521,10 +776,10 @@ static void basic_flip_cursor(igt_display_t *display,
 	igt_display_commit2(display, display->is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY);
 
 	/* Quick sanity check that we can update a cursor in a single vblank */
-	vblank_start = get_vblank(display->drm_fd, pipe, DRM_VBLANK_NEXTONMISS);
-	igt_assert_eq(get_vblank(display->drm_fd, pipe, 0), vblank_start);
+	vblank_start = kmstest_get_vblank(display->drm_fd, pipe, DRM_VBLANK_NEXTONMISS);
+	igt_assert_eq(kmstest_get_vblank(display->drm_fd, pipe, 0), vblank_start);
 	do_ioctl(display->drm_fd, DRM_IOCTL_MODE_CURSOR, &arg[0]);
-	igt_assert_eq(get_vblank(display->drm_fd, pipe, 0), vblank_start);
+	igt_assert_eq(kmstest_get_vblank(display->drm_fd, pipe, 0), vblank_start);
 
 	for (i = 0; i < 25; i++) {
 		bool miss;
@@ -535,10 +790,11 @@ static void basic_flip_cursor(igt_display_t *display,
 		spin = NULL;
 		if (flags & BASIC_BUSY)
 			spin = igt_spin_new(display->drm_fd,
+					    .ahnd = ahnd,
 					    .dependency = fb_info.gem_handle);
 
 		/* Start with a synchronous query to align with the vblank */
-		vblank_start = get_vblank(display->drm_fd, pipe, DRM_VBLANK_NEXTONMISS);
+		vblank_start = kmstest_get_vblank(display->drm_fd, pipe, DRM_VBLANK_NEXTONMISS);
 
 		switch (order) {
 		case FLIP_BEFORE_CURSOR:
@@ -552,7 +808,7 @@ static void basic_flip_cursor(igt_display_t *display,
 				break;
 			}
 
-			delta = get_vblank(display->drm_fd, pipe, 0) - vblank_start;
+			delta = kmstest_get_vblank(display->drm_fd, pipe, 0) - vblank_start;
 			miss = delta != 0;
 
 			do_ioctl(display->drm_fd, DRM_IOCTL_MODE_CURSOR, &arg[0]);
@@ -561,7 +817,7 @@ static void basic_flip_cursor(igt_display_t *display,
 		case FLIP_AFTER_CURSOR:
 			do_ioctl(display->drm_fd, DRM_IOCTL_MODE_CURSOR, &arg[0]);
 
-			delta = get_vblank(display->drm_fd, pipe, 0) - vblank_start;
+			delta = kmstest_get_vblank(display->drm_fd, pipe, 0) - vblank_start;
 			miss = delta != 0;
 
 			switch (mode) {
@@ -575,7 +831,7 @@ static void basic_flip_cursor(igt_display_t *display,
 			}
 		}
 
-		delta = get_vblank(display->drm_fd, pipe, 0) - vblank_start;
+		delta = kmstest_get_vblank(display->drm_fd, pipe, 0) - vblank_start;
 
 		if (spin) {
 			struct pollfd pfd = { display->drm_fd, POLLIN };
@@ -585,7 +841,7 @@ static void basic_flip_cursor(igt_display_t *display,
 
 		if (miss)
 			{ /* compare nothing, already failed */ }
-		else if (!cursor_slowpath(mode))
+		else if (!cursor_slowpath(display, mode))
 			miss = delta != 0;
 		else
 			miss = delta != 0 && delta != 1;
@@ -599,7 +855,7 @@ static void basic_flip_cursor(igt_display_t *display,
 		if (miss1)
 			continue;
 
-		delta = get_vblank(display->drm_fd, pipe, 0) - vblank_start;
+		delta = kmstest_get_vblank(display->drm_fd, pipe, 0) - vblank_start;
 
 		if (!mode_requires_extra_vblank(mode))
 			miss2 += delta != 1;
@@ -611,6 +867,13 @@ static void basic_flip_cursor(igt_display_t *display,
 	if (miss1 || miss2)
 		igt_info("Failed to evade %i vblanks and missed %i page flips\n", miss1, miss2);
 
+	/* Clean-up */
+	igt_plane_set_fb(igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY),
+			 NULL);
+	igt_plane_set_fb(cursor, NULL);
+	igt_output_set_pipe(output, PIPE_NONE);
+	igt_display_commit2(display, display->is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY);
+
 	igt_remove_fb(display->drm_fd, &fb_info);
 	igt_remove_fb(display->drm_fd, &cursor_fb);
 
@@ -618,6 +881,7 @@ static void basic_flip_cursor(igt_display_t *display,
 		igt_remove_fb(display->drm_fd, &argb_fb);
 	if (cursor_fb2.gem_handle)
 		igt_remove_fb(display->drm_fd, &cursor_fb2);
+	put_ahnd(ahnd);
 }
 
 static int
@@ -627,13 +891,13 @@ get_cursor_updates_per_vblank(igt_display_t *display, enum pipe pipe,
 	int target;
 
 	for (target = 65536; target; target /= 2) {
-		unsigned vblank_start = get_vblank(display->drm_fd, pipe, DRM_VBLANK_NEXTONMISS);
+		unsigned vblank_start = kmstest_get_vblank(display->drm_fd, pipe, DRM_VBLANK_NEXTONMISS);
 
-		igt_assert_eq(get_vblank(display->drm_fd, pipe, 0), vblank_start);
+		igt_assert_eq(kmstest_get_vblank(display->drm_fd, pipe, 0), vblank_start);
 
 		for (int n = 0; n < target; n++)
 			do_ioctl(display->drm_fd, DRM_IOCTL_MODE_CURSOR, arg);
-		if (get_vblank(display->drm_fd, pipe, 0) == vblank_start)
+		if (kmstest_get_vblank(display->drm_fd, pipe, 0) == vblank_start)
 			break;
 	}
 
@@ -656,17 +920,26 @@ static void flip_vs_cursor(igt_display_t *display, enum flip_test mode, int nloo
 	struct igt_fb fb_info, cursor_fb, cursor_fb2, argb_fb;
 	unsigned vblank_start;
 	int target, cpu;
-	enum pipe pipe = find_connected_pipe(display, false);
+	enum pipe pipe;
 	volatile unsigned long *shared;
 	cpu_set_t mask, oldmask;
+	igt_output_t *output;
+	igt_plane_t *cursor;
 
 	if (mode >= flip_test_atomic)
 		igt_require(display->is_atomic);
 
-	igt_require(set_fb_on_crtc(display, pipe, &fb_info));
+	pipe = find_connected_pipe(display, false, &output);
+	igt_require(output);
 
-	igt_create_color_fb(display->drm_fd, 64, 64, DRM_FORMAT_ARGB8888, 0, 1., 1., 1., &cursor_fb);
-	set_cursor_on_pipe(display, pipe, &cursor_fb);
+	igt_info("Using pipe %s & %s\n",
+		 kmstest_pipe_name(pipe), igt_output_name(output));
+
+	set_fb_on_crtc(display, pipe, output, &fb_info);
+
+	igt_create_color_fb(display->drm_fd, 64, 64, DRM_FORMAT_ARGB8888,
+			    DRM_FORMAT_MOD_LINEAR, 1., 1., 1., &cursor_fb);
+	cursor = set_cursor_on_pipe(display, pipe, &cursor_fb);
 	populate_cursor_args(display, pipe, arg, &cursor_fb);
 
 	prepare_flip_test(display, mode, pipe, pipe, arg, &fb_info, &argb_fb, &cursor_fb2);
@@ -678,11 +951,11 @@ static void flip_vs_cursor(igt_display_t *display, enum flip_test mode, int nloo
 	else
 		target = 1;
 
-	vblank_start = get_vblank(display->drm_fd, pipe, DRM_VBLANK_NEXTONMISS);
-	igt_assert_eq(get_vblank(display->drm_fd, pipe, 0), vblank_start);
+	vblank_start = kmstest_get_vblank(display->drm_fd, pipe, DRM_VBLANK_NEXTONMISS);
+	igt_assert_eq(kmstest_get_vblank(display->drm_fd, pipe, 0), vblank_start);
 	for (int n = 0; n < target; n++)
 		do_ioctl(display->drm_fd, DRM_IOCTL_MODE_CURSOR, &arg[0]);
-	igt_assert_eq(get_vblank(display->drm_fd, pipe, 0), vblank_start);
+	igt_assert_eq(kmstest_get_vblank(display->drm_fd, pipe, 0), vblank_start);
 
 	/*
 	 * There are variations caused by using cpu frequency changing. To
@@ -696,7 +969,7 @@ static void flip_vs_cursor(igt_display_t *display, enum flip_test mode, int nloo
 		igt_assert(shared != MAP_FAILED);
 
 		cpu = sched_getcpu();
-		igt_assert(cpu >= 0);
+		igt_assert_lte(0, cpu);
 
 		CPU_ZERO(&mask);
 		CPU_SET(cpu, &mask);
@@ -720,7 +993,7 @@ static void flip_vs_cursor(igt_display_t *display, enum flip_test mode, int nloo
 		do_ioctl(display->drm_fd, DRM_IOCTL_MODE_CURSOR, &arg[nloops & 1]);
 
 		/* Start with a synchronous query to align with the vblank */
-		vblank_start = get_vblank(display->drm_fd, pipe, DRM_VBLANK_NEXTONMISS);
+		vblank_start = kmstest_get_vblank(display->drm_fd, pipe, DRM_VBLANK_NEXTONMISS);
 		switch (mode) {
 		default:
 			flip_nonblocking(display, pipe, mode >= flip_test_atomic, &fb_info, NULL);
@@ -732,23 +1005,25 @@ static void flip_vs_cursor(igt_display_t *display, enum flip_test mode, int nloo
 		}
 
 		/* The nonblocking flip should not have delayed us */
-		igt_assert_eq(get_vblank(display->drm_fd, pipe, 0), vblank_start);
+		igt_assert_eq(kmstest_get_vblank(display->drm_fd, pipe, 0), vblank_start);
 		for (int n = 0; n < target; n++)
 			do_ioctl(display->drm_fd, DRM_IOCTL_MODE_CURSOR, &arg[nloops & 1]);
 
 		/* Nor should it have delayed the following cursor update */
-		if (!cursor_slowpath(mode))
-			igt_assert_eq(get_vblank(display->drm_fd, pipe, 0), vblank_start);
+		if (!cursor_slowpath(display, mode))
+			igt_assert_eq(kmstest_get_vblank(display->drm_fd, pipe, 0), vblank_start);
+		else if (mode_requires_extra_vblank(mode))
+			igt_assert_lte(kmstest_get_vblank(display->drm_fd, pipe, 0), vblank_start + 2);
 		else
-			igt_assert_lte(get_vblank(display->drm_fd, pipe, 0), vblank_start + 1);
+			igt_assert_lte(kmstest_get_vblank(display->drm_fd, pipe, 0), vblank_start + 1);
 
 		igt_set_timeout(1, "Stuck page flip");
 		igt_ignore_warn(read(display->drm_fd, &vbl, sizeof(vbl)));
 
 		if (!mode_requires_extra_vblank(mode))
-			igt_assert_eq(get_vblank(display->drm_fd, pipe, 0), vblank_start + 1);
+			igt_assert_eq(kmstest_get_vblank(display->drm_fd, pipe, 0), vblank_start + 1);
 		else
-			igt_assert_lte(get_vblank(display->drm_fd, pipe, 0), vblank_start + 2);
+			igt_assert_lte(kmstest_get_vblank(display->drm_fd, pipe, 0), vblank_start + 2);
 
 		igt_reset_timeout();
 	} while (nloops--);
@@ -759,6 +1034,13 @@ static void flip_vs_cursor(igt_display_t *display, enum flip_test mode, int nloo
 		munmap((void *)shared, PAGE_SIZE);
 		sched_setaffinity(0, sizeof(oldmask), &oldmask);
 	}
+
+	/* Clean-up */
+	igt_plane_set_fb(igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY),
+			 NULL);
+	igt_plane_set_fb(cursor, NULL);
+	igt_output_set_pipe(output, PIPE_NONE);
+	igt_display_commit2(display, display->is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY);
 
 	igt_remove_fb(display->drm_fd, &fb_info);
 	igt_remove_fb(display->drm_fd, &cursor_fb);
@@ -773,26 +1055,24 @@ static void nonblocking_modeset_vs_cursor(igt_display_t *display, int loops)
 {
 	struct igt_fb fb_info, cursor_fb;
 	igt_output_t *output;
-	enum pipe pipe = find_connected_pipe(display, false);
+	enum pipe pipe;
 	struct drm_mode_cursor arg[2];
-	igt_plane_t *cursor = NULL, *plane;
+	igt_plane_t *primary, *cursor = NULL;
 
 	igt_require(display->is_atomic);
-	igt_require((output = set_fb_on_crtc(display, pipe, &fb_info)));
-	igt_create_color_fb(display->drm_fd, 64, 64, DRM_FORMAT_ARGB8888, 0, 1., 1., 1., &cursor_fb);
-	set_cursor_on_pipe(display, pipe, &cursor_fb);
+	pipe = find_connected_pipe(display, false, &output);
+	igt_require(output);
+
+	igt_info("Using pipe %s & %s\n",
+		 kmstest_pipe_name(pipe), igt_output_name(output));
+
+	set_fb_on_crtc(display, pipe, output, &fb_info);
+	primary = igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY);
+	igt_create_color_fb(display->drm_fd, 64, 64, DRM_FORMAT_ARGB8888,
+			    DRM_FORMAT_MOD_LINEAR, 1., 1., 1., &cursor_fb);
+	cursor = set_cursor_on_pipe(display, pipe, &cursor_fb);
 	populate_cursor_args(display, pipe, arg, &cursor_fb);
 	arg[0].flags |= DRM_MODE_CURSOR_BO;
-
-	for_each_plane_on_pipe(display, pipe, plane) {
-		if (plane->type != DRM_PLANE_TYPE_CURSOR)
-			continue;
-
-		cursor = plane;
-		break;
-	}
-
-	igt_skip_on(!cursor);
 
 	/*
 	 * Start disabled. No way around it, since the first atomic
@@ -848,22 +1128,40 @@ static void nonblocking_modeset_vs_cursor(igt_display_t *display, int loops)
 		igt_reset_timeout();
 	}
 
+	igt_plane_set_fb(primary, NULL);
+	igt_plane_set_fb(cursor, NULL);
+	igt_output_set_pipe(output, PIPE_NONE);
+	igt_display_commit2(display, COMMIT_ATOMIC);
+
 	igt_remove_fb(display->drm_fd, &fb_info);
 	igt_remove_fb(display->drm_fd, &cursor_fb);
+}
+
+static void wait_for_modeset(igt_display_t *display, unsigned flags, int timeout,
+			     const char *info)
+{
+	int ret;
+
+	igt_set_timeout(timeout, info);
+	do {
+		ret = igt_display_try_commit_atomic(display, flags, NULL);
+	} while (ret == -EBUSY);
+	igt_assert(!ret);
+	igt_reset_timeout();
 }
 
 static void two_screens_flip_vs_cursor(igt_display_t *display, int nloops, bool modeset, bool atomic)
 {
 	struct drm_mode_cursor arg1[2], arg2[2];
 	struct igt_fb fb_info, fb2_info, cursor_fb;
-	enum pipe pipe = find_connected_pipe(display, false);
-	enum pipe pipe2 = find_connected_pipe(display, true);
+	enum pipe pipe, pipe2;
 	igt_output_t *output, *output2;
 	bool enabled = false;
 	volatile unsigned long *shared;
 	unsigned flags = 0, vblank_start;
 	struct drm_event_vblank vbl;
 	int ret;
+	igt_plane_t *cursor, *cursor2;
 
 	if (modeset) {
 		uint64_t val;
@@ -872,28 +1170,41 @@ static void two_screens_flip_vs_cursor(igt_display_t *display, int nloops, bool 
 		igt_require(drmGetCap(display->drm_fd, DRM_CAP_CRTC_IN_VBLANK_EVENT, &val) == 0);
 	}
 
-	shared = mmap(NULL, PAGE_SIZE, PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
-	igt_assert(shared != MAP_FAILED);
-
-	igt_fail_on(modeset && !atomic);
-
 	if (atomic)
 		igt_require(display->is_atomic);
 
-	igt_require((output = set_fb_on_crtc(display, pipe, &fb_info)));
-	igt_require((output2 = set_fb_on_crtc(display, pipe2, &fb2_info)));
+	shared = mmap(NULL, PAGE_SIZE, PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
+	igt_assert(shared != MAP_FAILED);
 
-	igt_create_color_fb(display->drm_fd, 64, 64, DRM_FORMAT_ARGB8888, 0, 1., 1., 1., &cursor_fb);
-	set_cursor_on_pipe(display, pipe, &cursor_fb);
+	pipe = find_connected_pipe(display, false, &output);
+	pipe2 = find_connected_pipe(display, true, &output2);
+	igt_skip_on(!output || !output2);
+
+	igt_info("Using pipe %s & %s and pipe %s & %s\n",
+		 kmstest_pipe_name(pipe), igt_output_name(output),
+		 kmstest_pipe_name(pipe2), igt_output_name(output2));
+
+	set_fb_on_crtc(display, pipe, output, &fb_info);
+	set_fb_on_crtc(display, pipe2, output2, &fb2_info);
+
+	if (try_commit(display)) {
+		override_output_modes(display, output, output2);
+
+		set_fb_on_crtc(display, pipe, output, &fb_info);
+		set_fb_on_crtc(display, pipe2, output2, &fb2_info);
+	}
+
+	igt_create_color_fb(display->drm_fd, 64, 64, DRM_FORMAT_ARGB8888,
+			    DRM_FORMAT_MOD_LINEAR, 1., 1., 1., &cursor_fb);
+	cursor = set_cursor_on_pipe(display, pipe, &cursor_fb);
 	populate_cursor_args(display, pipe, arg1, &cursor_fb);
 
 	arg1[1].x = arg1[1].y = 192;
 
-	set_cursor_on_pipe(display, pipe2, &cursor_fb);
+	cursor2 = set_cursor_on_pipe(display, pipe2, &cursor_fb);
 	populate_cursor_args(display, pipe2, arg2, &cursor_fb);
 
 	arg2[1].x = arg2[1].y = 192;
-
 
 	igt_display_commit2(display, display->is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY);
 
@@ -920,14 +1231,14 @@ static void two_screens_flip_vs_cursor(igt_display_t *display, int nloops, bool 
 		 * Try a page flip on crtc 1, if we succeed pump page flips and
 		 * modesets interleaved, else do a single atomic commit with both.
 		 */
-		vblank_start = get_vblank(display->drm_fd, pipe, DRM_VBLANK_NEXTONMISS);
+		vblank_start = kmstest_get_vblank(display->drm_fd, pipe, DRM_VBLANK_NEXTONMISS);
 		igt_plane_set_fb(plane, &fb_info);
 		ret = igt_display_try_commit_atomic(display, flags, (void*)(ptrdiff_t)vblank_start);
 		igt_assert(!ret || ret == -EBUSY);
 
 		if (ret == -EBUSY) {
 			/* Force completion on both pipes, and generate event. */
-			igt_display_commit_atomic(display, flags, NULL);
+			wait_for_modeset(display, flags, 5, "Stuck with -EBUSY");
 
 			while (nloops--) {
 				shared[1] = nloops & 1;
@@ -945,21 +1256,16 @@ static void two_screens_flip_vs_cursor(igt_display_t *display, int nloops, bool 
 				igt_output_set_pipe(output2, enabled ? PIPE_NONE : pipe2);
 				enabled = !enabled;
 
-				igt_set_timeout(5, "Scheduling modeset\n");
-				do {
-					ret = igt_display_try_commit_atomic(display, flags, NULL);
-				} while (ret == -EBUSY);
-				igt_assert(!ret);
-				igt_reset_timeout();
+				wait_for_modeset(display, flags, 5, "Scheduling modeset");
 			}
 
 			goto done;
 		}
 	} else {
-		vblank_start = get_vblank(display->drm_fd, pipe, DRM_VBLANK_NEXTONMISS);
+		vblank_start = kmstest_get_vblank(display->drm_fd, pipe, DRM_VBLANK_NEXTONMISS);
 		flip_nonblocking(display, pipe, atomic, &fb_info, (void*)(ptrdiff_t)vblank_start);
 
-		vblank_start = get_vblank(display->drm_fd, pipe2, DRM_VBLANK_NEXTONMISS);
+		vblank_start = kmstest_get_vblank(display->drm_fd, pipe2, DRM_VBLANK_NEXTONMISS);
 		flip_nonblocking(display, pipe2, atomic, &fb2_info, (void*)(ptrdiff_t)vblank_start);
 	}
 
@@ -984,7 +1290,7 @@ static void two_screens_flip_vs_cursor(igt_display_t *display, int nloops, bool 
 		}
 
 		if (vbl.crtc_id == display->pipes[pipe].crtc_id) {
-			vblank_start = get_vblank(display->drm_fd, pipe, DRM_VBLANK_NEXTONMISS);
+			vblank_start = kmstest_get_vblank(display->drm_fd, pipe, DRM_VBLANK_NEXTONMISS);
 			flip_nonblocking(display, pipe, atomic, &fb_info, (void*)(ptrdiff_t)vblank_start);
 		} else {
 			igt_assert(vbl.crtc_id == display->pipes[pipe2].crtc_id);
@@ -992,7 +1298,7 @@ static void two_screens_flip_vs_cursor(igt_display_t *display, int nloops, bool 
 			nloops--;
 
 			if (!modeset) {
-				vblank_start = get_vblank(display->drm_fd, pipe2, DRM_VBLANK_NEXTONMISS);
+				vblank_start = kmstest_get_vblank(display->drm_fd, pipe2, DRM_VBLANK_NEXTONMISS);
 				flip_nonblocking(display, pipe2, atomic, &fb2_info, (void*)(ptrdiff_t)vblank_start);
 			} else {
 				igt_output_set_pipe(output2, enabled ? PIPE_NONE : pipe2);
@@ -1013,6 +1319,18 @@ done:
 	shared[0] = 1;
 	igt_waitchildren();
 
+	/* Clean-up */
+	igt_plane_set_fb(igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY),
+			 NULL);
+	if (enabled)
+		igt_plane_set_fb(igt_output_get_plane_type(output2, DRM_PLANE_TYPE_PRIMARY),
+			 NULL);
+	igt_plane_set_fb(cursor, NULL);
+	igt_plane_set_fb(cursor2, NULL);
+	igt_output_set_pipe(output, PIPE_NONE);
+	igt_output_set_pipe(output2, PIPE_NONE);
+	igt_display_commit2(display, display->is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY);
+
 	igt_remove_fb(display->drm_fd, &fb_info);
 	igt_remove_fb(display->drm_fd, &fb2_info);
 	igt_remove_fb(display->drm_fd, &cursor_fb);
@@ -1027,10 +1345,11 @@ static void cursor_vs_flip(igt_display_t *display, enum flip_test mode, int nloo
 	unsigned vblank_start, vblank_last;
 	volatile unsigned long *shared;
 	long target;
-	enum pipe pipe = find_connected_pipe(display, false);
+	enum pipe pipe;
 	igt_output_t *output;
 	uint32_t vrefresh;
 	int fail_count;
+	igt_plane_t *cursor;
 
 	if (mode >= flip_test_atomic)
 		igt_require(display->is_atomic);
@@ -1038,11 +1357,18 @@ static void cursor_vs_flip(igt_display_t *display, enum flip_test mode, int nloo
 	shared = mmap(NULL, PAGE_SIZE, PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
 	igt_assert(shared != MAP_FAILED);
 
-	igt_require((output = set_fb_on_crtc(display, pipe, &fb_info)));
+	pipe = find_connected_pipe(display, false, &output);
+	igt_require(output);
+
+	igt_info("Using pipe %s & %s\n",
+		 kmstest_pipe_name(pipe), igt_output_name(output));
+
+	set_fb_on_crtc(display, pipe, output, &fb_info);
 	vrefresh = igt_output_get_mode(output)->vrefresh;
 
-	igt_create_color_fb(display->drm_fd, 64, 64, DRM_FORMAT_ARGB8888, 0, 1., 1., 1., &cursor_fb);
-	set_cursor_on_pipe(display, pipe, &cursor_fb);
+	igt_create_color_fb(display->drm_fd, 64, 64, DRM_FORMAT_ARGB8888,
+			    DRM_FORMAT_MOD_LINEAR, 1., 1., 1., &cursor_fb);
+	cursor = set_cursor_on_pipe(display, pipe, &cursor_fb);
 	populate_cursor_args(display, pipe, arg, &cursor_fb);
 
 	prepare_flip_test(display, mode, pipe, pipe, arg, &fb_info, &argb_fb, &cursor_fb2);
@@ -1088,7 +1414,7 @@ static void cursor_vs_flip(igt_display_t *display, enum flip_test mode, int nloo
 			vblank_last = vbl.sequence;
 		}
 
-		if (!cursor_slowpath(mode))
+		if (!cursor_slowpath(display, mode))
 			igt_assert_lte(vbl.sequence, vblank_start + 5 * vrefresh / 8);
 
 		shared[0] = 1;
@@ -1107,6 +1433,13 @@ static void cursor_vs_flip(igt_display_t *display, enum flip_test mode, int nloo
 		     "Failed to meet cursor update expectations in %d out of %d iterations\n",
 		     fail_count, nloops);
 
+	/* Clean-up */
+	igt_plane_set_fb(igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY),
+			 NULL);
+	igt_plane_set_fb(cursor, NULL);
+	igt_output_set_pipe(output, PIPE_NONE);
+	igt_display_commit2(display, display->is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY);
+
 	igt_remove_fb(display->drm_fd, &fb_info);
 	igt_remove_fb(display->drm_fd, &cursor_fb);
 	munmap((void *)shared, PAGE_SIZE);
@@ -1123,11 +1456,9 @@ static void two_screens_cursor_vs_flip(igt_display_t *display, int nloops, bool 
 	struct igt_fb fb_info[2], cursor_fb;
 	volatile unsigned long *shared;
 	int target[2];
-	enum pipe pipe[2] = {
-		find_connected_pipe(display, false),
-		find_connected_pipe(display, true)
-	};
+	enum pipe pipe[2];
 	igt_output_t *outputs[2];
+	igt_plane_t *cursors[2];
 
 	shared = mmap(NULL, PAGE_SIZE, PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
 	igt_assert(shared != MAP_FAILED);
@@ -1135,16 +1466,32 @@ static void two_screens_cursor_vs_flip(igt_display_t *display, int nloops, bool 
 	if (atomic)
 		igt_require(display->is_atomic);
 
-	igt_require((outputs[0] = set_fb_on_crtc(display, pipe[0], &fb_info[0])));
-	igt_require((outputs[1] = set_fb_on_crtc(display, pipe[1], &fb_info[1])));
+	pipe[0] = find_connected_pipe(display, false, &outputs[0]);
+	pipe[1] = find_connected_pipe(display, true, &outputs[1]);
+	igt_skip_on(!outputs[0] || !outputs[1]);
 
-	igt_create_color_fb(display->drm_fd, 64, 64, DRM_FORMAT_ARGB8888, 0, 1., 1., 1., &cursor_fb);
+	igt_info("Using pipe %s & %s and pipe %s & %s\n",
+		 kmstest_pipe_name(pipe[0]), igt_output_name(outputs[0]),
+		 kmstest_pipe_name(pipe[1]), igt_output_name(outputs[1]));
 
-	set_cursor_on_pipe(display, pipe[0], &cursor_fb);
+	set_fb_on_crtc(display, pipe[0], outputs[0], &fb_info[0]);
+	set_fb_on_crtc(display, pipe[1], outputs[1], &fb_info[1]);
+
+	if (try_commit(display)) {
+		override_output_modes(display, outputs[0], outputs[1]);
+
+		set_fb_on_crtc(display, pipe[0], outputs[0], &fb_info[0]);
+		set_fb_on_crtc(display, pipe[1], outputs[1], &fb_info[1]);
+	}
+
+	igt_create_color_fb(display->drm_fd, 64, 64, DRM_FORMAT_ARGB8888,
+			    DRM_FORMAT_MOD_LINEAR, 1., 1., 1., &cursor_fb);
+
+	cursors[0] = set_cursor_on_pipe(display, pipe[0], &cursor_fb);
 	populate_cursor_args(display, pipe[0], arg[0], &cursor_fb);
 	arg[0][1].x = arg[0][1].y = 192;
 
-	set_cursor_on_pipe(display, pipe[1], &cursor_fb);
+	cursors[1] = set_cursor_on_pipe(display, pipe[1], &cursor_fb);
 	populate_cursor_args(display, pipe[1], arg[1], &cursor_fb);
 	arg[1][1].x =  arg[1][1].y = 192;
 
@@ -1213,6 +1560,17 @@ static void two_screens_cursor_vs_flip(igt_display_t *display, int nloops, bool 
 				    vrefresh[child]*target[child], vrefresh[child]*target[child] / 2);
 	}
 
+	/* Clean-up */
+	igt_plane_set_fb(igt_output_get_plane_type(outputs[0], DRM_PLANE_TYPE_PRIMARY),
+			 NULL);
+	igt_plane_set_fb(igt_output_get_plane_type(outputs[1], DRM_PLANE_TYPE_PRIMARY),
+			 NULL);
+	igt_plane_set_fb(cursors[0], NULL);
+	igt_plane_set_fb(cursors[1], NULL);
+	igt_output_set_pipe(outputs[0], PIPE_NONE);
+	igt_output_set_pipe(outputs[1], PIPE_NONE);
+	igt_display_commit2(display, display->is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY);
+
 	igt_remove_fb(display->drm_fd, &fb_info[0]);
 	igt_remove_fb(display->drm_fd, &fb_info[1]);
 	igt_remove_fb(display->drm_fd, &cursor_fb);
@@ -1225,22 +1583,32 @@ static void flip_vs_cursor_crc(igt_display_t *display, bool atomic)
 	struct drm_event_vblank vbl;
 	struct igt_fb fb_info, cursor_fb;
 	unsigned vblank_start;
-	enum pipe pipe = find_connected_pipe(display, false);
+	enum pipe pipe;
 	igt_crc_t crcs[3];
+	igt_output_t *output;
+	igt_plane_t *cursor;
 
 	if (atomic)
 		igt_require(display->is_atomic);
 
-	igt_require(set_fb_on_crtc(display, pipe, &fb_info));
+	pipe = find_connected_pipe(display, false, &output);
+	igt_require(output);
 
-	igt_create_color_fb(display->drm_fd, 64, 64, DRM_FORMAT_ARGB8888, 0, 1., 1., 1., &cursor_fb);
+	igt_info("Using pipe %s & %s\n",
+		 kmstest_pipe_name(pipe), igt_output_name(output));
+
+	set_fb_on_crtc(display, pipe, output, &fb_info);
+
+	igt_create_color_fb(display->drm_fd, 64, 64, DRM_FORMAT_ARGB8888,
+			    DRM_FORMAT_MOD_LINEAR, 1., 1., 1., &cursor_fb);
 	populate_cursor_args(display, pipe, arg, &cursor_fb);
 
 	igt_display_commit2(display, display->is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY);
 
-	pipe_crc = igt_pipe_crc_new(display->drm_fd, pipe, INTEL_PIPE_CRC_SOURCE_AUTO);
+	pipe_crc = igt_pipe_crc_new(display->drm_fd, pipe,
+				    IGT_PIPE_CRC_SOURCE_AUTO);
 
-	set_cursor_on_pipe(display, pipe, &cursor_fb);
+	cursor = set_cursor_on_pipe(display, pipe, &cursor_fb);
 	igt_display_commit2(display, COMMIT_UNIVERSAL);
 
 	/* Collect reference crcs, crcs[0] last. */
@@ -1252,23 +1620,30 @@ static void flip_vs_cursor_crc(igt_display_t *display, bool atomic)
 
 	/* Disable cursor, and immediately queue a flip. Check if resulting crc is correct. */
 	for (int i = 1; i >= 0; i--) {
-		vblank_start = get_vblank(display->drm_fd, pipe, DRM_VBLANK_NEXTONMISS);
+		vblank_start = kmstest_get_vblank(display->drm_fd, pipe, DRM_VBLANK_NEXTONMISS);
 
 		flip_nonblocking(display, pipe, atomic, &fb_info, NULL);
 		do_ioctl(display->drm_fd, DRM_IOCTL_MODE_CURSOR, &arg[i]);
 
-		igt_assert_eq(get_vblank(display->drm_fd, pipe, 0), vblank_start);
+		igt_assert_eq(kmstest_get_vblank(display->drm_fd, pipe, 0), vblank_start);
 
 		igt_set_timeout(1, "Stuck page flip");
 		igt_ignore_warn(read(display->drm_fd, &vbl, sizeof(vbl)));
 		igt_reset_timeout();
 
-		igt_assert_eq(get_vblank(display->drm_fd, pipe, 0), vblank_start + 1);
+		igt_assert_eq(kmstest_get_vblank(display->drm_fd, pipe, 0), vblank_start + 1);
 
 		igt_pipe_crc_collect_crc(pipe_crc, &crcs[2]);
 
 		igt_assert_crc_equal(&crcs[i], &crcs[2]);
 	}
+
+	/* Clean-up */
+	igt_plane_set_fb(igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY),
+			 NULL);
+	igt_plane_set_fb(cursor, NULL);
+	igt_output_set_pipe(output, PIPE_NONE);
+	igt_display_commit2(display, display->is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY);
 
 	igt_remove_fb(display->drm_fd, &fb_info);
 	igt_remove_fb(display->drm_fd, &cursor_fb);
@@ -1280,26 +1655,41 @@ static void flip_vs_cursor_busy_crc(igt_display_t *display, bool atomic)
 	struct drm_event_vblank vbl;
 	struct igt_fb fb_info[2], cursor_fb;
 	unsigned vblank_start;
-	enum pipe pipe = find_connected_pipe(display, false);
-	igt_pipe_t *pipe_connected = &display->pipes[pipe];
-	igt_plane_t *plane_primary = igt_pipe_get_plane_type(pipe_connected, DRM_PLANE_TYPE_PRIMARY);
+	enum pipe pipe;
+	igt_plane_t *plane_primary;
 	igt_crc_t crcs[2], test_crc;
+	uint64_t ahnd;
+	igt_output_t *output;
+	igt_plane_t *cursor;
+
+	ahnd = is_i915_device(display->drm_fd) ?
+		get_reloc_ahnd(display->drm_fd, 0) :
+		intel_allocator_open(display->drm_fd, 0, INTEL_ALLOCATOR_RELOC);
 
 	if (atomic)
 		igt_require(display->is_atomic);
 
-	igt_require(set_fb_on_crtc(display, pipe, &fb_info[0]));
-	igt_create_color_pattern_fb(display->drm_fd, fb_info[0].width, fb_info[0].height,
-				    DRM_FORMAT_XRGB8888, LOCAL_I915_FORMAT_MOD_X_TILED, .1, .1, .1, &fb_info[1]);
+	pipe = find_connected_pipe(display, false, &output);
+	igt_require(output);
 
-	igt_create_color_fb(display->drm_fd, 64, 64, DRM_FORMAT_ARGB8888, 0, 1., 1., 1., &cursor_fb);
+	igt_info("Using pipe %s & %s\n",
+		 kmstest_pipe_name(pipe), igt_output_name(output));
+
+	set_fb_on_crtc(display, pipe, output, &fb_info[0]);
+	plane_primary = igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY);
+	igt_create_color_pattern_fb(display->drm_fd, fb_info[0].width, fb_info[0].height,
+				    DRM_FORMAT_XRGB8888, DRM_FORMAT_MOD_LINEAR, .1, .1, .1, &fb_info[1]);
+
+	igt_create_color_fb(display->drm_fd, 64, 64, DRM_FORMAT_ARGB8888,
+			    DRM_FORMAT_MOD_LINEAR, 1., 1., 1., &cursor_fb);
 	populate_cursor_args(display, pipe, arg, &cursor_fb);
 
 	igt_display_commit2(display, display->is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY);
 
-	pipe_crc = igt_pipe_crc_new(display->drm_fd, pipe, INTEL_PIPE_CRC_SOURCE_AUTO);
+	pipe_crc = igt_pipe_crc_new(display->drm_fd, pipe,
+				    IGT_PIPE_CRC_SOURCE_AUTO);
 
-	set_cursor_on_pipe(display, pipe, &cursor_fb);
+	cursor = set_cursor_on_pipe(display, pipe, &cursor_fb);
 	igt_display_commit2(display, COMMIT_UNIVERSAL);
 
 	/* Collect reference crcs, crc[0] last for the loop. */
@@ -1331,14 +1721,16 @@ static void flip_vs_cursor_busy_crc(igt_display_t *display, bool atomic)
 		igt_spin_t *spin;
 
 		spin = igt_spin_new(display->drm_fd,
-				    .dependency = fb_info[1].gem_handle);
+				    .ahnd = ahnd,
+				    .dependency = fb_info[1].gem_handle,
+				    .dependency_size = fb_info[1].size);
 
-		vblank_start = get_vblank(display->drm_fd, pipe, DRM_VBLANK_NEXTONMISS);
+		vblank_start = kmstest_get_vblank(display->drm_fd, pipe, DRM_VBLANK_NEXTONMISS);
 
 		flip_nonblocking(display, pipe, atomic, &fb_info[1], NULL);
 		do_ioctl(display->drm_fd, DRM_IOCTL_MODE_CURSOR, &arg[i]);
 
-		igt_assert_eq(get_vblank(display->drm_fd, pipe, 0), vblank_start);
+		igt_assert_eq(kmstest_get_vblank(display->drm_fd, pipe, 0), vblank_start);
 
 		igt_pipe_crc_get_current(display->drm_fd, pipe_crc, &test_crc);
 
@@ -1348,7 +1740,7 @@ static void flip_vs_cursor_busy_crc(igt_display_t *display, bool atomic)
 		igt_ignore_warn(read(display->drm_fd, &vbl, sizeof(vbl)));
 		igt_reset_timeout();
 
-		igt_assert_lte(vblank_start + 1, get_vblank(display->drm_fd, pipe, 0));
+		igt_assert_lte(vblank_start + 1, kmstest_get_vblank(display->drm_fd, pipe, 0));
 
 		igt_plane_set_fb(plane_primary, &fb_info[0]);
 		igt_display_commit2(display, COMMIT_UNIVERSAL);
@@ -1356,8 +1748,78 @@ static void flip_vs_cursor_busy_crc(igt_display_t *display, bool atomic)
 		igt_assert_crc_equal(&crcs[i], &test_crc);
 	}
 
+	/* Clean-up */
+	igt_plane_set_fb(plane_primary, NULL);
+	igt_plane_set_fb(cursor, NULL);
+	igt_output_set_pipe(output, PIPE_NONE);
+	igt_display_commit2(display, display->is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY);
+
+	igt_pipe_crc_stop(pipe_crc);
 	igt_remove_fb(display->drm_fd, &fb_info[1]);
 	igt_remove_fb(display->drm_fd, &fb_info[0]);
+	igt_remove_fb(display->drm_fd, &cursor_fb);
+	put_ahnd(ahnd);
+}
+
+static void modeset_atomic_cursor_hotspot(igt_display_t *display)
+{
+	struct igt_fb cursor_fb;
+	igt_output_t *output;
+	enum pipe pipe;
+	igt_plane_t *cursor = NULL;
+	bool has_hotspot_prop;
+	uint64_t cursor_width, cursor_height;
+	uint32_t hot_x, hot_y, init_hot_x, init_hot_y;
+
+	igt_require(display->is_atomic);
+	igt_require(display->has_virt_cursor_plane);
+	pipe = find_connected_pipe(display, false, &output);
+	igt_require(output);
+
+	igt_info("Using pipe %s & %s\n",
+		 kmstest_pipe_name(pipe), igt_output_name(output));
+
+	cursor_width = cursor_height = 64;
+	igt_create_color_fb(display->drm_fd, cursor_width, cursor_height, DRM_FORMAT_ARGB8888,
+			    DRM_FORMAT_MOD_LINEAR, 1., 1., 1., &cursor_fb);
+
+	igt_display_commit2(display, COMMIT_ATOMIC);
+
+	cursor = set_cursor_on_pipe(display, pipe, &cursor_fb);
+
+	has_hotspot_prop = cursor->props[IGT_PLANE_HOTSPOT_X] ||
+		cursor->props[IGT_PLANE_HOTSPOT_Y];
+	igt_require_f(has_hotspot_prop, "Cursor plane lacks the hotspot property");
+
+	init_hot_x = igt_plane_get_prop(cursor, IGT_PLANE_HOTSPOT_X);
+	init_hot_y = igt_plane_get_prop(cursor, IGT_PLANE_HOTSPOT_Y);
+
+	/*
+	 * Change the hotspot coordinates randomly and check that the property
+	 * is updated accordingly.
+	 */
+	srand(time(NULL));
+	for (int i = 0; i < 20; i++) {
+		hot_x = rand() % cursor_width;
+		hot_y = rand() % cursor_height;
+		igt_debug("Update cursor hotspot: (%d, %d)\n", hot_x, hot_y);
+
+		/* Set cursor hotspot property values */
+		set_cursor_hotspot(cursor, hot_x, hot_y);
+
+		igt_display_commit2(display, COMMIT_ATOMIC);
+
+		/* After the commit, the cursor hotspot property values are updated */
+		igt_assert_eq(igt_plane_get_prop(cursor, IGT_PLANE_HOTSPOT_X), hot_x);
+		igt_assert_eq(igt_plane_get_prop(cursor, IGT_PLANE_HOTSPOT_Y), hot_y);
+	}
+
+	/* Clean-up */
+	set_cursor_hotspot(cursor, init_hot_x, init_hot_y);
+	igt_plane_set_fb(cursor, NULL);
+	igt_output_set_pipe(output, PIPE_NONE);
+	igt_display_commit2(display, COMMIT_ATOMIC);
+
 	igt_remove_fb(display->drm_fd, &cursor_fb);
 }
 
@@ -1365,157 +1827,264 @@ igt_main
 {
 	const int ncpus = sysconf(_SC_NPROCESSORS_ONLN);
 	igt_display_t display = { .drm_fd = -1 };
+	bool intel_psr2_restore = false;
 	int i;
+	const char *modes[flip_test_last+1] = {
+		"legacy",
+		"varying-size",
+		"toggle",
+		"atomic",
+		"atomic-transitions",
+		"atomic-transitions-varying-size"
+	};
 
 	igt_fixture {
+		int dir, current_log_level;
 		display.drm_fd = drm_open_driver_master(DRIVER_ANY);
 		kmstest_set_vt_graphics_mode();
 
 		igt_display_require(&display, display.drm_fd);
+		/*
+		 * Not possible to evade vblank after a primary or sprite plane
+		 * page flip with cursor legacy APIS when Intel's PSR2 selective
+		 * fetch is enabled, so switching PSR1 for this whole test.
+		 */
+		intel_psr2_restore = i915_psr2_sel_fetch_to_psr1(display.drm_fd, NULL);
+
+		dir = igt_sysfs_drm_module_params_open();
+		if (dir >= 0) {
+			current_log_level = igt_drm_debug_level_get(dir);
+			close(dir);
+
+			if (current_log_level > 10)
+				igt_drm_debug_level_update(10);
+		}
 	}
 
+	igt_describe("Test checks how many cursor updates we can fit between vblanks "
+		     "on single/all pipes with different modes, priority and number of processes");
 	igt_subtest_group {
 		enum pipe n;
-		for_each_pipe_static(n) {
-			errno = 0;
+		struct {
+			const char *name;
+			int ncpus;
+			unsigned flags;
+		} tests[] = {
+			{ "single-bo", 1, DRM_MODE_CURSOR_BO },
+			{ "single-move", 1, DRM_MODE_CURSOR_MOVE },
+			{ "forked-bo", ncpus, DRM_MODE_CURSOR_BO },
+			{ "forked-move", ncpus, DRM_MODE_CURSOR_MOVE },
+			{ "torture-bo", -ncpus, DRM_MODE_CURSOR_BO },
+			{ "torture-move", -ncpus, DRM_MODE_CURSOR_MOVE },
+		};
 
-			igt_fixture {
-				igt_skip_on(n >= display.n_pipes);
+		for (i = 0; i < ARRAY_SIZE(tests); i++) {
+			igt_subtest_with_dynamic(tests[i].name) {
+				for_each_pipe(&display, n) {
+					errno = 0;
+
+					igt_dynamic_f("pipe-%s", kmstest_pipe_name(n))
+						stress(&display, n, tests[i].ncpus, tests[i].flags, 5);
+				}
+
+				errno = 0;
+				igt_dynamic("all-pipes")
+					stress(&display, -1, tests[i].ncpus, tests[i].flags, 5);
 			}
-
-			igt_subtest_f("pipe-%s-single-bo", kmstest_pipe_name(n))
-				stress(&display, n, 1, DRM_MODE_CURSOR_BO, 20);
-			igt_subtest_f("pipe-%s-single-move", kmstest_pipe_name(n))
-				stress(&display, n, 1, DRM_MODE_CURSOR_MOVE, 20);
-
-			igt_subtest_f("pipe-%s-forked-bo", kmstest_pipe_name(n))
-				stress(&display, n, ncpus, DRM_MODE_CURSOR_BO, 20);
-			igt_subtest_f("pipe-%s-forked-move", kmstest_pipe_name(n))
-				stress(&display, n, ncpus, DRM_MODE_CURSOR_MOVE, 20);
-
-			igt_subtest_f("pipe-%s-torture-bo", kmstest_pipe_name(n))
-				stress(&display, n, -ncpus, DRM_MODE_CURSOR_BO, 20);
-			igt_subtest_f("pipe-%s-torture-move", kmstest_pipe_name(n))
-				stress(&display, n, -ncpus, DRM_MODE_CURSOR_MOVE, 20);
 		}
 	}
 
-	igt_subtest("all-pipes-single-bo")
-		stress(&display, -1, 1, DRM_MODE_CURSOR_BO, 20);
-	igt_subtest("all-pipes-single-move")
-		stress(&display, -1, 1, DRM_MODE_CURSOR_MOVE, 20);
+	igt_describe("Test checks how many cursor updates we can fit between vblanks "
+		    "on all pipes with different modes, priority and number of processes");
+	igt_subtest_group {
+		igt_fixture
+			igt_display_require_output(&display);
 
-	igt_subtest("all-pipes-forked-bo")
-		stress(&display, -1, ncpus, DRM_MODE_CURSOR_BO, 20);
-	igt_subtest("all-pipes-forked-move")
-		stress(&display, -1, ncpus, DRM_MODE_CURSOR_MOVE, 20);
+		igt_subtest("nonblocking-modeset-vs-cursor-atomic")
+			nonblocking_modeset_vs_cursor(&display, 1);
 
-	igt_subtest("all-pipes-torture-bo")
-		stress(&display, -1, -ncpus, DRM_MODE_CURSOR_BO, 20);
-	igt_subtest("all-pipes-torture-move")
-		stress(&display, -1, -ncpus, DRM_MODE_CURSOR_MOVE, 20);
+		igt_subtest("long-nonblocking-modeset-vs-cursor-atomic")
+			nonblocking_modeset_vs_cursor(&display, 16);
+	}
 
-	igt_subtest("nonblocking-modeset-vs-cursor-atomic")
-		nonblocking_modeset_vs_cursor(&display, 1);
+	igt_describe("Test changes the cursor hotspot and checks that the "
+		      "property is updated accordignly");
+	igt_subtest_group {
+		igt_fixture
+			igt_display_require_output(&display);
 
-	igt_subtest("long-nonblocking-modeset-vs-cursor-atomic")
-		nonblocking_modeset_vs_cursor(&display, 16);
+		igt_subtest("modeset-atomic-cursor-hotspot") {
+			modeset_atomic_cursor_hotspot(&display);
+		}
+	}
 
-	igt_subtest("2x-flip-vs-cursor-legacy")
-		two_screens_flip_vs_cursor(&display, 8, false, false);
-
-	igt_subtest("2x-flip-vs-cursor-atomic")
-		two_screens_flip_vs_cursor(&display, 8, false, true);
-
-	igt_subtest("2x-cursor-vs-flip-legacy")
-		two_screens_cursor_vs_flip(&display, 8, false);
-
-	igt_subtest("2x-long-flip-vs-cursor-legacy")
-		two_screens_flip_vs_cursor(&display, 150, false, false);
-
-	igt_subtest("2x-long-flip-vs-cursor-atomic")
-		two_screens_flip_vs_cursor(&display, 150, false, true);
-
-	igt_subtest("2x-long-cursor-vs-flip-legacy")
-		two_screens_cursor_vs_flip(&display, 50, false);
-
-	igt_subtest("2x-nonblocking-modeset-vs-cursor-atomic")
-		two_screens_flip_vs_cursor(&display, 4, true, true);
-
-	igt_subtest("2x-cursor-vs-flip-atomic")
-		two_screens_cursor_vs_flip(&display, 8, true);
-
-	igt_subtest("2x-long-nonblocking-modeset-vs-cursor-atomic")
-		two_screens_flip_vs_cursor(&display, 15, true, true);
-
-	igt_subtest("2x-long-cursor-vs-flip-atomic")
-		two_screens_cursor_vs_flip(&display, 50, true);
-
-	igt_subtest("flip-vs-cursor-crc-legacy")
-		flip_vs_cursor_crc(&display, false);
-
-	igt_subtest("flip-vs-cursor-crc-atomic")
-		flip_vs_cursor_crc(&display, true);
-
-	igt_subtest("flip-vs-cursor-busy-crc-legacy")
-		flip_vs_cursor_busy_crc(&display, false);
-
-	igt_subtest("flip-vs-cursor-busy-crc-atomic")
-		flip_vs_cursor_busy_crc(&display, true);
-
-	for (i = 0; i <= flip_test_last; i++) {
-		const char *modes[flip_test_last+1] = {
-			"legacy",
-			"varying-size",
-			"toggle",
-			"atomic",
-			"atomic-transitions",
-			"atomic-transitions-varying-size"
+	igt_describe("This test executes flips on both CRTCs "
+		     "while running cursor updates in parallel");
+	igt_subtest_group {
+		struct {
+			const char *name;
+			int nloops;
+			bool modeset;
+			bool atomic;
+		} tests[] = {
+			{ "2x-flip-vs-cursor-legacy", 8, false, false },
+			{ "2x-flip-vs-cursor-atomic", 8, false, true },
+			{ "2x-long-flip-vs-cursor-legacy", 150, false, false },
+			{ "2x-long-flip-vs-cursor-atomic", 150, false, true },
+			{ "2x-nonblocking-modeset-vs-cursor-atomic", 4, true, true },
+			{ "2x-long-nonblocking-modeset-vs-cursor-atomic", 15, true, true },
 		};
-		const char *prefix = "short-";
 
-		switch (i) {
-		case flip_test_legacy:
-		case flip_test_varying_size:
-		case flip_test_atomic:
-			prefix = "basic-";
-			break;
-		default: break;
+		igt_fixture
+			igt_display_require_output(&display);
+
+		for (i = 0; i < ARRAY_SIZE(tests); i++) {
+			igt_subtest(tests[i].name)
+				two_screens_flip_vs_cursor(&display,
+							   tests[i].nloops,
+							   tests[i].modeset,
+							   tests[i].atomic);
+		}
+	}
+
+	igt_describe("This test executes flips on both CRTCs "
+		     "while running cursor updates in parallel");
+	igt_subtest_group {
+		struct {
+			const char *name;
+			int nloops;
+			bool atomic;
+		} tests[] = {
+			{ "2x-cursor-vs-flip-legacy", 8, false },
+			{ "2x-long-cursor-vs-flip-legacy", 50, false },
+			{ "2x-cursor-vs-flip-atomic", 8, true },
+			{ "2x-long-cursor-vs-flip-atomic", 50, true },
+		};
+
+		igt_fixture
+			igt_display_require_output(&display);
+
+		for (i = 0; i < ARRAY_SIZE(tests); i++) {
+			igt_subtest(tests[i].name)
+				two_screens_cursor_vs_flip(&display,
+							   tests[i].nloops,
+							   tests[i].atomic);
+		}
+	}
+
+	igt_describe("Test will first does a page flip and then cursor update");
+	igt_subtest_group {
+		igt_fixture {
+			igt_require_pipe_crc(display.drm_fd);
+			igt_display_require_output(&display);
 		}
 
-		igt_subtest_f("%sflip-before-cursor-%s", prefix, modes[i])
-			basic_flip_cursor(&display, i, FLIP_BEFORE_CURSOR, 0);
+		igt_subtest("flip-vs-cursor-crc-legacy")
+			flip_vs_cursor_crc(&display, false);
 
-		if (!cursor_slowpath(i)) {
-			igt_subtest_f("%sbusy-flip-before-cursor-%s", prefix, modes[i]) {
-				igt_require_gem(display.drm_fd);
-				basic_flip_cursor(&display, i, FLIP_BEFORE_CURSOR,
-						  BASIC_BUSY);
+		igt_subtest("flip-vs-cursor-crc-atomic")
+			flip_vs_cursor_crc(&display, true);
+	}
+
+	igt_describe("this test perform a busy bo update followed by a cursor update");
+	igt_subtest_group {
+		igt_fixture {
+			igt_require_intel(display.drm_fd);
+			igt_require_pipe_crc(display.drm_fd);
+			igt_display_require_output(&display);
+		}
+
+		igt_subtest("flip-vs-cursor-busy-crc-legacy")
+			flip_vs_cursor_busy_crc(&display, false);
+
+		igt_subtest("flip-vs-cursor-busy-crc-atomic")
+			flip_vs_cursor_busy_crc(&display, true);
+	}
+
+	igt_describe("Adds variety of tests:\n"
+		"* varying-size: change the size of cursor b/w 64*64 to maxw x maxh.\n"
+		"* atomic-transition: alternates between a full screen sprite plane "
+			"and full screen primary plane.\n"
+		"* toggle: which toggles cursor visibility and make sure cursor moves between updates.");
+	igt_subtest_group {
+		struct {
+			const char *name;
+			enum basic_flip_cursor order;
+			unsigned flags;
+		} tests[] = {
+			{ "flip-before-cursor", FLIP_BEFORE_CURSOR, 0 },
+			{ "busy-flip-before-cursor", FLIP_BEFORE_CURSOR, BASIC_BUSY },
+			{ "flip-after-cursor", FLIP_AFTER_CURSOR, 0 },
+		};
+		int t;
+
+		igt_fixture
+			igt_display_require_output(&display);
+
+		for (i = 0; i <= flip_test_last; i++) {
+			const char *prefix = "short-";
+
+			switch (i) {
+			case flip_test_legacy:
+			case flip_test_varying_size:
+			case flip_test_atomic:
+				prefix = "basic-";
+				break;
+			default: break;
+			}
+
+			for (t = 0; t < ARRAY_SIZE(tests); t++) {
+				igt_subtest_f("%s%s-%s", prefix, tests[t].name, modes[i]) {
+					if (tests[t].flags == BASIC_BUSY) {
+						igt_require(!cursor_slowpath(&display, i));
+						igt_require_gem(display.drm_fd);
+					}
+
+					basic_flip_cursor(&display, i, tests[t].order, tests[t].flags);
+				}
 			}
 		}
+	}
 
-		igt_subtest_f("%sflip-after-cursor-%s", prefix, modes[i])
-			basic_flip_cursor(&display, i, FLIP_AFTER_CURSOR, 0);
+	igt_describe("The essence of the basic test is that neither the cursor nor the "
+		     "nonblocking flip stall the application of the next");
+	igt_subtest_group {
+		struct {
+			const char *name;
+			int cursor_pipe;
+			int flip_pipe;
+			int timeout;
+		} tests[] = {
+			{ "cursorA-vs-flipA", 0, 0, 10 },
+			{ "cursorA-vs-flipB", 0, 1, 10 },
+			{ "cursorB-vs-flipA", 1, 0, 10 },
+			{ "cursorB-vs-flipB", 1, 1, 10 },
+		};
 
-		igt_subtest_f("flip-vs-cursor-%s", modes[i])
-			flip_vs_cursor(&display, i, 150);
-		igt_subtest_f("cursor-vs-flip-%s", modes[i])
-			cursor_vs_flip(&display, i, 50);
+		igt_fixture
+			igt_display_require_output(&display);
 
-		igt_subtest_f("cursorA-vs-flipA-%s", modes[i])
-			flip(&display, 0, 0, 10, i);
+		for (i = 0; i <= flip_test_last; i++) {
+			int j;
 
-		igt_subtest_f("cursorA-vs-flipB-%s", modes[i])
-			flip(&display, 0, 1, 10, i);
+			igt_subtest_f("cursor-vs-flip-%s", modes[i])
+				cursor_vs_flip(&display, i, 50);
 
-		igt_subtest_f("cursorB-vs-flipA-%s", modes[i])
-			flip(&display, 1, 0, 10, i);
+			igt_subtest_f("flip-vs-cursor-%s", modes[i])
+				flip_vs_cursor(&display, i, 150);
 
-		igt_subtest_f("cursorB-vs-flipB-%s", modes[i])
-			flip(&display, 1, 1, 10, i);
+			for (j = 0; j < ARRAY_SIZE(tests); j++) {
+				igt_subtest_f("%s-%s", tests[j].name, modes[i])
+					flip(&display, tests[j].cursor_pipe,
+					     tests[j].flip_pipe, tests[j].timeout, i);
+			}
+		}
 	}
 
 	igt_fixture {
+		if (intel_psr2_restore)
+			i915_psr2_sel_fetch_restore(display.drm_fd, NULL);
 		igt_display_fini(&display);
+		drm_close_driver(display.drm_fd);
 	}
 }

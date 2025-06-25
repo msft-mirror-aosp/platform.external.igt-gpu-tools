@@ -38,9 +38,7 @@
 
 #include "igt_core.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+int __get_drm_device_name(int fd, char *name, int name_size);
 
 /*
  * NOTE: Theser are _only_ for testcases exercising driver specific rendering
@@ -54,6 +52,10 @@ extern "C" {
 #define DRIVER_AMDGPU	(1 << 3)
 #define DRIVER_V3D	(1 << 4)
 #define DRIVER_PANFROST	(1 << 5)
+#define DRIVER_MSM	(1 << 6)
+#define DRIVER_XE	(1 << 7)
+#define DRIVER_VMWGFX   (1 << 8)
+
 /*
  * Exclude DRVER_VGEM from DRIVER_ANY since if you run on a system
  * with vgem as well as a supported driver, you can end up with a
@@ -62,7 +64,17 @@ extern "C" {
  */
 #define DRIVER_ANY 	~(DRIVER_VGEM)
 
+/*
+ * Compile friendly enum for i915/xe.
+ */
+enum intel_driver {
+	INTEL_DRIVER_I915 = 1,
+	INTEL_DRIVER_XE,
+};
+
 void __set_forced_driver(const char *name);
+
+unsigned int drm_get_chipset(int fd);
 
 /**
  * ARRAY_SIZE:
@@ -79,22 +91,60 @@ void __set_forced_driver(const char *name);
  *
  * Macro to align a value @v to a specified unit @a.
  */
-#define ALIGN(v, a) (((v) + (a)-1) & ~((a)-1))
+#define ALIGN(v, a) ALIGN_MASK(v, (typeof(v))(a) - 1)
+#define ALIGN_MASK(v, mask) (((v) + (mask)) & ~(mask))
 
+/**
+ * ALIGN_DOWN:
+ * @v: value to be aligned down
+ * @a: alignment unit in bytes
+ *
+ * Macro to align down a value @v to a specified unit @a.
+ */
+#define ALIGN_DOWN(x, a)	ALIGN((x) - ((a) - 1), (a))
+
+/**
+ * IS_ALIGNED:
+ * @v: value to check
+ * @a: alignment unit in bytes
+ *
+ * Macro to check if value @v is aligned to @a
+ */
+#define IS_ALIGNED(v, a)	(((v) & ((typeof(v))(a) - 1)) == 0)
+
+int __drm_open_device(const char *name, unsigned int chipset);
+void drm_load_module(unsigned int chipset);
+int drm_open_driver_another(int idx, int chipset);
 int drm_open_driver(int chipset);
 int drm_open_driver_master(int chipset);
 int drm_open_driver_render(int chipset);
+int __drm_open_driver_another(int idx, int chipset);
 int __drm_open_driver(int chipset);
+int __drm_open_driver_render(int chipset);
+int __drm_close_driver(int fd);
+int drm_close_driver(int fd);
 
-void gem_quiescent_gpu(int fd);
+int drm_reopen_driver(int fd);
+
+int drm_prepare_filtered_multigpu(int chipset);
+int drm_open_filtered_card(int idx);
 
 void igt_require_amdgpu(int fd);
 void igt_require_intel(int fd);
+void igt_require_i915(int fd);
+void igt_require_nouveau(int fd);
 void igt_require_vc4(int fd);
+void igt_require_xe(int fd);
 
 bool is_amdgpu_device(int fd);
 bool is_i915_device(int fd);
+bool is_mtk_device(int fd);
+bool is_msm_device(int fd);
+bool is_nouveau_device(int fd);
 bool is_vc4_device(int fd);
+bool is_xe_device(int fd);
+bool is_intel_device(int fd);
+enum intel_driver get_intel_driver(int fd);
 
 /**
  * do_or_die:
@@ -135,9 +185,5 @@ bool is_vc4_device(int fd);
 	igt_assert_eq(errno, err); \
 	errno = 0; \
 } while (0)
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif /* DRMTEST_H */

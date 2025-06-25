@@ -27,10 +27,72 @@
 #include "igt_debugfs.h"
 #include "igt_sysfs.h"
 
+#include <poll.h>
 #include <sys/mman.h>
-#include <sys/poll.h>
 #include <sys/stat.h>
 #include <dirent.h>
+/**
+ * TEST: vgem basic
+ * Description: Basic sanity check of Virtual GEM module (vGEM).
+ * Category: Core
+ * Mega feature: General Core features
+ * Sub-category: DRM
+ * Functionality: mock device
+ * Test category: GEM_Legacy
+ * Feature: vgem
+ *
+ * SUBTEST: bad-fence
+ * Description: Make sure a non-existent fence cannot be signaled.
+ *
+ * SUBTEST: bad-flag
+ * Description: Make sure a fence cannot be attached and signaled with invalid flags.
+ *
+ * SUBTEST: bad-handle
+ * Description: Make sure a fence cannot be attached to a invalid handle.
+ *
+ * SUBTEST: bad-pad
+ * Description: Make sure a non-zero pad is rejected.
+ *
+ * SUBTEST: busy-fence
+ * Description: Make sure a conflicting fence cannot be attached.
+ *
+ * SUBTEST: create
+ * Description: Check the basic working of vgem_create ioctl.
+ *
+ * SUBTEST: debugfs
+ * Description: Check the basic access to debugfs and also try to read entries in the directory.
+ *
+ * SUBTEST: dmabuf-export
+ * Description: Check whether it can export/import the vgem handle using prime.
+ * Feature: prime, vgem
+ *
+ * SUBTEST: dmabuf-fence
+ * Description: Check the working of dma-buf fence interop.
+ * Feature: prime, vgem
+ *
+ * SUBTEST: dmabuf-fence-before
+ * Description: Attach a fence before exporting a vgem handle and check the working of fence.
+ * Feature: prime, vgem
+ *
+ * SUBTEST: dmabuf-mmap
+ * Description: Export the vgem handle along with RDWR capabilities using prime and check if it can be mmaped.
+ * Feature: prime, vgem
+ *
+ * SUBTEST: mmap
+ * Description: Create a vgem handle and check if it can be mmaped.
+ *
+ * SUBTEST: second-client
+ * Description: Check whether it can open multiple clients.
+ *
+ * SUBTEST: setversion
+ * Description: Check the working of SET_VERSION ioctl.
+ *
+ * SUBTEST: sysfs
+ * Description: Check the basic access to sysfs and also try to read entries in the directory.
+ *
+ * SUBTEST: unload
+ * Description: Basic test for handling of module unload.
+ */
 
 IGT_TEST_DESCRIPTION("Basic sanity check of Virtual GEM module (vGEM).");
 
@@ -64,8 +126,8 @@ static void test_setversion(int fd)
 
 static void test_client(int fd)
 {
-	close(drm_open_driver(DRIVER_VGEM));
-	close(drm_open_driver_render(DRIVER_VGEM));
+	drm_close_driver(drm_open_driver(DRIVER_VGEM));
+	drm_close_driver(drm_open_driver_render(DRIVER_VGEM));
 }
 
 static void test_create(int fd)
@@ -150,6 +212,27 @@ static void test_dmabuf_export(int fd)
 	close(dmabuf);
 	gem_close(other, handle);
 	close(other);
+}
+
+static void test_busy_fence(int fd)
+{
+	struct drm_vgem_fence_attach arg = {};
+	struct vgem_bo bo;
+
+	bo.width = 1024;
+	bo.height = 1;
+	bo.bpp = 32;
+	vgem_create(fd, &bo);
+
+	/* Attach a fence for reading */
+	vgem_fence_attach(fd, &bo, 0);
+
+	/* Attach a fence for writing, so it should be an exclusive fence */
+	arg.handle = bo.handle;
+	arg.flags = VGEM_FENCE_WRITE;
+
+	/* As the fence is not exclusive, return -EBUSY, indicating a conflicting fence */
+	do_ioctl_err(fd, DRM_IOCTL_VGEM_FENCE_ATTACH, &arg, EBUSY);
 }
 
 static void test_dmabuf_mmap(int fd)
@@ -319,7 +402,7 @@ static void test_debugfs_read(int fd)
 
 static int module_unload(void)
 {
-	return igt_kmod_unload("vgem", 0);
+	return igt_kmod_unload("vgem");
 }
 
 static void test_unload(void)
@@ -382,14 +465,18 @@ static void test_unload(void)
 	close(dmabuf);
 
 	/* Although closed, the mmap should keep the dmabuf/module alive */
-	igt_assert_f(module_unload() == 0,
-		     "A mmap should not keep the module alive\n");
+	igt_assert_f(module_unload() != 0,
+		     "A mmap should keep the module alive\n");
 
 	for (int page = 0; page < bo.size >> 12; page++)
 		ptr[1024*page + page%1024] = page;
 
 	/* And finally we should have no more uses on the module. */
 	munmap(ptr, bo.size);
+
+	igt_assert_f(module_unload() == 0,
+		     "No mmap anymore, should be able to unload\n");
+
 }
 
 static bool has_prime_export(int fd)
@@ -406,6 +493,7 @@ igt_main
 {
 	int fd = -1;
 
+	igt_describe("Basic test for handling of module unload.");
 	igt_subtest("unload")
 		test_unload();
 
@@ -413,26 +501,76 @@ igt_main
 		fd = drm_open_driver(DRIVER_VGEM);
 	}
 
+	igt_describe("Check the working of SET_VERSION ioctl.");
 	igt_subtest_f("setversion")
 		test_setversion(fd);
 
+	igt_describe("Check whether it can open multiple clients.");
 	igt_subtest_f("second-client")
 		test_client(fd);
 
+	igt_describe("Check the basic working of vgem_create ioctl.");
 	igt_subtest_f("create")
 		test_create(fd);
 
+	igt_describe("Create a vgem handle and check if it can be mmaped.");
 	igt_subtest_f("mmap")
 		test_mmap(fd);
+
+	igt_describe("Make sure a fence cannot be attached and signaled with invalid flags.");
+	igt_subtest("bad-flag") {
+		struct drm_vgem_fence_attach attach = {
+			.flags = 0xff,
+		};
+
+		struct drm_vgem_fence_signal signal = {
+			.flags = 0xff,
+		};
+
+		do_ioctl_err(fd, DRM_IOCTL_VGEM_FENCE_ATTACH, &attach, EINVAL);
+		do_ioctl_err(fd, DRM_IOCTL_VGEM_FENCE_SIGNAL, &signal, EINVAL);
+	}
+
+	igt_describe("Make sure a non-zero pad is rejected.");
+	igt_subtest("bad-pad") {
+		struct drm_vgem_fence_attach arg = {
+			.pad = 0x01,
+		};
+		do_ioctl_err(fd, DRM_IOCTL_VGEM_FENCE_ATTACH, &arg, EINVAL);
+	}
+
+	igt_describe("Make sure a fence cannot be attached to a invalid handle.");
+	igt_subtest("bad-handle") {
+		struct drm_vgem_fence_attach arg = {
+			.handle = 0xff,
+		};
+		do_ioctl_err(fd, DRM_IOCTL_VGEM_FENCE_ATTACH, &arg, ENOENT);
+	}
+
+	igt_describe("Make sure a non-existent fence cannot be signaled.");
+	igt_subtest("bad-fence") {
+		struct drm_vgem_fence_signal arg = {
+			.fence = 0xff,
+		};
+		do_ioctl_err(fd, DRM_IOCTL_VGEM_FENCE_SIGNAL, &arg, ENOENT);
+	}
+
+	igt_describe("Make sure a conflicting fence cannot be attached.");
+	igt_subtest("busy-fence")
+		test_busy_fence(fd);
 
 	igt_subtest_group {
 		igt_fixture {
 			igt_require(has_prime_export(fd));
 		}
 
+		igt_describe("Check whether it can export/import the vgem handle"
+			     " using prime.");
 		igt_subtest("dmabuf-export")
 			test_dmabuf_export(fd);
 
+		igt_describe("Export the vgem handle along with RDWR capabilities"
+			     " using prime and check if it can be mmaped.");
 		igt_subtest("dmabuf-mmap")
 			test_dmabuf_mmap(fd);
 
@@ -441,19 +579,26 @@ igt_main
 				igt_require(vgem_has_fences(fd));
 			}
 
+			igt_describe("Check the working of dma-buf fence interop.");
 			igt_subtest("dmabuf-fence")
 				test_dmabuf_fence(fd);
+			igt_describe("Attach a fence before exporting a vgem handle"
+				     " and check the working of fence.");
 			igt_subtest("dmabuf-fence-before")
 				test_dmabuf_fence_before(fd);
 		}
 	}
 
+	igt_describe("Check the basic access to sysfs and also try to"
+		     " read entries in the directory.");
 	igt_subtest("sysfs")
 		test_sysfs_read(fd);
+	igt_describe("Check the basic access to debugfs and also try to"
+		     " read entries in the directory.");
 	igt_subtest("debugfs")
 		test_debugfs_read(fd);
 
 	igt_fixture {
-		close(fd);
+		drm_close_driver(fd);
 	}
 }

@@ -21,12 +21,53 @@
  * IN THE SOFTWARE.
  */
 
-#include "igt.h"
-#include "igt_vgem.h"
+/**
+ * TEST: kms prime
+ * Category: Display
+ * Description: Prime tests, focusing on KMS side
+ * Driver requirement: i915, xe
+ * Mega feature: General Display Features
+ */
 
+#include "igt.h"
+#include "igt_device.h"
+#include "igt_debugfs.h"
+#include "igt_sysfs.h"
+#include <fcntl.h>
+
+#include <poll.h>
 #include <sys/ioctl.h>
-#include <sys/poll.h>
 #include <time.h>
+
+/**
+ * SUBTEST: D3hot
+ * Description: Validate pci state of dGPU when dGPU is idle and  scanout is on iGPU
+ *
+ * SUBTEST: basic-modeset-hybrid
+ * Description: Basic modeset on the one device when the other device is active
+ *
+ * SUBTEST: basic-crc-%s
+ * Description: Make a dumb color buffer, export to another device and compare
+ *              the CRCs with a buffer native to that device
+ *
+ * arg[1]:
+ *
+ * @hybrid:
+ * @vgem:
+ */
+
+#define KMS_HELPER "/sys/module/drm_kms_helper/parameters/"
+#define KMS_POLL_DISABLE 0
+
+bool kms_poll_saved_state;
+bool kms_poll_disabled;
+
+struct dumb_bo {
+	uint32_t handle;
+	uint32_t width, height;
+	uint32_t bpp, pitch;
+	uint64_t size;
+};
 
 struct crc_info {
 	igt_crc_t crc;
@@ -67,21 +108,27 @@ static bool has_prime_export(int fd)
 }
 
 static igt_output_t *setup_display(int importer_fd, igt_display_t *display,
-				   enum pipe pipe)
+				   enum pipe *pipe)
 {
-	igt_display_require(display, importer_fd);
-	igt_skip_on(pipe >= display->n_pipes);
-	igt_output_t *output = igt_get_single_output_for_pipe(display, pipe);
+	igt_output_t *output;
+	bool found = false;
 
-	igt_require_f(output, "No connector found for pipe %s\n",
-		      kmstest_pipe_name(pipe));
+	for_each_pipe_with_valid_output(display, *pipe, output) {
+		igt_display_reset(display);
 
-	igt_display_reset(display);
-	igt_output_set_pipe(output, pipe);
+		igt_output_set_pipe(output, *pipe);
+		if (intel_pipe_output_combo_valid(display)) {
+			found = true;
+			break;
+		}
+	}
+
+	igt_require_f(found, "No valid connector/pipe found\n");
+
 	return output;
 }
 
-static void prepare_scratch(int exporter_fd, struct vgem_bo *scratch,
+static void prepare_scratch(int exporter_fd, struct dumb_bo *scratch,
 			    drmModeModeInfo *mode, uint32_t color)
 {
 	uint32_t *ptr;
@@ -89,32 +136,85 @@ static void prepare_scratch(int exporter_fd, struct vgem_bo *scratch,
 	scratch->width = mode->hdisplay;
 	scratch->height = mode->vdisplay;
 	scratch->bpp = 32;
-	vgem_create(exporter_fd, scratch);
 
-	ptr = vgem_mmap(exporter_fd, scratch, PROT_WRITE);
+	if (!is_i915_device(exporter_fd)) {
+		scratch->handle = kmstest_dumb_create(exporter_fd,
+						      ALIGN(scratch->width, 256),
+						      scratch->height, scratch->bpp,
+						      &scratch->pitch, &scratch->size);
+
+		ptr = kmstest_dumb_map_buffer(exporter_fd, scratch->handle,
+					      scratch->size, PROT_WRITE);
+	} else {
+		struct igt_fb fb;
+
+		igt_init_fb(&fb, exporter_fd, mode->hdisplay, mode->vdisplay,
+			    DRM_FORMAT_XRGB8888, DRM_FORMAT_MOD_LINEAR,
+			    IGT_COLOR_YCBCR_BT709, IGT_COLOR_YCBCR_LIMITED_RANGE);
+		igt_calc_fb_size(&fb);
+
+		scratch->size = fb.size;
+		scratch->pitch = fb.strides[0];
+
+		if (gem_has_lmem(exporter_fd))
+			scratch->handle = gem_create_in_memory_regions(exporter_fd, scratch->size,
+								       REGION_LMEM(0), REGION_SMEM);
+		else
+			scratch->handle = gem_create_in_memory_regions(exporter_fd, scratch->size,
+								       REGION_SMEM);
+
+		ptr = gem_mmap__device_coherent(exporter_fd, scratch->handle, 0, scratch->size,
+						PROT_WRITE | PROT_READ);
+	}
+
 	for (size_t idx = 0; idx < scratch->size / sizeof(*ptr); ++idx)
 		ptr[idx] = color;
 
 	munmap(ptr, scratch->size);
 }
 
-static void prepare_fb(int importer_fd, struct vgem_bo *scratch, struct igt_fb *fb)
+static void prepare_fb(int importer_fd, struct dumb_bo *scratch, struct igt_fb *fb)
 {
 	enum igt_color_encoding color_encoding = IGT_COLOR_YCBCR_BT709;
 	enum igt_color_range color_range = IGT_COLOR_YCBCR_LIMITED_RANGE;
 
 	igt_init_fb(fb, importer_fd, scratch->width, scratch->height,
-		    DRM_FORMAT_XRGB8888, LOCAL_DRM_FORMAT_MOD_NONE,
+		    DRM_FORMAT_XRGB8888, DRM_FORMAT_MOD_LINEAR,
 		    color_encoding, color_range);
 }
 
 static void import_fb(int importer_fd, struct igt_fb *fb,
 		      int dmabuf_fd, uint32_t pitch)
 {
-	uint32_t offsets[4] = {}, pitches[4] = {}, handles[4] = {};
+	uint32_t offsets[4] = {}, pitches[4] = {}, handles[4] = {}, temp_buf_handle;
 	int ret;
 
-	fb->gem_handle = prime_fd_to_handle(importer_fd, dmabuf_fd);
+	if (is_i915_device(importer_fd)) {
+		if (gem_has_lmem(importer_fd)) {
+			uint64_t ahnd = get_reloc_ahnd(importer_fd, 0);
+			uint64_t fb_size = 0;
+
+			igt_info("Importer is dGPU\n");
+			temp_buf_handle = prime_fd_to_handle(importer_fd, dmabuf_fd);
+			igt_assert(temp_buf_handle > 0);
+			fb->gem_handle = igt_create_bo_with_dimensions(importer_fd, fb->width, fb->height,
+								       fb->drm_format, fb->modifier, pitch, &fb_size, NULL, NULL);
+			igt_assert(fb->gem_handle > 0);
+
+			igt_blitter_src_copy(importer_fd, ahnd, 0, NULL, temp_buf_handle,
+					     0, pitch, fb->modifier, 0, 0, fb_size, fb->width,
+					     fb->height, 32, fb->gem_handle, 0, pitch, fb->modifier,
+					     0, 0, fb_size);
+
+			gem_sync(importer_fd, fb->gem_handle);
+			gem_close(importer_fd, temp_buf_handle);
+			put_ahnd(ahnd);
+		} else {
+			fb->gem_handle = prime_fd_to_handle(importer_fd, dmabuf_fd);
+		}
+	} else {
+		fb->gem_handle = prime_fd_to_handle(importer_fd, dmabuf_fd);
+	}
 
 	handles[0] = fb->gem_handle;
 	pitches[0] = pitch;
@@ -124,7 +224,7 @@ static void import_fb(int importer_fd, struct igt_fb *fb,
 			    DRM_FORMAT_XRGB8888,
 			    handles, pitches, offsets,
 			    &fb->fb_id, 0);
-	igt_assert(ret == 0);
+	igt_assert_eq(ret, 0);
 }
 
 static void set_fb(struct igt_fb *fb,
@@ -140,7 +240,7 @@ static void set_fb(struct igt_fb *fb,
 	igt_plane_set_fb(primary, fb);
 	ret = igt_display_commit(display);
 
-	igt_assert(ret == 0);
+	igt_assert_eq(ret, 0);
 }
 
 static void collect_crc_for_fb(int importer_fd, struct igt_fb *fb, igt_display_t *display,
@@ -160,22 +260,23 @@ static void test_crc(int exporter_fd, int importer_fd)
 	igt_display_t display;
 	igt_output_t *output;
 	igt_pipe_crc_t *pipe_crc;
-	enum pipe pipe = PIPE_A;
+	enum pipe pipe;
 	struct igt_fb fb;
 	int dmabuf_fd;
-	struct vgem_bo scratch = {}; /* despite the name, it suits for any
-				      * gem-compatible device
-				      * TODO: rename
-				      */
+	struct dumb_bo scratch = {};
+	bool crc_equal;
 	int i, j;
 	drmModeModeInfo *mode;
 
-	bool crc_equal = false;
+	igt_device_set_master(importer_fd);
+	igt_require_pipe_crc(importer_fd);
+	igt_display_require(&display, importer_fd);
 
-	output = setup_display(importer_fd, &display, pipe);
+	output = setup_display(importer_fd, &display, &pipe);
 
 	mode = igt_output_get_mode(output);
-	pipe_crc = igt_pipe_crc_new(importer_fd, pipe, INTEL_PIPE_CRC_SOURCE_AUTO);
+	pipe_crc = igt_pipe_crc_new(importer_fd, pipe,
+				    IGT_PIPE_CRC_SOURCE_AUTO);
 
 	for (i = 0; i < ARRAY_SIZE(colors); i++) {
 		prepare_scratch(exporter_fd, &scratch, mode, colors[i].color);
@@ -189,10 +290,9 @@ static void test_crc(int exporter_fd, int importer_fd)
 		colors[i].prime_crc.name = "prime";
 		collect_crc_for_fb(importer_fd, &fb, &display, output,
 				   pipe_crc, colors[i].color, &colors[i].prime_crc);
-
 		igt_create_color_fb(importer_fd,
 				    mode->hdisplay, mode->vdisplay,
-				    DRM_FORMAT_XRGB8888, LOCAL_DRM_FORMAT_MOD_NONE,
+				    DRM_FORMAT_XRGB8888, DRM_FORMAT_MOD_LINEAR,
 				    colors[i].r, colors[i].g, colors[i].b,
 				    &fb);
 
@@ -226,29 +326,170 @@ static void test_crc(int exporter_fd, int importer_fd)
 	igt_display_fini(&display);
 }
 
-static void run_test_crc(int export_chipset, int import_chipset)
+static void test_basic_modeset(int drm_fd)
 {
-	int importer_fd = -1;
-	int exporter_fd = -1;
+	igt_display_t display;
+	igt_output_t *output;
+	enum pipe pipe;
+	drmModeModeInfo *mode;
+	struct igt_fb fb;
 
-	exporter_fd = drm_open_driver(export_chipset);
-	importer_fd = drm_open_driver_master(import_chipset);
+	igt_device_set_master(drm_fd);
+	igt_display_require(&display, drm_fd);
 
-	igt_require(has_prime_export(exporter_fd));
-	igt_require(has_prime_import(importer_fd));
-	igt_require_pipe_crc(importer_fd);
+	output = setup_display(drm_fd, &display, &pipe);
+	mode = igt_output_get_mode(output);
+	igt_assert(mode);
 
-	test_crc(exporter_fd, importer_fd);
-	close(importer_fd);
-	close(exporter_fd);
+	igt_create_pattern_fb(drm_fd, mode->hdisplay, mode->vdisplay, DRM_FORMAT_XRGB8888,
+			      DRM_FORMAT_MOD_LINEAR, &fb);
+
+	set_fb(&fb, &display, output);
+	igt_remove_fb(drm_fd, &fb);
+	igt_display_fini(&display);
+}
+
+static bool has_connected_output(int drm_fd)
+{
+	igt_display_t display;
+	igt_output_t *output;
+
+	igt_device_set_master(drm_fd);
+	igt_display_require(&display, drm_fd);
+
+	for_each_connected_output(&display, output)
+		return true;
+
+	return false;
+}
+
+static void validate_d3_hot(int drm_fd)
+{
+	igt_assert(igt_debugfs_search(drm_fd, "i915_runtime_pm_status", "GPU idle: yes"));
+	igt_assert(igt_debugfs_search(drm_fd, "i915_runtime_pm_status", "PCI device power state: D3hot [3]"));
+}
+
+static void kms_poll_state_restore(void)
+{
+	int sysfs_fd;
+
+	igt_assert_lte(0, (sysfs_fd = open(KMS_HELPER, O_RDONLY)));
+	__igt_sysfs_set_boolean(sysfs_fd, "poll", kms_poll_saved_state);
+	close(sysfs_fd);
+
+}
+
+static void kms_poll_disable(void)
+{
+	int sysfs_fd;
+
+	igt_require((sysfs_fd = open(KMS_HELPER, O_RDONLY)) >= 0);
+	kms_poll_saved_state = igt_sysfs_get_boolean(sysfs_fd, "poll");
+	igt_sysfs_set_boolean(sysfs_fd, "poll", KMS_POLL_DISABLE);
+	kms_poll_disabled = true;
+	close(sysfs_fd);
 }
 
 igt_main
 {
+	int first_fd = -1;
+	int second_fd_vgem = -1;
+	int second_fd_hybrid = -1;
+	bool first_output, second_output;
+
 	igt_fixture {
 		kmstest_set_vt_graphics_mode();
+		/* ANY = anything that is not VGEM */
+		first_fd = __drm_open_driver_another(0, DRIVER_ANY);
+		igt_require(first_fd >= 0);
+		first_output = has_connected_output(first_fd);
 	}
-	igt_describe("Make a dumb buffer inside vgem, fill it, export to another device and compare the CRC");
-	igt_subtest("basic-crc")
-		run_test_crc(DRIVER_VGEM, DRIVER_ANY);
+
+	igt_describe("Hybrid GPU subtests");
+	igt_subtest_group {
+		igt_fixture {
+			second_fd_hybrid = __drm_open_driver_another(1, DRIVER_ANY);
+			igt_require(second_fd_hybrid >= 0);
+			second_output = has_connected_output(second_fd_hybrid);
+		}
+
+		igt_describe("Hybrid GPU: Make a dumb color buffer, export to another device and"
+			     " compare the CRCs with a buffer native to that device");
+		igt_subtest_with_dynamic("basic-crc-hybrid") {
+			if (has_prime_export(first_fd) &&
+			    has_prime_import(second_fd_hybrid) && second_output)
+				igt_dynamic("first-to-second")
+					test_crc(first_fd, second_fd_hybrid);
+
+			if (has_prime_import(first_fd) &&
+			    has_prime_export(second_fd_hybrid) && first_output)
+				igt_dynamic("second-to-first")
+					test_crc(second_fd_hybrid, first_fd);
+		}
+
+		igt_describe("Basic modeset on the one device when the other device is active");
+		igt_subtest_with_dynamic("basic-modeset-hybrid") {
+			igt_require(second_fd_hybrid >= 0);
+			if (first_output) {
+				igt_dynamic("first")
+					test_basic_modeset(first_fd);
+			}
+
+			if (second_output) {
+				igt_dynamic("second")
+					test_basic_modeset(second_fd_hybrid);
+			}
+		}
+
+		igt_describe("Validate pci state of dGPU when dGPU is idle and  scanout is on iGPU");
+		igt_subtest("D3hot") {
+			igt_require_f(is_i915_device(second_fd_hybrid), "i915 device required\n");
+			igt_require_f(gem_has_lmem(second_fd_hybrid), "Second GPU is not dGPU\n");
+			igt_require_f(first_output, "No display connected to iGPU\n");
+			igt_require_f(!second_output, "Display connected to dGPU\n");
+
+			kms_poll_disable();
+
+			igt_set_timeout(10, "Wait for dGPU to enter D3hot before starting the subtest");
+			while (!igt_debugfs_search(second_fd_hybrid,
+			       "i915_runtime_pm_status",
+			       "PCI device power state: D3hot [3]"));
+			igt_reset_timeout();
+
+			test_basic_modeset(first_fd);
+			validate_d3_hot(second_fd_hybrid);
+		}
+
+		igt_fixture {
+			if (kms_poll_disabled)
+				kms_poll_state_restore();
+
+			drm_close_driver(second_fd_hybrid);
+		}
+	}
+
+	igt_describe("VGEM subtests");
+	igt_subtest_group {
+		igt_fixture {
+			second_fd_vgem = __drm_open_driver_another(1, DRIVER_VGEM);
+			igt_require(second_fd_vgem >= 0);
+			if (is_i915_device(first_fd))
+				igt_require(!gem_has_lmem(first_fd));
+		}
+
+		igt_describe("Make a dumb color buffer, export to another device and"
+			     " compare the CRCs with a buffer native to that device");
+		igt_subtest_with_dynamic("basic-crc-vgem") {
+			if (has_prime_import(first_fd) &&
+			    has_prime_export(second_fd_vgem) && first_output)
+				igt_dynamic("second-to-first")
+					test_crc(second_fd_vgem, first_fd);
+		}
+
+		igt_fixture
+			drm_close_driver(second_fd_vgem);
+	}
+
+	igt_fixture
+		drm_close_driver(first_fd);
 }

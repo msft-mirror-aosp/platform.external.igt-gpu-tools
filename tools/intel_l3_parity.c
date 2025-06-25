@@ -36,6 +36,7 @@
 #include <getopt.h>
 #include "intel_chipset.h"
 #include "intel_io.h"
+#include "igt_device.h"
 #include "igt_sysfs.h"
 #include "drmtest.h"
 #include "config.h"
@@ -44,10 +45,11 @@
 #include "intel_l3_parity.h"
 
 static unsigned int devid;
+
 /* L3 size is always a function of banks. The number of banks cannot be
  * determined by number of slices however */
 static inline int num_banks(void) {
-	switch (intel_gt(devid)) {
+	switch (intel_get_device_info(devid)->gt) {
 	case 2: return 8;
 	case 1: return 4;
 	default: return 2;
@@ -61,7 +63,7 @@ static inline int num_banks(void) {
 #define MAX_ROW (1<<12)
 #define MAX_BANKS_PER_SLICE 4
 #define NUM_REGS (MAX_BANKS_PER_SLICE * NUM_SUBBANKS)
-#define MAX_SLICES (intel_gt(devid) > 1 ? 2 : 1)
+#define MAX_SLICES (intel_get_device_info(devid)->gt > 1 ? 2 : 1)
 #define REAL_MAX_SLICES 2
 /* TODO support SLM config */
 #define L3_SIZE ((MAX_ROW * 4) * NUM_SUBBANKS *  num_banks())
@@ -176,9 +178,11 @@ static void usage(const char *name)
 
 int main(int argc, char *argv[])
 {
+	struct intel_mmio_data mmio_data;
 	const char *path[REAL_MAX_SLICES] = {"l3_parity", "l3_parity_slice_1"};
 	int row = 0, bank = 0, sbank = 0;
 	int fd[REAL_MAX_SLICES] = {0}, ret, i;
+	int exitcode = EXIT_FAILURE;
 	int action = '0';
 	int daemonize = 0;
 	int device, dir;
@@ -189,7 +193,9 @@ int main(int argc, char *argv[])
 	if (intel_gen(devid) < 7 || IS_VALLEYVIEW(devid))
 		exit(77);
 
-	assert(intel_register_access_init(intel_get_pci_device(), 0, device) == 0);
+	assert(intel_register_access_init(&mmio_data,
+					  igt_device_get_pci_device(device),
+					  0) == 0);
 
 	dir = igt_sysfs_open(device);
 
@@ -197,13 +203,13 @@ int main(int argc, char *argv[])
 		fd[i] = openat(dir, path[i], O_RDWR);
 		if (fd[i] < 0) {
 			if (i == 0) /* at least one slice must be supported */
-				exit(77);
+				goto skip;
 			continue;
 		}
 
 		if (read(fd[i], l3logs[i], NUM_REGS * sizeof(uint32_t)) < 0) {
 			perror(path[i]);
-			exit(77);
+			goto skip;
 		}
 		assert(lseek(fd[i], 0, SEEK_SET) == 0);
 	}
@@ -217,7 +223,7 @@ int main(int argc, char *argv[])
 	 * now. Just be aware of this if for some reason a hang is reported
 	 * when using this tool.
 	 */
-	dft = intel_register_read(0xb038);
+	dft = intel_register_read(&mmio_data, 0xb038);
 
 	while (1) {
 		int c, option_index = 0;
@@ -251,45 +257,45 @@ int main(int argc, char *argv[])
 			case '?':
 			case 'h':
 				usage(argv[0]);
-				exit(EXIT_SUCCESS);
+				goto success;
 			case 'H':
 				printf("Number of slices: %d\n", MAX_SLICES);
 				printf("Number of banks: %d\n", num_banks());
 				printf("Subbanks per bank: %d\n", NUM_SUBBANKS);
 				printf("Max L3 size: %dK\n", L3_SIZE >> 10);
 				printf("Has error injection: %s\n", IS_HASWELL(devid) ? "yes" : "no");
-				exit(EXIT_SUCCESS);
+				goto success;
 			case 'r':
 				row = atoi(optarg);
 				if (row >= MAX_ROW)
-					exit(EXIT_FAILURE);
+					goto failure;
 				break;
 			case 'b':
 				bank = atoi(optarg);
 				if (bank >= num_banks() || bank >= MAX_BANKS_PER_SLICE)
-					exit(EXIT_FAILURE);
+					goto failure;
 				break;
 			case 's':
 				sbank = atoi(optarg);
 				if (sbank >= NUM_SUBBANKS)
-					exit(EXIT_FAILURE);
+					goto failure;
 				break;
 			case 'w':
 				which_slice = atoi(optarg);
 				if (which_slice >= MAX_SLICES)
-					exit(EXIT_FAILURE);
+					goto failure;
 				break;
 			case 'i':
 			case 'u':
 				if (!IS_HASWELL(devid)) {
 					fprintf(stderr, "Error injection supported on HSW+ only\n");
-					exit(EXIT_FAILURE);
+					goto failure;
 				}
 			case 'd':
 				if (optarg) {
 					ret = sscanf(optarg, "%d,%d,%d", &row, &bank, &sbank);
 					if (ret != 3)
-						exit(EXIT_FAILURE);
+						goto failure;
 				}
 			case 'a':
 			case 'l':
@@ -297,24 +303,24 @@ int main(int argc, char *argv[])
 			case 'L':
 				if (action != '0') {
 					fprintf(stderr, "Only one action may be specified\n");
-					exit(EXIT_FAILURE);
+					goto failure;
 				}
 				action = c;
 				break;
 			default:
-				abort();
+				goto failure;
 		}
 	}
 
 	if (action == 'i') {
 		if (((dft >> 1) & 1) != which_slice) {
 			fprintf(stderr, "DFT register already has slice %d enabled, and we don't support multiple slices. Try modifying -w; but sometimes the register sticks in the wrong way\n", (dft >> 1) & 1);
-			exit(EXIT_FAILURE);
+			goto failure;
 		}
 
 		if (which_slice == -1) {
 			fprintf(stderr, "Cannot inject errors to multiple slices (modify -w)\n");
-			exit(EXIT_FAILURE);
+			goto failure;
 		}
 		if (dft & 1 && ((dft >> 1) && 1) == which_slice)
 			printf("warning: overwriting existing injections. This is very dangerous.\n");
@@ -331,7 +337,7 @@ int main(int argc, char *argv[])
 		memset(&par, 0, sizeof(par));
 		assert(l3_uevent_setup(&par) == 0);
 		assert(l3_listen(&par, daemonize == 1, &loc) == 0);
-		exit(EXIT_SUCCESS);
+		goto success;
 	}
 
 	if (action == 'l')
@@ -358,7 +364,7 @@ int main(int argc, char *argv[])
 			case 'i':
 				if (bank == 3) {
 					fprintf(stderr, "The hardware does not support error inject on bank 3.\n");
-					exit(EXIT_FAILURE);
+					goto failure;
 				}
 				dft |= row << 7;
 				dft |= sbank << 4;
@@ -366,21 +372,20 @@ int main(int argc, char *argv[])
 				assert(i < 2);
 				dft |= i << 1; /* slice */
 				dft |= 1 << 0; /* enable */
-				intel_register_write(0xb038, dft);
+				intel_register_write(&mmio_data, 0xb038, dft);
 				break;
 			case 'u':
-				intel_register_write(0xb038, dft & ~(1<<0));
+				intel_register_write(&mmio_data ,0xb038, dft & ~(1<<0));
 				break;
 			case 'L':
 				break;
 			default:
-				abort();
+				goto failure;
 		}
 	}
 
-	intel_register_access_fini();
 	if (action == 'l')
-		exit(EXIT_SUCCESS);
+		goto success;
 
 	for_each_slice(i) {
 		if (fd[i] < 0)
@@ -389,11 +394,19 @@ int main(int argc, char *argv[])
 		ret = write(fd[i], l3logs[i], NUM_REGS * sizeof(uint32_t));
 		if (ret == -1) {
 			perror("Writing sysfs");
-			exit(EXIT_FAILURE);
+			goto failure;
 		}
 		close(fd[i]);
 	}
 
 
-	exit(EXIT_SUCCESS);
+success:
+	exitcode = EXIT_SUCCESS;
+failure:
+	intel_register_access_fini(&mmio_data);
+	return exitcode;
+
+skip:
+	exitcode = 77;
+	goto failure;
 }

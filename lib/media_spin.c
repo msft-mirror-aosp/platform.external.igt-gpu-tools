@@ -24,12 +24,11 @@
  * 	Jeff McGee <jeff.mcgee@intel.com>
  */
 
-#include <intel_bufmgr.h>
 #include <i915_drm.h>
 #include "intel_reg.h"
 #include "drmtest.h"
 #include "intel_batchbuffer.h"
-#include "gen8_media.h"
+#include "intel_chipset.h"
 #include "media_spin.h"
 #include "gpu_cmds.h"
 
@@ -66,6 +65,7 @@ static const uint32_t spin_kernel[][4] = {
  *
  */
 
+#define PAGE_SIZE 4096
 #define BATCH_STATE_SPLIT 2048
 /* VFE STATE params */
 #define THREADS 0
@@ -79,94 +79,111 @@ static const uint32_t spin_kernel[][4] = {
 #define xoffset 0
 #define yoffset 0
 
-void
-gen8_media_spinfunc(struct intel_batchbuffer *batch,
-		    const struct igt_buf *dst, uint32_t spins)
+static uint32_t
+gen8_spin_curbe_buffer_data(struct intel_bb *ibb, uint32_t iters)
 {
-	uint32_t curbe_buffer, interface_descriptor;
-	uint32_t batch_end;
+	uint32_t *curbe_buffer;
+	uint32_t offset;
 
-	intel_batchbuffer_flush_with_context(batch, NULL);
+	intel_bb_ptr_align(ibb, 64);
+	curbe_buffer = intel_bb_ptr(ibb);
+	offset = intel_bb_offset(ibb);
 
-	/* setup states */
-	batch->ptr = &batch->buffer[BATCH_STATE_SPLIT];
+	*curbe_buffer = iters;
+	intel_bb_ptr_add(ibb, 64);
 
-	curbe_buffer = gen8_spin_curbe_buffer_data(batch, spins);
-	interface_descriptor = gen8_fill_interface_descriptor(batch, dst,
-					      spin_kernel, sizeof(spin_kernel));
-	igt_assert(batch->ptr < &batch->buffer[4095]);
-
-	/* media pipeline */
-	batch->ptr = batch->buffer;
-	OUT_BATCH(GEN8_PIPELINE_SELECT | PIPELINE_SELECT_MEDIA);
-	gen8_emit_state_base_address(batch);
-
-	gen8_emit_vfe_state(batch, THREADS, MEDIA_URB_ENTRIES,
-			    MEDIA_URB_SIZE, MEDIA_CURBE_SIZE);
-
-	gen7_emit_curbe_load(batch, curbe_buffer);
-
-	gen7_emit_interface_descriptor_load(batch, interface_descriptor);
-
-	gen_emit_media_object(batch, xoffset, yoffset);
-
-	OUT_BATCH(MI_BATCH_BUFFER_END);
-
-	batch_end = intel_batchbuffer_align(batch, 8);
-	igt_assert(batch_end < BATCH_STATE_SPLIT);
-
-	gen7_render_flush(batch, batch_end);
-	intel_batchbuffer_reset(batch);
+	return offset;
 }
 
 void
-gen9_media_spinfunc(struct intel_batchbuffer *batch,
-		    const struct igt_buf *dst, uint32_t spins)
+gen8_media_spinfunc(int i915, struct intel_buf *buf, uint32_t spins)
 {
+	struct intel_bb *ibb;
 	uint32_t curbe_buffer, interface_descriptor;
-	uint32_t batch_end;
 
-	intel_batchbuffer_flush_with_context(batch, NULL);
+	ibb = intel_bb_create(i915, PAGE_SIZE);
+	intel_bb_add_intel_buf(ibb, buf, true);
 
 	/* setup states */
-	batch->ptr = &batch->buffer[BATCH_STATE_SPLIT];
+	intel_bb_ptr_set(ibb, BATCH_STATE_SPLIT);
 
-	curbe_buffer = gen8_spin_curbe_buffer_data(batch, spins);
-	interface_descriptor = gen8_fill_interface_descriptor(batch, dst,
+	curbe_buffer = gen8_spin_curbe_buffer_data(ibb, spins);
+	interface_descriptor = gen8_fill_interface_descriptor(ibb, buf,
 					      spin_kernel, sizeof(spin_kernel));
-	igt_assert(batch->ptr < &batch->buffer[4095]);
+
+	intel_bb_ptr_set(ibb, 0);
 
 	/* media pipeline */
-	batch->ptr = batch->buffer;
-	OUT_BATCH(GEN8_PIPELINE_SELECT | PIPELINE_SELECT_MEDIA |
-		  GEN9_FORCE_MEDIA_AWAKE_ENABLE |
-		  GEN9_SAMPLER_DOP_GATE_DISABLE |
-		  GEN9_PIPELINE_SELECTION_MASK |
-		  GEN9_SAMPLER_DOP_GATE_MASK |
-		  GEN9_FORCE_MEDIA_AWAKE_MASK);
-	gen9_emit_state_base_address(batch);
+	intel_bb_out(ibb, GEN8_PIPELINE_SELECT | PIPELINE_SELECT_MEDIA);
+	gen8_emit_state_base_address(ibb);
 
-	gen8_emit_vfe_state(batch, THREADS, MEDIA_URB_ENTRIES,
+	gen8_emit_vfe_state(ibb, THREADS, MEDIA_URB_ENTRIES,
 			    MEDIA_URB_SIZE, MEDIA_CURBE_SIZE);
 
-	gen7_emit_curbe_load(batch, curbe_buffer);
+	gen7_emit_curbe_load(ibb, curbe_buffer);
 
-	gen7_emit_interface_descriptor_load(batch, interface_descriptor);
+	gen7_emit_interface_descriptor_load(ibb, interface_descriptor);
 
-	gen_emit_media_object(batch, xoffset, yoffset);
+	gen_emit_media_object(ibb, xoffset, yoffset);
 
-	OUT_BATCH(GEN8_PIPELINE_SELECT | PIPELINE_SELECT_MEDIA |
-		  GEN9_FORCE_MEDIA_AWAKE_DISABLE |
-		  GEN9_SAMPLER_DOP_GATE_ENABLE |
-		  GEN9_PIPELINE_SELECTION_MASK |
-		  GEN9_SAMPLER_DOP_GATE_MASK |
-		  GEN9_FORCE_MEDIA_AWAKE_MASK);
+	intel_bb_out(ibb, MI_BATCH_BUFFER_END);
+	intel_bb_ptr_align(ibb, 32);
 
-	OUT_BATCH(MI_BATCH_BUFFER_END);
+	intel_bb_exec(ibb, intel_bb_offset(ibb),
+		      I915_EXEC_DEFAULT | I915_EXEC_NO_RELOC, false);
 
-	batch_end = intel_batchbuffer_align(batch, 8);
-	igt_assert(batch_end < BATCH_STATE_SPLIT);
+	intel_bb_destroy(ibb);
+}
 
-	gen7_render_flush(batch, batch_end);
-	intel_batchbuffer_reset(batch);
+void
+gen9_media_spinfunc(int i915, struct intel_buf *buf, uint32_t spins)
+{
+	struct intel_bb *ibb;
+	uint32_t curbe_buffer, interface_descriptor;
+
+	ibb = intel_bb_create(i915, PAGE_SIZE);
+	intel_bb_add_intel_buf(ibb, buf, true);
+
+	/* setup states */
+	intel_bb_ptr_set(ibb, BATCH_STATE_SPLIT);
+
+	curbe_buffer = gen8_spin_curbe_buffer_data(ibb, spins);
+	interface_descriptor = gen8_fill_interface_descriptor(ibb, buf,
+					      spin_kernel, sizeof(spin_kernel));
+
+	intel_bb_ptr_set(ibb, 0);
+
+	/* media pipeline */
+	intel_bb_out(ibb, GEN8_PIPELINE_SELECT | PIPELINE_SELECT_MEDIA |
+		     GEN9_FORCE_MEDIA_AWAKE_ENABLE |
+		     GEN9_SAMPLER_DOP_GATE_DISABLE |
+		     GEN9_PIPELINE_SELECTION_MASK |
+		     GEN9_SAMPLER_DOP_GATE_MASK |
+		     GEN9_FORCE_MEDIA_AWAKE_MASK);
+	gen9_emit_state_base_address(ibb);
+
+	gen8_emit_vfe_state(ibb, THREADS, MEDIA_URB_ENTRIES,
+			    MEDIA_URB_SIZE, MEDIA_CURBE_SIZE);
+
+	gen7_emit_curbe_load(ibb, curbe_buffer);
+
+	gen7_emit_interface_descriptor_load(ibb, interface_descriptor);
+
+	gen_emit_media_object(ibb, xoffset, yoffset);
+
+	intel_bb_out(ibb, GEN8_PIPELINE_SELECT | PIPELINE_SELECT_MEDIA |
+		     GEN9_FORCE_MEDIA_AWAKE_DISABLE |
+		     GEN9_SAMPLER_DOP_GATE_ENABLE |
+		     GEN9_PIPELINE_SELECTION_MASK |
+		     GEN9_SAMPLER_DOP_GATE_MASK |
+		     GEN9_FORCE_MEDIA_AWAKE_MASK);
+
+	intel_bb_out(ibb, MI_BATCH_BUFFER_END);
+
+	intel_bb_ptr_align(ibb, 32);
+
+	intel_bb_exec(ibb, intel_bb_offset(ibb),
+		      I915_EXEC_DEFAULT | I915_EXEC_NO_RELOC, false);
+
+	intel_bb_destroy(ibb);
 }

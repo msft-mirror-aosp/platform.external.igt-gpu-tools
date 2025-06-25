@@ -22,12 +22,38 @@
  *
  */
 
+/**
+ * TEST: kms cursor edge walk
+ * Category: Display
+ * Description: Test to check different cursor sizes by walking different edges of screen
+ * Driver requirement: i915, xe
+ * Mega feature: General Display Features
+ */
+
 #include "igt.h"
 #include <errno.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+
+/**
+ * SUBTEST: %s-%s
+ * Description: Checking cursor size %arg[1] by walking %arg[2] of screen
+ *
+ * arg[1]:
+ *
+ * @128x128:          128x128
+ * @256x256:          256x256
+ * @64x64:            64x64
+ *
+ * arg[2]:
+ *
+ * @left-edge:        Left edge
+ * @right-edge:       Right edge
+ * @top-bottom:       Top to bottom
+ * @top-edge:         Top edge
+ */
 
 IGT_TEST_DESCRIPTION("Exercise CHV pipe C cursor fail");
 
@@ -60,6 +86,10 @@ enum {
 	EDGE_BOTTOM = 0x8,
 };
 
+static bool extended;
+static enum pipe active_pipes[IGT_MAX_PIPES];
+static uint32_t last_pipe;
+
 static void create_cursor_fb(data_t *data, int cur_w, int cur_h)
 {
 	cairo_t *cr;
@@ -67,7 +97,7 @@ static void create_cursor_fb(data_t *data, int cur_w, int cur_h)
 
 	fb_id = igt_create_fb(data->drm_fd, cur_w, cur_h,
 			      DRM_FORMAT_ARGB8888,
-			      LOCAL_DRM_FORMAT_MOD_NONE,
+			      DRM_FORMAT_MOD_LINEAR,
 			      &data->fb);
 	igt_assert(fb_id);
 
@@ -78,12 +108,13 @@ static void create_cursor_fb(data_t *data, int cur_w, int cur_h)
 	else
 		igt_paint_color_alpha(cr, 0, 0, data->fb.width, data->fb.height,
 				      0.0, 0.0, 0.0, 0.0);
-	igt_put_cairo_ctx(data->drm_fd, &data->fb, cr);
+	igt_put_cairo_ctx(cr);
 }
 
 static void cursor_move(data_t *data, int x, int y, int i)
 {
 	int crtc_id = data->output->config.crtc->crtc_id;
+	igt_display_t *display = &data->display;
 
 	igt_debug("[%d] x=%d, y=%d\n", i, x, y);
 
@@ -95,12 +126,13 @@ static void cursor_move(data_t *data, int x, int y, int i)
 	igt_assert(drmModeMoveCursor(data->drm_fd, crtc_id, x, y) == 0 ||
 		   (IS_CHERRYVIEW(data->devid) && data->pipe == PIPE_C &&
 		    x < 0 && x > -data->curw));
-	igt_wait_for_vblank(data->drm_fd, data->pipe);
+	igt_wait_for_vblank(data->drm_fd,
+			display->pipes[data->pipe].crtc_offset);
 }
 
 #define XSTEP 8
 #define YSTEP 8
-#define NCRC 128
+#define NCRC SLOW_QUICK(128, 1)
 
 static void test_edge_pos(data_t *data, int sx, int ex, int y, bool swap_axis)
 {
@@ -223,6 +255,7 @@ static void cleanup_crtc(data_t *data)
 
 	igt_remove_fb(data->drm_fd, &data->primary_fb);
 	igt_remove_fb(data->drm_fd, &data->fb);
+	igt_display_commit2(display, display->is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY);
 }
 
 static void prepare_crtc(data_t *data)
@@ -239,7 +272,7 @@ static void prepare_crtc(data_t *data)
 	mode = igt_output_get_mode(data->output);
 	igt_create_pattern_fb(data->drm_fd, mode->hdisplay, mode->vdisplay,
 			      DRM_FORMAT_XRGB8888,
-			      LOCAL_DRM_FORMAT_MOD_NONE,
+			      DRM_FORMAT_MOD_LINEAR,
 			      &data->primary_fb);
 
 	primary = igt_output_get_plane_type(data->output, DRM_PLANE_TYPE_PRIMARY);
@@ -252,7 +285,7 @@ static void prepare_crtc(data_t *data)
 
 	/* create the pipe_crc object for this pipe */
 	data->pipe_crc = igt_pipe_crc_new_nonblock(data->drm_fd, data->pipe,
-						   INTEL_PIPE_CRC_SOURCE_AUTO);
+						   IGT_PIPE_CRC_SOURCE_AUTO);
 
 	/* get reference crc w/o cursor */
 	igt_pipe_crc_start(data->pipe_crc);
@@ -266,6 +299,8 @@ static void test_crtc(data_t *data, unsigned int edges)
 	create_cursor_fb(data, data->curw, data->curh);
 
 	test_edges(data, edges);
+
+	cleanup_crtc(data);
 }
 
 static int opt_handler(int opt, int opt_index, void *_data)
@@ -278,6 +313,9 @@ static int opt_handler(int opt, int opt_index, void *_data)
 		break;
 	case 'd':
 		data->disable = true;
+		break;
+	case 'e':
+		extended = true;
 		break;
 	case 'j':
 		data->jump = true;
@@ -295,23 +333,41 @@ static const struct option long_opts[] = {
 	{ .name = "colored", .val = 'c' },
 	{ .name = "disable", .val = 'd'},
 	{ .name = "jump", .val = 'j' },
+	{ .name = "extended", .val = 'e'},
 	{}
 };
 static const char *help_str =
 	"  --colored\t\tUse a colored cursor (disables CRC checks)\n"
 	"  --disable\t\tDisable the cursor between each step\n"
-	"  --jump\t\tJump the cursor to middle of the screen between each step)\n";
+	"  --jump\t\tJump the cursor to middle of the screen between each step)\n"
+	"  --extended\t\tRun on all pipes.(Default it will Run only two pipes)\n";
 
 igt_main_args("", long_opts, help_str, opt_handler, &data)
 {
-	igt_skip_on_simulation();
+	struct {
+		const char *name;
+		unsigned flags;
+	} tests[] = {
+		{ "left-edge", EDGE_LEFT },
+		{ "right-edge", EDGE_RIGHT },
+		{ "top-edge", EDGE_TOP },
+		{ "top-bottom", EDGE_BOTTOM },
+	};
+	int i;
 
 	igt_fixture {
 		int ret;
+		enum pipe pipe;
 
-		data.drm_fd = drm_open_driver_master(DRIVER_INTEL);
+		data.drm_fd = drm_open_driver_master(DRIVER_ANY);
 
-		data.devid = intel_get_drm_devid(data.drm_fd);
+		igt_require_pipe_crc(data.drm_fd);
+
+		igt_display_require(&data.display, data.drm_fd);
+		igt_display_require_output(&data.display);
+
+		if (is_intel_device(data.drm_fd))
+			data.devid = intel_get_drm_devid(data.drm_fd);
 
 		ret = drmGetCap(data.drm_fd, DRM_CAP_CURSOR_WIDTH, &max_curw);
 		igt_assert(ret == 0 || errno == EINVAL);
@@ -321,47 +377,46 @@ igt_main_args("", long_opts, help_str, opt_handler, &data)
 
 		kmstest_set_vt_graphics_mode();
 
-		igt_require_pipe_crc(data.drm_fd);
-
-		igt_display_require(&data.display, data.drm_fd);
+		/* Get active pipes. */
+		last_pipe = 0;
+		for_each_pipe(&data.display, pipe)
+			active_pipes[last_pipe++] = pipe;
+		last_pipe--;
 	}
 
-	for_each_pipe_static(data.pipe) {
-		igt_subtest_group {
-			igt_fixture {
-				igt_display_require_output_on_pipe(&data.display, data.pipe);
-				data.output = igt_get_single_output_for_pipe(&data.display, data.pipe);
-			}
+	for (i = 0; i < ARRAY_SIZE(tests); i++) {
+		for (data.curw = 64; data.curw <= 256; data.curw *= 2) {
+			data.curh = data.curw;
+			igt_fixture
+				igt_require(data.curw <= max_curw && data.curh <= max_curh);
 
-			for (data.curw = 64; data.curw <= 256; data.curw *= 2) {
-				data.curh = data.curw;
+			igt_describe_f("Checking cursor size %dx%d by walking %s of screen",
+					data.curw, data.curh, tests[i].name);
+			igt_subtest_with_dynamic_f("%dx%d-%s", data.curw,
+						   data.curh, tests[i].name) {
+				for_each_pipe_with_single_output(&data.display, data.pipe, data.output) {
+					if (!extended && data.pipe != active_pipes[0] &&
+					    data.pipe != active_pipes[last_pipe])
+						continue;
 
-				igt_fixture
-					igt_require(data.curw <= max_curw && data.curh <= max_curh);
+					igt_display_reset(&data.display);
+					igt_output_set_pipe(data.output, data.pipe);
+					if (!intel_pipe_output_combo_valid(&data.display))
+						continue;
 
-				igt_subtest_f("pipe-%s-%dx%d-left-edge",
-					kmstest_pipe_name(data.pipe),
-					data.curw, data.curh)
-					test_crtc(&data, EDGE_LEFT);
+					igt_output_set_pipe(data.output, PIPE_NONE);
 
-				igt_subtest_f("pipe-%s-%dx%d-right-edge",
-					kmstest_pipe_name(data.pipe),
-					data.curw, data.curh)
-					test_crtc(&data, EDGE_RIGHT);
-
-				igt_subtest_f("pipe-%s-%dx%d-top-edge",
-					kmstest_pipe_name(data.pipe),
-					data.curw, data.curh)
-					test_crtc(&data, EDGE_TOP);
-
-				igt_subtest_f("pipe-%s-%dx%d-bottom-edge",
-					kmstest_pipe_name(data.pipe),
-					data.curw, data.curh)
-					test_crtc(&data, EDGE_BOTTOM);
+					igt_dynamic_f("pipe-%s-%s",
+						      kmstest_pipe_name(data.pipe),
+						      data.output->name)
+						test_crtc(&data, tests[i].flags);
+				}
 			}
 		}
 	}
 
-	igt_fixture
+	igt_fixture {
 		igt_display_fini(&data.display);
+		drm_close_driver(data.drm_fd);
+	}
 }

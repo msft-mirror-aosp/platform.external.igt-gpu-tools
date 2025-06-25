@@ -1,9 +1,469 @@
-Unreleased
-----------
+Release 2.00 (2025-03-13)
+-------------------------
 
-Meson build options have been renamed. Please check the news options in
-meson_options.txt and make sure you don't get any warnings when configuring the
-project.
+General changes:
+
+- Added Karthik B S as a new maintainer.
+
+Library changes:
+
+- Added GFX1153 to GFX1150 amdgpu family. (Tim Huang)
+
+- Improved kernel module un/loading. (Lucas De Marchi)
+
+- Added ftrace logs at test boundaries. (Umesh Nerlige Ramappa)
+
+- Improved device scanning used in device filters. (Zbigniew Kempczyński)
+
+- Add support to check joiner mode limit. (Jeevan B)
+
+- Updated PCI ids for DG2/MTL/BMG/PTL. (Matt Atwood)
+
+- Added PTL opencl kernels. (Janga Rahul Kumar and Priyanka Dandamudi)
+
+- Extended GPGPU compute square kernel for PTL. (Sai Gowtham Ch)
+
+- Using Long Running mode for GPGPU compute with Xe. (Francois Dugast)
+
+- Make running under Valgrind quiet. (Tvrtko Ursulin)
+
+Runner changes:
+
+- Added igt_runner cmdline to results. (Lucas De Marchi)
+
+- Added printing GPU related facts. (Peter Senna Tschudin)
+
+- Added kmemleak scans. (Peter Senna Tschudin)
+
+- Parse results more persistently. (Kamil Konieczny)
+
+Test changes:
+
+- Improved Xe EUdebug tests. (Dominik Grzegorzek)
+
+- Improved support for 3d testing on VMs for vmwgfx. (Maaz Mombasawala)
+
+- Improved Xe debugfs testing. (Pravalika Gurram)
+
+- Improved amdgpu PCI unplug test. (Vitaly Prosyak)
+
+- Added support for page queues in amdgpu tests. (Jesse Zhang)
+
+- New short hibernate subtest in Intel KMS ccs. (Juha-Pekka Heikkila)
+
+- Renamed test i915_pipe_stress into kms_pipe_stress and added
+  support for Xe in it. (Swati Sharma)
+
+- New test for devcoredump for Xe. (Zhanjun Dong)
+
+- New DP link training validation of both UHBR and non-UHBR link
+  rates over SST and MST configurations. (Kunal Joshi)
+
+- New test for Frame Buffer Compression (FBC) with dirty rectangles which
+  allows FBC to recompress a subsection of a frame. (Santhosh Reddy Guddati)
+
+- New test for EU stall sampling for Xe. (Harish Chegondi)
+
+- New test for eudebug/SR-IOV exclusion for Xe. (Christoph Manszewski)
+
+- New test for PMU (Performance Monitoring Unit) for Xe. (Vinay Belgaumkar
+  and Riana Tauro)
+
+- New test for SRIOV auto-provisioning for Xe. (Marcin Bernatowicz)
+
+- New equal-throughput validation for VFs in SRIOV. (Marcin Bernatowicz)
+
+- Improved test documentation. (Katarzyna Piecielska and Swati Sharma)
+
+- Improved Xe OA test. (Umesh Nerlige Ramappa, Sai Teja Pottumuttu and
+  Ashutosh Dixit)
+
+Tools and scripts changes:
+
+- New tool for measuring display memory bandwidth utilization (Ville Syrjälä)
+
+- New igt_facts tool for displaying GPU related info. (Peter Senna Tschudin)
+
+- Power tool renamed to igt_power (Kamil Konieczny)
+
+- New --pci-slot option in intel_reg for multi-GPU configs. (Łukasz Łaguna
+  and Kamil Konieczny)
+
+- Added kmemleak option to run-tests.sh script. (Peter Senna Tschudin)
+
+And many other bug fixes, improvements, cleanups and new tests.
+
+
+Release 1.30 (2024-12-13)
+-------------------------
+
+General changes:
+
+- New meson options xe_eudebug and vmtb.
+
+Library changes:
+
+- Added PantherLake (PTL) support, unified PCI IDs into one
+  common header pciids.h (Ngai-Mint Kwan)
+
+- Added BMG support for OA (Observability Architecture) for Xe driver.
+  (José Roberto de Souza)
+
+- Added support for Xe3 platforms in GPGPU shader. (Andrzej Hajda)
+
+- Added 6k resolution support for a single CRTC. (Jeevan B)
+
+- Added support for MTL platform in GPGPU compute. (Nishit Sharma)
+
+Runner changes:
+
+- Set option PRUNE_KEEP_ALL as default. (Kamil Konieczny)
+
+- Allow to dynamically ignore dmesg warn messages when generating
+  results, usefull when driver is using kernel fault injection.
+  (Kamil Konieczny).
+
+Test changes:
+
+- Added sanity checks for KMS properties. (Dmitry Baryshkov, Maxime Ripard)
+
+- Improved GPGPU tests for i915 and Xe. (Zbigniew Kempczyński)
+
+- New SRIOV test for Functional Level Reset (FLR) for Xe. (Marcin Bernatowicz)
+
+- Added test that draws triangle without using 3d commands for vmwgfx.
+  (Maaz Mombasawala)
+
+- Added subtest for fallback for DP connector. (Kunal Joshi)
+
+- Added async flips suspend resume subtest. (Santhosh Reddy Guddati)
+
+- New test for error handling of Xe at probe time. (Francois Dugast)
+
+- Added testing SIZE_HINTS property in KMS cursor test. (Ville Syrjälä)
+
+- Added KMS testing for ultrajoiner. (Karthik B S)
+
+- New test for TLB invalidation in Xe. (Sai Gowtham Ch)
+
+- New test for timeslice duration in Xe. (Sai Gowtham Ch)
+
+- Display brightness test during DPMS on and off. (Mohammed Thasleem)
+
+- New tests for EU debugging for Xe. (Dominik Grzegorzek, Mika Kuoppala,
+  Christoph Manszewski, Karolina Stolarek, Maciej Patelczyk, Pawel Sikora,
+  Andrzej Hajda, Dominik Karol Piątkowski, Jonathan Cavitt et al)
+
+Tools changes:
+
+- New power tool for power/energy measurement. (Ville Syrjälä)
+
+- New VM Testbench (VMTB) - SR-IOV Virtual Machine testing tool.
+  (Adam Miszczak)
+
+- Fixes in amd_hdmi_compliance. (Stylon Wang and Wayne Lin)
+
+- Fixes in intel_reg. (Lucas De Marchi)
+
+And many other bug fixes, improvements, cleanups and new tests.
+
+
+Release 1.29 (2024-09-04)
+-------------------------
+
+General changes:
+
+- Added gcc warns: dangling-pointer, int-conversion (Bhanuprakash Modem)
+
+- More guidelines in CONTRIBUTING. (Louis Chauvet, Kamil Konieczny)
+
+- Reorganized Tests: Moved all vendor specific tests to their own dir
+  (Bhanuprakash Modem)
+
+- Fix musl/uclibc build (Bernd Kuhls, Stefano Ragni)
+
+Benchmarks changes:
+
+- New KMS framebuffer stress benchmark. (Arthur Grillo)
+
+- Added basic Xe support in gem_wsim. (Marcin Bernatowicz)
+
+Documentation changes:
+
+- Add documentation about cross-builds. (Mauro Carvalho Chehab)
+
+- Improve tests documentation. (Katarzyna Piecielska)
+
+Library changes:
+
+- Add Battlemage (BMG) support in xe_pciids.h (Andrzej Hajda)
+
+- Add amdgpu GFX1152, GFX1150 and gfx12. (Jesse Zhang and Tim Huang)
+
+- Added inline support for iga64 assembly in GPGPU shader. (Andrzej Hajda)
+
+- Improved KUnit support. (Janusz Krzysztofik)
+
+- Enable igt run on security enhanced distros (like Gentoo/Hardened)
+  (Matt Turner)
+
+- Use blitter as a default for all KMS tests. (Juha-Pekka Heikkila and
+  Bhanuprakash Modem)
+
+- Increased MAX supported pipes to 16 (Pipe-A to Pipe-P) (Vignesh Raman)
+
+- Added generic way to reset sysfs/debugfs attrs to default values upon
+  exit. (Ville Syrjälä)
+
+Runner changes:
+
+- Added hook scripts to igt_runner. (Gustavo Sousa)
+
+Test changes:
+
+- Added support for Xe in KMS tests. (Swati Sharma, Bhanuprakash Modem et al)
+
+- Added new subtests and improvements to VRR. (Bhanuprakash Modem, Jeevan B,
+  Manasi Navare, Sean Paul et al)
+
+- Added new subtests to force joiner. (Kunal Joshi)
+
+- Added fbdev tests to Xe. (Bhanuprakash Modem)
+
+- Added amdgpu fuzzing tests. (Vitaly Prosyak)
+
+- Added syncobj_eventfd test. (Simon Ser)
+
+- Added basic Single-Root IO Virtualization (SRIOV) test. (Katarzyna Dec et al)
+
+- Added prime test for vmwgfx. (Zack Rusin)
+
+- Improved core_getversion. (Rob Clark, Helen Koike, Kamil Konieczny)
+
+- Improved kms_atomic on non-mutable planes. (Melissa Wen)
+
+- Added and improved Xe tests. (Rodrigo Vivi, Matthew Auld, Zbigniew Kempczyński,
+  Francois Dugast, Nirmoy Das, Lucas De Marchi, Janga Rahul Kumar et al)
+
+Tools and scripts changes:
+
+- New Xe perf/OA tools. (Ashutosh Dixit)
+
+- New intel_tiling_detect tool. (Zbigniew Kempczyński)
+
+- New option in lsgpu for printing GPU on PCI bus, working also
+  in case when no gpu driver is loaded. (Zbigniew Kempczyński)
+
+- Added sysfs profiling knob to gputop. (Adrián Larumbe)
+
+- Support for Xe in gputop. (Lucas De Marchi)
+
+- Improved generating test lists at compilation time.(Mauro Carvalho Chehab)
+
+- Improved code coverage. (Mauro Carvalho Chehab)
+
+- Improved intel_vbt_decode and other intel tools. (Ville Syrjälä,
+  Lucas De Marchi, Jani Nikula, Tvrtko Ursulin, Gustavo Sousa et al)
+
+
+And many other bug fixes, improvements, cleanups and new tests.
+
+
+Release 1.28 (2023-09-13)
+-------------------------
+
+General changes:
+
+- New meson options testplan, sphinx and xe_driver. (Mauro Carvalho Chehab)
+
+Library changes:
+
+- Add amdgpu GFX1036, GFX1037 chips. (Jesse Zhang)
+
+- Add xe_pciids.h with Lunar Lake (LNL) support. (Lucas De Marchi)
+
+- Use the new procps library libproc2. (Craig Small)
+
+- Add helper for srandom seed initialization. (Łukasz Łaguna)
+
+- Support for vmwgfx driver. (Maaz Mombasawala, Roye Eshed, Zack Rusin)
+
+- i915_pciids.h updated to include Pontevecchio (PVC) platform.
+  (Niranjana Vishwanathapura)
+
+- Add OAM formats and support for media engines in perf tests.
+  (Umesh Nerlige Ramappa)
+
+- Support for Xe driver. (Matthew Brost, Mauro Carvalho Chehab, Rodrigo Vivi,
+  Jason Ekstrand, Francois Dugast, Philippe Lecluse, Zbigniew Kempczyński,
+  Maarten Lankhorst, Juha-Pekka Heikkila, Bhanuprakash Modem et al)
+
+Runner changes:
+
+- igt_runner can now dump GPU state on timeout. (Chris Wilson)
+
+- igt_runner will now use proper 'abort' as result instead of pseudoresult.
+  (Petri Latvala)
+
+Tools changes:
+
+- New vendor agnostic gputop tool. (Tvrtko Ursulin)
+
+- New tool to dump Intel GuC/HuC CSS header. (Lucas De Marchi)
+
+- Improve tools intel_watermark, intel_vbt_decode, intel_reg. (Ville Syrjälä)
+
+Documentation changes:
+
+- New way for documenting tests will allow to generate documentation and
+  testlists during build, see README.md and test_documentation.md. This
+  is mandatory for Intel (both i915 and xe) and kms tests. (Mauro Carvalho
+  Chehab)
+
+Test changes:
+
+- Move intel specific tests to new directory. (Bhanuprakash Modem)
+
+- Ported and refactored drmlib security tests in amdgpu. (Vitaly Prosyak)
+
+- Switch DRM selftests to KUnit. (Isabella Basso, Dominik Karol Piątkowski,
+  Mauro Carvalho Chehab)
+
+- Enabled MeteorLake aux ccs tests. (Juha-Pekka Heikkila)
+
+- Exercise oversized object detection for Xe. (Priyanka Dandamudi)
+
+- Enable validation for VDSC output formats. (Swati Sharma)
+
+- Add support for Bigjoiner / 8K mode. (Bhanuprakash Modem)
+
+- Use intel_cmds_info library. (Karolina Stolarek)
+
+- Use Intel kernel gpu command definitions. (Zbigniew Kempczyński)
+
+- Add a basic perf_pmu test. (Riana Tauro)
+
+- Add test for V3D's Wait BO IOCTL. (Maíra Canal)
+
+- Add i915_power test for power measurement. (Ashutosh Dixit)
+
+- Remove sysfs_clients. (Lucas De Marchi)
+
+
+And many other bug fixes, improvements, cleanups and new tests.
+
+
+Release 1.27.1 (2023-01-18)
+-------------------------
+
+- Removed gcc option -fcommon from meson.build and fix broken
+  build on Linux RedHat platform. (Zbigniew Kempczyński)
+
+- Updated CONTRIBUTING guidelines for interface deprecation. (Petri Latvala)
+
+- Fixed one additional test bug (Zbigniew Kempczyński)
+
+Release 1.27 (2023-01-12)
+-------------------------
+
+- Support for Intel discrete graphics and other new platforms (Andrzej
+  Turko, Matt Roper, Clint Taylor, Tejas Upadhyay, et al)
+
+- Support for MSM driver. (Mark Yacoub, Rob Clark)
+
+- Support for SRIOV device selection. (Łukasz Łaguna)
+
+- Tiled display emulation support with chamelium. (Kunal Joshi)
+
+- Support for Chamelium v3. (Mark Yacoub)
+
+- Initial FreeBSD support. (Jake Freeland)
+
+- Structured communication from tests to igt_runner. (Petri Latvala)
+
+- Removed last remaining uses of libdrm_intel in tests and
+  tools. (Zbigniew Kempczyński)
+
+- Automatic kernel code coverage collection during testing. (Mauro
+  Carvalho Chehab)
+
+
+And many other bug fixes, improvements, cleanups and new tests.
+
+
+Release 1.26 (2021-04-23)
+-------------------------
+
+- Autotools support has been entirely dropped in favor of only meson. (Arkadiusz Hiler)
+
+- Tests can now signal that the whole test round should be aborted. (Arkadiusz Hiler)
+
+- Various robustness improvements for Chamelium use. (Arkadiusz Hiler,
+  Kunal Joshi, Imre Deak, et al)
+
+- Device filtering improvements for multi-device use. (Arkadiusz Hiler)
+
+- Device filtering for various Intel tools like intel_gpu_top. (Ayaz A Siddiqui)
+
+- Overhauled kernel parameter handling. (Jani Nikula)
+
+- Introduced an i915 batchbuffer facility. (Zbigniew Kempczyński)
+
+- Improvements for testing nouveau. (Lyude Paul)
+
+- More readable and useful output for lsgpu and other tools that list
+  devices. (Tvrtko Ursulin)
+
+- intel_gpu_top can now show per-client busyness stats. (Tvrtko Ursulin)
+
+- igt_runner can now limit the disk space used by a single test. (Petri Latvala)
+
+
+And many other bug fixes, improvements, cleanups and new tests.
+
+
+Release 1.25 (2020-03-20)
+-------------------------
+
+- Meson build options have been renamed. Please check the news options in
+  meson_options.txt and make sure you don't get any warnings when configuring
+  the project. (Simon Ser)
+
+- Compile-testing CI for MIPS. (Guillaume Tucker)
+
+- Various igt_runner reliability improvements (Petri Latvala & Arkadiusz Hiler)
+
+- Switched GEM tests to engine discovery. (Tvrtko Ursulin et al)
+
+- Subtests can now be documented and their descriptions are available in
+  generated HTML docs and on the command line via --describe. Documenting new
+  tests is mandatory. (Arkadiusz Hiler)
+
+- Unified library for EDID creation (Simon Ser)
+
+- Chamelium port auto-discovery (Simon Ser)
+
+- Tigerlake support (Lucas De Marchi)
+
+- Cometlake support (Anusha Srivatsa)
+
+- Add kernel selftest wrapper for dmabuf (Chris Wilson)
+
+- Bumped required meson version to 0.47.2 (Arkadiusz Hiler)
+
+- Rewritten README to be more friendly (Arkadiusz Hiler)
+
+- Introduced dynamic subsubtests for getting partial result for
+  runtime-dependant features (Petri Latvala)
+
+- IGT can now run on the selected GPU via --device and lsgpu tool (Zbigniew
+  Kempczyński)
+
+- Reduced runtime of many many tests (Chris Wilson et al)
+
+
+And many other bug fixes, improvements, cleanups and new tests.
+
 
 Release 1.24 (2019-06-20)
 -------------------------

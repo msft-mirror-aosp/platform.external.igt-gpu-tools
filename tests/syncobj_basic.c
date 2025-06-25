@@ -26,6 +26,40 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include "drm.h"
+/**
+ * TEST: syncobj basic
+ * Description: Basic check for drm sync objects.
+ * Category: Core
+ * Mega feature: General Core features
+ * Sub-category: Synchronization
+ * Functionality: semaphore
+ * Feature: synchronization
+ * Test category: GEM_Legacy
+ *
+ * SUBTEST: bad-create-flags
+ *
+ * SUBTEST: bad-destroy
+ *
+ * SUBTEST: bad-destroy-pad
+ *
+ * SUBTEST: bad-fd-to-handle
+ *
+ * SUBTEST: bad-flags-fd-to-handle
+ *
+ * SUBTEST: bad-flags-handle-to-fd
+ *
+ * SUBTEST: bad-handle-to-fd
+ *
+ * SUBTEST: bad-pad-fd-to-handle
+ *
+ * SUBTEST: bad-pad-handle-to-fd
+ *
+ * SUBTEST: create-signaled
+ *
+ * SUBTEST: illegal-fd-to-handle
+ *
+ * SUBTEST: test-valid-cycle
+ */
 
 IGT_TEST_DESCRIPTION("Basic check for drm sync objects.");
 
@@ -149,7 +183,7 @@ test_bad_create_flags(int fd)
 static void
 test_create_signaled(int fd)
 {
-	uint32_t syncobj = syncobj_create(fd, LOCAL_SYNCOBJ_CREATE_SIGNALED);
+	uint32_t syncobj = syncobj_create(fd, DRM_SYNCOBJ_CREATE_SIGNALED);
 
 	igt_assert_eq(syncobj_wait_err(fd, &syncobj, 1, 0, 0), 0);
 
@@ -230,5 +264,9 @@ igt_main
 
 	igt_subtest("test-valid-cycle")
 		test_valid_cycle(fd);
+
+	igt_fixture {
+		drm_close_driver(fd);
+	}
 
 }

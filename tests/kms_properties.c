@@ -21,6 +21,14 @@
  * IN THE SOFTWARE.
  */
 
+/**
+ * TEST: kms properties
+ * Category: Display
+ * Description: Test to validate the properties of all planes, crtc and connectors
+ * Driver requirement: i915, xe
+ * Mega feature: General Display Features
+ */
+
 #include "igt.h"
 #include "drmtest.h"
 #include <errno.h>
@@ -28,6 +36,34 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+
+/**
+ * SUBTEST: %s-properties-%s
+ * Description: Tests %arg[1] properties with %arg[2] commit
+ *
+ * arg[1]:
+ *
+ * @connector:       Connector
+ * @crtc:            CRTC
+ * @plane:           Plane
+ * @invalid:         Invalid (connector/crtc/plane)
+ *
+ * arg[2]:
+ *
+ * @atomic:          atomic
+ * @legacy:          legacy
+ */
+
+/**
+ * SUBTEST: get_properties-sanity-%s
+ * Description: Test validates the properties of all planes, crtc and connectors
+ *              with %arg[1] commit
+ *
+ * arg[1]:
+ *
+ * @atomic:          atomic
+ * @non-atomic:      legacy
+ */
 
 struct additional_test {
 	const char *name;
@@ -41,7 +77,7 @@ static void prepare_pipe(igt_display_t *display, enum pipe pipe, igt_output_t *o
 	drmModeModeInfo *mode = igt_output_get_mode(output);
 
 	igt_create_pattern_fb(display->drm_fd, mode->hdisplay, mode->vdisplay,
-			      DRM_FORMAT_XRGB8888, LOCAL_DRM_FORMAT_MOD_NONE, fb);
+			      DRM_FORMAT_XRGB8888, DRM_FORMAT_MOD_LINEAR, fb);
 
 	igt_output_set_pipe(output, pipe);
 
@@ -98,7 +134,7 @@ static void max_bpc_prop_test(int fd, uint32_t id, uint32_t type, drmModePropert
 			igt_assert_eq(ret, 0);
 		} else {
 			ret = drmModeAtomicAddProperty(req, id, prop_id, i);
-			igt_assert(ret >= 0);
+			igt_assert_lte(0, ret);
 
 			ret = drmModeAtomicCommit(fd, req, DRM_MODE_ATOMIC_TEST_ONLY | DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
 			igt_assert_eq(ret, 0);
@@ -161,7 +197,7 @@ static void test_properties(int fd, uint32_t type, uint32_t id, bool atomic)
 			igt_assert_eq(ret, 0);
 		} else {
 			ret = drmModeAtomicAddProperty(req, id, prop_id, prop_value);
-			igt_assert(ret >= 0);
+			igt_assert_lte(0, ret);
 
 			ret = drmModeAtomicCommit(fd, req, DRM_MODE_ATOMIC_TEST_ONLY, NULL);
 			igt_assert_eq(ret, 0);
@@ -230,77 +266,75 @@ static void run_connector_property_tests(igt_display_t *display, enum pipe pipe,
 
 static void plane_properties(igt_display_t *display, bool atomic)
 {
-	bool found_any = false, found;
 	igt_output_t *output;
 	enum pipe pipe;
 
-	if (atomic)
-		igt_skip_on(!display->is_atomic);
+	for_each_pipe_with_single_output(display, pipe, output) {
+		igt_display_reset(display);
 
-	for_each_pipe(display, pipe) {
-		found = false;
+		igt_output_set_pipe(output, pipe);
+		if (!intel_pipe_output_combo_valid(display))
+			continue;
 
-		for_each_valid_output_on_pipe(display, pipe, output) {
-			found_any = found = true;
-
+		igt_dynamic_f("pipe-%s-%s", kmstest_pipe_name(pipe),
+			      igt_output_name(output)) {
 			run_plane_property_tests(display, pipe, output, atomic);
-			break;
 		}
 	}
-
-	igt_skip_on(!found_any);
 }
 
 static void crtc_properties(igt_display_t *display, bool atomic)
 {
-	bool found_any_valid_pipe = false, found;
 	enum pipe pipe;
 	igt_output_t *output;
 
-	if (atomic)
-		igt_skip_on(!display->is_atomic);
+	for_each_pipe_with_single_output(display, pipe, output) {
+		igt_display_reset(display);
 
-	for_each_pipe(display, pipe) {
-		found = false;
+		igt_output_set_pipe(output, pipe);
+		if (!intel_pipe_output_combo_valid(display))
+			continue;
 
-		for_each_valid_output_on_pipe(display, pipe, output) {
-			found_any_valid_pipe = found = true;
-
+		igt_dynamic_f("pipe-%s-%s", kmstest_pipe_name(pipe),
+			      igt_output_name(output)) {
 			run_crtc_property_tests(display, pipe, output, atomic);
-			break;
 		}
 	}
-
-	igt_skip_on(!found_any_valid_pipe);
 }
 
 static void connector_properties(igt_display_t *display, bool atomic)
 {
-	int i;
 	enum pipe pipe;
 	igt_output_t *output;
 
-	if (atomic)
-		igt_skip_on(!display->is_atomic);
-
 	for_each_connected_output(display, output) {
-		bool found = false;
+		igt_display_reset(display);
 
 		for_each_pipe(display, pipe) {
-			if (!igt_pipe_connector_valid(pipe, output))
-				continue;
+			igt_display_reset(display);
 
-			found = true;
-			run_connector_property_tests(display, pipe, output, atomic);
+			igt_output_set_pipe(output, pipe);
+			if (!intel_pipe_output_combo_valid(display)) {
+				igt_output_set_pipe(output, PIPE_NONE);
+				continue;
+			}
+
+			igt_dynamic_f("pipe-%s-%s", kmstest_pipe_name(pipe),
+				      igt_output_name(output)) {
+				run_connector_property_tests(display, pipe, output, atomic);
+			}
+
 			break;
 		}
-
-		igt_assert_f(found, "Connected output should have at least 1 valid crtc\n");
 	}
 
-	for (i = 0; i < display->n_outputs; i++)
-		if (!igt_output_is_connected(&display->outputs[i]))
-			run_connector_property_tests(display, PIPE_NONE, &display->outputs[i], atomic);
+	for_each_disconnected_output(display, output) {
+		igt_display_reset(display);
+
+		igt_dynamic_f("pipe-None-%s", igt_output_name(output))
+			run_connector_property_tests(display, PIPE_NONE, output, atomic);
+
+	}
 }
 
 static void test_invalid_properties(int fd,
@@ -348,7 +382,7 @@ static void test_invalid_properties(int fd,
 			igt_assert(req);
 
 			ret = drmModeAtomicAddProperty(req, id1, prop_id, prop_value);
-			igt_assert(ret >= 0);
+			igt_assert_lte(0, ret);
 
 			ret = drmModeAtomicCommit(fd, req, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
 			igt_assert_eq(ret, -ENOENT);
@@ -368,7 +402,6 @@ static void test_object_invalid_properties(igt_display_t *display,
 	igt_output_t *output;
 	igt_plane_t *plane;
 	enum pipe pipe;
-	int i;
 
 	for_each_pipe(display, pipe)
 		test_invalid_properties(display->drm_fd, id, type, display->pipes[pipe].crtc_id, DRM_MODE_OBJECT_CRTC, atomic);
@@ -377,20 +410,85 @@ static void test_object_invalid_properties(igt_display_t *display,
 		for_each_plane_on_pipe(display, pipe, plane)
 			test_invalid_properties(display->drm_fd, id, type, plane->drm_plane->plane_id, DRM_MODE_OBJECT_PLANE, atomic);
 
-	for (i = 0, output = &display->outputs[0]; i < display->n_outputs; output = &display->outputs[++i])
+	for_each_output(display, output)
 		test_invalid_properties(display->drm_fd, id, type, output->id, DRM_MODE_OBJECT_CONNECTOR, atomic);
 }
 
+enum prop_imm_flags {
+	IMMUTABLE_REQ,
+	IMMUTABLE_IF_SINGLE_VALUE,
+};
+
+static const struct {
+	uint32_t obj_type;
+	const char *name;
+	enum prop_imm_flags flags;
+} prop_settings[] = {
+	/* generic */
+	{ DRM_MODE_OBJECT_CONNECTOR, "EDID", IMMUTABLE_REQ },
+	{ DRM_MODE_OBJECT_CONNECTOR, "PATH", IMMUTABLE_REQ },
+	{ DRM_MODE_OBJECT_CONNECTOR, "TILE", IMMUTABLE_REQ },
+	{ DRM_MODE_OBJECT_CONNECTOR, "WRITEBACK_PIXEL_FORMATS", IMMUTABLE_REQ },
+	{ DRM_MODE_OBJECT_CONNECTOR, "non-desktop", IMMUTABLE_REQ },
+	{ DRM_MODE_OBJECT_CONNECTOR, "panel orientation" ,IMMUTABLE_REQ },
+	{ DRM_MODE_OBJECT_CONNECTOR, "privacy-screen hw-state", IMMUTABLE_REQ },
+	{ DRM_MODE_OBJECT_CONNECTOR, "subconnector", IMMUTABLE_REQ },
+	{ DRM_MODE_OBJECT_CONNECTOR, "suggested X", IMMUTABLE_REQ },
+	{ DRM_MODE_OBJECT_CONNECTOR, "suggested Y", IMMUTABLE_REQ },
+	{ DRM_MODE_OBJECT_CONNECTOR, "vrr_capable", IMMUTABLE_REQ },
+
+	{ DRM_MODE_OBJECT_CRTC, "DEGAMMA_LUT_SIZE", IMMUTABLE_REQ },
+	{ DRM_MODE_OBJECT_CRTC, "GAMMA_LUT_SIZE", IMMUTABLE_REQ },
+
+	{ DRM_MODE_OBJECT_PLANE, "IN_FORMATS", IMMUTABLE_REQ },
+	{ DRM_MODE_OBJECT_PLANE, "IN_FORMATS_ASYNC", IMMUTABLE_REQ },
+	{ DRM_MODE_OBJECT_PLANE, "SIZE_HINTS", IMMUTABLE_REQ },
+	{ DRM_MODE_OBJECT_PLANE, "type", IMMUTABLE_REQ },
+	{ DRM_MODE_OBJECT_PLANE, "zpos", IMMUTABLE_IF_SINGLE_VALUE },
+
+	/* driver-specific */
+	{ DRM_MODE_OBJECT_CONNECTOR, "hotplug_mode_update", IMMUTABLE_REQ }, // qxl, vmwgfx
+	{ DRM_MODE_OBJECT_CONNECTOR, "implicit_placement", IMMUTABLE_REQ }, // vmwgfx
+	{ DRM_MODE_OBJECT_PLANE, "AMD_PLANE_BLEND_LUT_SIZE", IMMUTABLE_REQ }, // amdgpu
+	{ DRM_MODE_OBJECT_PLANE, "AMD_PLANE_DEGAMMA_LUT_SIZE", IMMUTABLE_REQ }, // amdgpu
+	{ DRM_MODE_OBJECT_PLANE, "AMD_PLANE_LUT3D_SIZE", IMMUTABLE_REQ }, // amdgpu
+	{ DRM_MODE_OBJECT_PLANE, "AMD_PLANE_SHAPER_LUT_SIZE", IMMUTABLE_REQ }, // amdgpu
+};
+
+static void validate_prop_immutable(const struct drm_mode_get_property *prop,
+				    uint32_t obj_type, bool single_value)
+{
+	bool immutable = prop->flags & DRM_MODE_PROP_IMMUTABLE;
+	int i;
+
+	igt_debug("Testing property \"%s\"\n", prop->name);
+
+	for (i = 0; i < ARRAY_SIZE(prop_settings); i++) {
+		if (prop_settings[i].obj_type == obj_type &&
+		    !strcmp(prop_settings[i].name, prop->name))
+			break;
+	}
+
+	if (i == ARRAY_SIZE(prop_settings)) {
+		igt_assert(!immutable);
+		return;
+	}
+
+	igt_assert(immutable || prop_settings[i].flags != IMMUTABLE_REQ);
+	igt_assert(immutable || !single_value ||
+		   prop_settings[i].flags != IMMUTABLE_IF_SINGLE_VALUE);
+}
+
 static void validate_range_prop(const struct drm_mode_get_property *prop,
-				uint64_t value)
+				uint64_t value, uint32_t obj_type)
 {
 	const uint64_t *values = from_user_pointer(prop->values_ptr);
 	bool is_unsigned = prop->flags & DRM_MODE_PROP_RANGE;
-	bool immutable = prop->flags & DRM_MODE_PROP_IMMUTABLE;
 
 	igt_assert_eq(prop->count_values, 2);
 	igt_assert_eq(prop->count_enum_blobs, 0);
-	igt_assert(values[0] != values[1] || immutable);
+
+	validate_prop_immutable(prop, obj_type, values[0] == values[1]);
 
 	if (is_unsigned) {
 		igt_assert_lte_u64(values[0], values[1]);
@@ -423,15 +521,14 @@ static void validate_enums(const struct drm_mode_get_property *prop)
 }
 
 static void validate_enum_prop(const struct drm_mode_get_property *prop,
-			       uint64_t value)
+			       uint64_t value, uint32_t obj_type)
 {
 	const uint64_t *values = from_user_pointer(prop->values_ptr);
-	bool immutable = prop->flags & DRM_MODE_PROP_IMMUTABLE;
 	int i;
 
 	igt_assert_lte(1, prop->count_values);
 	igt_assert_eq(prop->count_enum_blobs, prop->count_values);
-	igt_assert(prop->count_values != 1 || immutable);
+	validate_prop_immutable(prop, obj_type, prop->count_values == 1);
 
 	for (i = 0; i < prop->count_values; i++) {
 		if (value == values[i])
@@ -443,15 +540,14 @@ static void validate_enum_prop(const struct drm_mode_get_property *prop,
 }
 
 static void validate_bitmask_prop(const struct drm_mode_get_property *prop,
-				  uint64_t value)
+				  uint64_t value, uint32_t obj_type)
 {
 	const uint64_t *values = from_user_pointer(prop->values_ptr);
-	bool immutable = prop->flags & DRM_MODE_PROP_IMMUTABLE;
 	uint64_t mask = 0;
 
 	igt_assert_lte(1, prop->count_values);
 	igt_assert_eq(prop->count_enum_blobs, prop->count_values);
-	igt_assert(prop->count_values != 1 || immutable);
+	validate_prop_immutable(prop, obj_type, prop->count_values == 1);
 
 	for (int i = 0; i < prop->count_values; i++) {
 		igt_assert_lte_u64(values[i], 63);
@@ -466,7 +562,7 @@ static void validate_bitmask_prop(const struct drm_mode_get_property *prop,
 
 static void validate_blob_prop(int fd,
 			       const struct drm_mode_get_property *prop,
-			       uint64_t value)
+			       uint64_t value, uint32_t obj_type)
 {
 	struct drm_mode_get_blob blob;
 
@@ -479,6 +575,8 @@ static void validate_blob_prop(int fd,
 	igt_assert_eq(prop->count_enum_blobs, 0);
 
 	igt_assert_lte_u64(value, 0xffffffff);
+
+	validate_prop_immutable(prop, obj_type, false);
 
 	/*
 	 * Immutable blob properties can have value==0.
@@ -497,10 +595,9 @@ static void validate_blob_prop(int fd,
 
 static void validate_object_prop(int fd,
 				 const struct drm_mode_get_property *prop,
-				 uint64_t value)
+				 uint64_t value, uint32_t obj_type)
 {
 	const uint64_t *values = from_user_pointer(prop->values_ptr);
-	bool immutable = prop->flags & DRM_MODE_PROP_IMMUTABLE;
 	struct drm_mode_crtc crtc;
 	struct drm_mode_fb_cmd fb;
 
@@ -508,7 +605,7 @@ static void validate_object_prop(int fd,
 	igt_assert_eq(prop->count_enum_blobs, 0);
 
 	igt_assert_lte_u64(value, 0xffffffff);
-	igt_assert(!immutable || value != 0);
+	validate_prop_immutable(prop, obj_type, value == 0);
 
 	switch (values[0]) {
 	case DRM_MODE_OBJECT_CRTC:
@@ -533,7 +630,7 @@ static void validate_object_prop(int fd,
 
 static void validate_property(int fd,
 			      const struct drm_mode_get_property *prop,
-			      uint64_t value, bool atomic)
+			      uint64_t value, bool atomic, uint32_t obj_type)
 {
 	uint32_t flags = prop->flags;
 	uint32_t legacy_type = flags & DRM_MODE_PROP_LEGACY_TYPE;
@@ -554,16 +651,16 @@ static void validate_property(int fd,
 
 	switch (legacy_type) {
 	case DRM_MODE_PROP_RANGE:
-		validate_range_prop(prop, value);
+		validate_range_prop(prop, value, obj_type);
 		break;
 	case DRM_MODE_PROP_ENUM:
-		validate_enum_prop(prop, value);
+		validate_enum_prop(prop, value, obj_type);
 		break;
 	case DRM_MODE_PROP_BITMASK:
-		validate_bitmask_prop(prop, value);
+		validate_bitmask_prop(prop, value, obj_type);
 		break;
 	case DRM_MODE_PROP_BLOB:
-		validate_blob_prop(fd, prop, value);
+		validate_blob_prop(fd, prop, value, obj_type);
 		break;
 	default:
 		igt_assert_eq(legacy_type, 0);
@@ -571,17 +668,18 @@ static void validate_property(int fd,
 
 	switch (ext_type) {
 	case DRM_MODE_PROP_OBJECT:
-		validate_object_prop(fd, prop, value);
+		validate_object_prop(fd, prop, value, obj_type);
 		break;
 	case DRM_MODE_PROP_SIGNED_RANGE:
-		validate_range_prop(prop, value);
+		validate_range_prop(prop, value, obj_type);
 		break;
 	default:
 		igt_assert_eq(ext_type, 0);
 	}
 }
 
-static void validate_prop(int fd, uint32_t prop_id, uint64_t value, bool atomic)
+static void validate_prop(int fd, uint32_t prop_id, uint64_t value,
+			  bool atomic, uint32_t obj_type)
 {
 	struct drm_mode_get_property prop;
 	struct drm_mode_property_enum *enums = NULL;
@@ -614,7 +712,7 @@ static void validate_prop(int fd, uint32_t prop_id, uint64_t value, bool atomic)
 	for (int i = 0; i < prop.count_enum_blobs; i++)
 		igt_assert_neq_u64(enums[i].value, 0x5c5c5c5c5c5c5c5cULL);
 
-	validate_property(fd, &prop, value, atomic);
+	validate_property(fd, &prop, value, atomic, obj_type);
 
 	free(values);
 	free(enums);
@@ -652,7 +750,7 @@ static void validate_props(int fd, uint32_t obj_type, uint32_t obj_id, bool atom
 	igt_assert(properties.count_props == count);
 
 	for (int i = 0; i < count; i++)
-		validate_prop(fd, props[i], values[i], atomic);
+		validate_prop(fd, props[i], values[i], atomic, obj_type);
 
 	free(values);
 	free(props);
@@ -707,7 +805,6 @@ static void invalid_properties(igt_display_t *display, bool atomic)
 	igt_output_t *output;
 	igt_plane_t *plane;
 	enum pipe pipe;
-	int i;
 
 	if (atomic)
 		igt_skip_on(!display->is_atomic);
@@ -719,15 +816,33 @@ static void invalid_properties(igt_display_t *display, bool atomic)
 		for_each_plane_on_pipe(display, pipe, plane)
 			test_object_invalid_properties(display, plane->drm_plane->plane_id, DRM_MODE_OBJECT_PLANE, atomic);
 
-	for (i = 0, output = &display->outputs[0]; i < display->n_outputs; output = &display->outputs[++i])
+	for_each_output(display, output)
 		test_object_invalid_properties(display, output->id, DRM_MODE_OBJECT_CONNECTOR, atomic);
 }
 
 igt_main
 {
 	igt_display_t display;
-
-	igt_skip_on_simulation();
+	int i;
+	static const struct {
+		const char *name;
+		void (*func)(igt_display_t *, bool);
+		const bool atomic;
+		const char *desc;
+	} tests[] = {
+		{ "plane-properties-legacy", plane_properties, false,
+		  "Tests plane properties with legacy commit" },
+		{ "plane-properties-atomic", plane_properties, true,
+		  "Tests plane properties with atomic commit" },
+		{ "crtc-properties-legacy", crtc_properties, false,
+		  "Tests crtc properties with legacy commit" },
+		{ "crtc-properties-atomic", crtc_properties, true,
+		  "Tests crtc properties with atomic commit" },
+		{ "connector-properties-legacy", connector_properties, false,
+		  "Tests connector properties with legacy commit" },
+		{ "connector-properties-atomic", connector_properties, true,
+		  "Tests connector properties with atomic commit" },
+	};
 
 	igt_fixture {
 		display.drm_fd = drm_open_driver_master(DRIVER_ANY);
@@ -737,46 +852,52 @@ igt_main
 		igt_display_require(&display, display.drm_fd);
 	}
 
-	igt_subtest("plane-properties-legacy")
-		plane_properties(&display, false);
+	for (i = 0; i < ARRAY_SIZE(tests); i++) {
+		igt_describe_f("%s\n", tests[i].desc);
+		igt_subtest_with_dynamic_f("%s", tests[i].name) {
+			if (tests->atomic && !display.is_atomic)
+				continue;
 
-	igt_subtest("plane-properties-atomic")
-		plane_properties(&display, true);
-
-	igt_subtest("crtc-properties-legacy")
-		crtc_properties(&display, false);
-
-	igt_subtest("crtc-properties-atomic")
-		crtc_properties(&display, true);
-
-	igt_subtest("connector-properties-legacy")
-		connector_properties(&display, false);
-
-	igt_subtest("connector-properties-atomic")
-		connector_properties(&display, true);
-
-	igt_subtest("invalid-properties-legacy")
-		invalid_properties(&display, false);
-
-	igt_subtest("invalid-properties-atomic")
-		invalid_properties(&display, true);
-
-	igt_subtest("get_properties-sanity-atomic") {
-		igt_skip_on(!display.is_atomic);
-		get_prop_sanity(&display, true);
+			tests[i].func(&display, tests->atomic);
+		}
 	}
 
-	igt_subtest("get_properties-sanity-non-atomic") {
-		if (display.is_atomic)
-			igt_assert_eq(drmSetClientCap(display.drm_fd, DRM_CLIENT_CAP_ATOMIC, 0), 0);
+	igt_subtest_group {
+		igt_describe("Checks each property of any type with combination of mode object "
+			     "with legacy commit and make sure only valid properties are set to "
+			     "mode object else return with relevant error");
+		igt_subtest("invalid-properties-legacy")
+			invalid_properties(&display, false);
 
-		get_prop_sanity(&display, false);
+		igt_describe("Checks each property of any type with combination of mode object "
+			     "with atomic commit and make sure only valid properties are set to "
+			     "mode object else return with relevant error");
+		igt_subtest("invalid-properties-atomic")
+			invalid_properties(&display, true);
+	}
 
-		if (display.is_atomic)
-			igt_assert_eq(drmSetClientCap(display.drm_fd, DRM_CLIENT_CAP_ATOMIC, 1), 0);
+	igt_subtest_group {
+		igt_describe("Test validates the properties of all planes, crtc and connectors with legacy commit");
+		igt_subtest("get_properties-sanity-non-atomic") {
+			if (display.is_atomic)
+				igt_assert_eq(drmSetClientCap(display.drm_fd, DRM_CLIENT_CAP_ATOMIC, 0), 0);
+			get_prop_sanity(&display, false);
+			if (display.is_atomic)
+				igt_assert_eq(drmSetClientCap(display.drm_fd, DRM_CLIENT_CAP_ATOMIC, 1), 0);
+		}
+	}
+
+	igt_subtest_group {
+		igt_fixture
+			igt_require(display.is_atomic);
+
+		igt_describe("Test validates the properties of all planes, crtc and connectors with atomic commit");
+		igt_subtest("get_properties-sanity-atomic")
+			get_prop_sanity(&display, true);
 	}
 
 	igt_fixture {
 		igt_display_fini(&display);
+		drm_close_driver(display.drm_fd);
 	}
 }

@@ -25,7 +25,7 @@
 #ifndef __IGT_DRAW_H__
 #define __IGT_DRAW_H__
 
-#include <intel_bufmgr.h>
+#include <intel_bufops.h>
 #include "igt_fb.h"
 
 /**
@@ -50,16 +50,20 @@ enum igt_draw_method {
 
 const char *igt_draw_get_method_name(enum igt_draw_method method);
 
-void igt_draw_rect(int fd, drm_intel_bufmgr *bufmgr, drm_intel_context *context,
+bool igt_draw_supports_method(int fd, enum igt_draw_method method);
+
+void igt_draw_rect(int fd, struct buf_ops *bops, uint32_t ctx,
 		   uint32_t buf_handle, uint32_t buf_size, uint32_t buf_stride,
-		   enum igt_draw_method method, int rect_x, int rect_y,
-		   int rect_w, int rect_h, uint32_t color, int bpp);
+		   int buf_width, int buf_height,
+		   uint32_t tiling, enum igt_draw_method method,
+		   int rect_x, int rect_y, int rect_w, int rect_h,
+		   uint64_t color, int bpp);
 
-void igt_draw_rect_fb(int fd, drm_intel_bufmgr *bufmgr,
-		      drm_intel_context *context, struct igt_fb *fb,
+void igt_draw_rect_fb(int fd, struct buf_ops *bops,
+		      uint32_t ctx, struct igt_fb *fb,
 		      enum igt_draw_method method, int rect_x, int rect_y,
-		      int rect_w, int rect_h, uint32_t color);
+		      int rect_w, int rect_h, uint64_t color);
 
-void igt_draw_fill_fb(int fd, struct igt_fb *fb, uint32_t color);
+void igt_draw_fill_fb(int fd, struct igt_fb *fb, uint64_t color);
 
 #endif /* __IGT_DRAW_H__ */

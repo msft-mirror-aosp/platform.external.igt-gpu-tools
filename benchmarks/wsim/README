@@ -1,6 +1,8 @@
 Workload descriptor format
 ==========================
 
+Lines starting with '#' are treated as comments and will not create a work step.
+
 ctx.engine.duration_us.dependency.wait,...
 <uint>.<str>.<uint>[-<uint>]|*.<int <= 0>[/<int <= 0>][...].<0|1>,...
 B.<uint>
@@ -8,6 +10,7 @@ M.<uint>.<str>[|<str>]...
 P|S|X.<uint>.<int>
 d|p|s|t|q|a|T.<int>,...
 b.<uint>.<str>[|<str>].<str>
+w|W.<uint>.<str>[/<str>]...
 f
 
 For duration a range can be given from which a random value will be picked
@@ -32,6 +35,8 @@ Additional workload steps are also supported:
  'P' - Context priority.
  'S' - Context SSEU configuration.
  'T' - Terminate an infinite batch.
+ 'w' - Working set. (See Working sets section.)
+ 'W' - Shared working set.
  'X' - Context preemption control.
 
 Engine ids: DEFAULT, RCS, BCS, VCS, VCS1, VCS2, VECS
@@ -83,6 +88,19 @@ Batch durations can also be specified as infinite by using the '*' in the
 duration field. Such batches must be ended by the terminate command ('T')
 otherwise they will cause a GPU hang to be reported.
 
+Xe and i915 differences
+------------------------
+
+There are differences between Xe and i915, like not allowing a BO list to
+be passed to an exec (and create implicit syncs). For more details see:
+https://gitlab.freedesktop.org/drm/xe/kernel/-/blob/drm-xe-next/drivers/gpu/drm/xe/xe_exec.c
+
+Currently following batch steps are equal on Xe:
+1.1000.-2.0 <==> 1.1000.f-2.0
+and will create explicit sync fence dependency (via syncobjects).
+
+The data dependency need to wait for working sets implementation.
+
 Sync (fd) fences
 ----------------
 
@@ -126,7 +144,7 @@ runnable. When the second RCS batch completes the standalone fence is signaled
 which allows the two VCS batches to be executed. Finally we wait until the both
 VCS batches have completed before starting the (optional) next iteration.
 
-Submit fences
+Submit fences (i915 only)
 -------------
 
 Submit fences are a type of input fence which are signalled when the originating
@@ -143,7 +161,7 @@ Submit fences have the identical syntax as the sync fences with the lower-case
 Here VCS1 and VCS2 batches will only be submitted for executing once the RCS
 batch enters the GPU.
 
-Context priority
+Context priority (i915 only)
 ----------------
 
   P.1.-1
@@ -208,7 +226,7 @@ Example:
 
 This enables load balancing for context number one.
 
-Engine bonds
+Engine bonds (i915 only)
 ------------
 
 Engine bonds are extensions on load balanced contexts. They allow expressing
@@ -256,7 +274,7 @@ then look like:
   2.DEFAULT.1000.s-1.0
   a.-3
 
-Context SSEU configuration
+Context SSEU configuration (i915 only)
 --------------------------
 
   S.1.1
@@ -275,3 +293,63 @@ for the render engine.
 Slice mask of -1 has a special meaning of "all slices". Otherwise any integer
 can be specifying as the slice mask, but beware any apart from 1 and -1 can make
 the workload not portable between different GPUs.
+
+Working sets (i915 only)
+------------
+
+When used plainly workload steps can create implicit data dependencies by
+relatively referencing another workload steps of a batch buffer type. Fourth
+field contains the relative data dependncy. For example:
+
+  1.RCS.1000.0.0
+  1.BCS.1000.-1.0
+
+This means the second batch buffer will be marked as having a read data
+dependency on the first one. (The shared buffer is always marked as written to
+by the dependency target buffer.) This will cause a serialization between the
+two batch buffers.
+
+Working sets are used where more complex data dependencies are required. Each
+working set has an id, a list of buffers, and can either be local to the
+workload or shared within the cloned workloads (-c command line option).
+
+Lower-case 'w' command defines a local working set while upper-case 'W' defines
+a shared version. Syntax is as follows:
+
+  w.<id>.<size>[/<size>]...
+
+For size a byte size can be given, or suffix 'k', 'm' or 'g' can be used (case
+insensitive). Prefix in the format of "<int>n<size>" can also be given to create
+multiple objects of the same size.
+
+Ranges can also be specified using the <min>-<max> syntax.
+
+Examples:
+
+  w.1.4k - Working set 1 with a single 4KiB object in it.
+  W.2.2M/32768 - Working set 2 with one 2MiB and one 32768 byte object.
+  w.3.10n4k/2n20000 - Working set 3 with ten 4KiB and two 20000 byte objects.
+  w.4.4n4k-1m - Working set 4 with four objects of random size between 4KiB and
+		1MiB.
+
+Working set objects can be referenced as data dependency targets using the new
+'r'/'w' syntax. Simple example:
+
+  w.1.4k
+  W.2.1m
+  1.RCS.1000.r1-0/w2-0.0
+  1.BCS.1000.r2-0.0
+
+In this example the RCS batch is reading from working set 1 object 0 and writing
+to working set 2 object 0. BCS batch is reading from working set 2 object 0.
+
+Because working set 2 is of a shared type, should two instances of the same
+workload be executed (-c 2) then the 1MiB buffer would be shared and written
+and read by both clients creating a serialization point.
+
+Apart from single objects, ranges can also be given as depenencies:
+
+  w.1.10n4k
+  1.RCS.1000.r1-0-9.0
+
+Here the RCS batch has a read dependency on working set 1 objects 0 to 9.

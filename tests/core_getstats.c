@@ -32,6 +32,19 @@
 
 #include <drm.h>
 
+/**
+ * TEST: core getstats
+ * Description: Tests the DRM_IOCTL_GET_STATS ioctl.
+ * Category: Core
+ * Mega feature: General Core features
+ * Sub-category: uapi
+ * Functionality: DRM memory management
+ * Feature: core
+ * Test category: GEM_Legacy
+ *
+ * SUBTEST:
+ * Description: Tests the DRM_IOCTL_GET_STATS ioctl.
+ */
 
 /**
  * Checks DRM_IOCTL_GET_STATS.
@@ -52,5 +65,5 @@ igt_simple_main
 	ret = ioctl(fd, DRM_IOCTL_GET_STATS, &stats);
 	igt_assert(ret == 0);
 
-	close(fd);
+	drm_close_driver(fd);
 }

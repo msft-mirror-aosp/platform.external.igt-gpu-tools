@@ -25,11 +25,51 @@
  *   Daniel Stone <daniels@collabora.com>
  */
 
+/**
+ * TEST: kms prop blob
+ * Category: Display
+ * Description: Tests behaviour of mass-data 'blob' properties.
+ * Driver requirement: i915, xe
+ * Mega feature: General Display Features
+ */
+
 #include "igt.h"
 #include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+
+/**
+ * SUBTEST: blob-multiple
+ * Description: Test validates destroying multiple properties explicitly works as needed.
+ *
+ * SUBTEST: blob-prop-%s
+ * Description: Tests validates the %arg[1] of the properties created.
+ *
+ * arg[1]:
+ *
+ * @core:        validity
+ * @lifetime:    lifetime
+ * @validate:    blob size
+ */
+
+/**
+ * SUBTEST: basic
+ * Description: Test to ensure property support exists
+ *
+ * SUBTEST: invalid-%s-%s
+ * Description: Tests error handling when invalid properties are %ar[1] with %arg[2].
+ *
+ * arg[1]:
+ *
+ * @get:            fetched
+ * @set:            set
+ *
+ * arg[2]:
+ *
+ * @prop:           blob object type
+ * @prop-any:       object of any type
+ */
 
 IGT_TEST_DESCRIPTION("Tests behaviour of mass-data 'blob' properties.");
 
@@ -178,7 +218,7 @@ test_lifetime(int fd)
 	/* Make sure properties are cleaned up on client exit. */
 	prop_id2 = create_prop(fd2);
 	igt_assert_eq(validate_prop(fd, prop_id2), 0);
-	igt_assert_eq(close(fd2), 0);
+	igt_assert_eq(drm_close_driver(fd2), 0);
 	igt_assert_eq(validate_prop(fd, prop_id2), ENOENT);
 
 	igt_assert_eq(validate_prop(fd, prop_id), 0);
@@ -206,7 +246,7 @@ test_multiple(int fd)
 		igt_assert_eq(destroy_prop(fd2, prop_ids[i]), 0);
 		igt_assert_eq(validate_prop(fd2, prop_ids[i]), ENOENT);
 	}
-	igt_assert_eq(close(fd2), 0);
+	igt_assert_eq(drm_close_driver(fd2), 0);
 
 	fd2 = drm_open_driver(DRIVER_ANY);
 	igt_assert_fd(fd2);
@@ -217,7 +257,7 @@ test_multiple(int fd)
 		igt_assert_eq(validate_prop(fd, prop_ids[i]), 0);
 		igt_assert_eq(validate_prop(fd2, prop_ids[i]), 0);
 	}
-	igt_assert_eq(close(fd2), 0);
+	igt_assert_eq(drm_close_driver(fd2), 0);
 
 	for (i = 0; i < ARRAY_SIZE(prop_ids); i++)
 		igt_assert_eq(validate_prop(fd, prop_ids[i]), ENOENT);
@@ -262,6 +302,8 @@ static void prop_tests(int fd)
 	get_props.count_props = 1;
 	get_props.obj_id = blob_id;
 
+	igt_describe("Tests error handling when invalid properties are fetched with "
+		     "object of any type.");
 	igt_subtest("invalid-get-prop-any") {
 		get_props.obj_type = 0; /* DRM_MODE_OBJECT_ANY */
 
@@ -269,6 +311,8 @@ static void prop_tests(int fd)
 				    &get_props) == -1 && errno == EINVAL);
 	}
 
+	igt_describe("Tests error handling when invalid properties are fetched with blob "
+		     "object type.");
 	igt_subtest("invalid-get-prop") {
 		get_props.obj_type = DRM_MODE_OBJECT_BLOB;
 
@@ -280,6 +324,8 @@ static void prop_tests(int fd)
 	set_prop.prop_id = 1;
 	set_prop.obj_id = blob_id;
 
+	igt_describe("Tests error handling when invalid properties are set with object "
+		     "of any type.");
 	igt_subtest("invalid-set-prop-any") {
 		set_prop.obj_type = 0; /* DRM_MODE_OBJECT_ANY */
 
@@ -287,6 +333,7 @@ static void prop_tests(int fd)
 				    &set_prop) == -1 && errno == EINVAL);
 	}
 
+	igt_describe("Tests error handling when invalid properties are set with blob object type.");
 	igt_subtest("invalid-set-prop") {
 		set_prop.obj_type = DRM_MODE_OBJECT_BLOB;
 
@@ -308,23 +355,28 @@ igt_main
 		igt_require_propblob(fd);
 	}
 
+	igt_describe("Test to ensure property support exists.");
 	igt_subtest("basic")
 		test_basic(fd);
 
+	igt_describe("Tests error handling when invalid property IDs are passed.");
 	igt_subtest("blob-prop-core")
 		test_core(fd);
 
+	igt_describe("Tests error handling when incorrect blob size is passed.");
 	igt_subtest("blob-prop-validate")
 		test_validate(fd);
 
+	igt_describe("Tests validates the lifetime of the properties created.");
 	igt_subtest("blob-prop-lifetime")
 		test_lifetime(fd);
 
+	igt_describe("Test validates destroying multiple properties explicitly works as needed.");
 	igt_subtest("blob-multiple")
 		test_multiple(fd);
 
 	prop_tests(fd);
 
 	igt_fixture
-		close(fd);
+		drm_close_driver(fd);
 }

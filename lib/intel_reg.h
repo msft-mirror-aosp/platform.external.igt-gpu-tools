@@ -44,11 +44,24 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef _I810_REG_H
 #define _I810_REG_H
 
+#include "intel_gpu_commands.h"
+#include "intel_gpu_commands_staging.h"
+
 /* I/O register offsets
  */
-#define SRX 0x3C4		/* p208 */
-#define GRX 0x3CE		/* p213 */
-#define ARX 0x3C0		/* p224 */
+#define CRX_MDA		0x3B4
+#define CRD_MDA		0x3B5
+#define ST01_MDA	0x3BA
+#define ARX		0x3C0
+#define ARD_W		0x3C0
+#define ARD_R		0x3C1
+#define SRX		0x3C4
+#define SRD		0x3C5
+#define GRX		0x3CE
+#define GRD		0x3CF
+#define CRX_CGA		0x3D4
+#define CRD_CGA		0x3D5
+#define ST01_CGA	0x3DA
 
 /* VGA Color Palette Registers */
 #define DACMASK  0x3C6		/* p232 */
@@ -673,6 +686,8 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define RING_VALID          0x00000001
 #define RING_INVALID        0x00000000
 
+#define GEN12_GFX_AUX_TABLE_BASE_ADDR	0x4200
+#define GEN12_VEBOX_AUX_TABLE_BASE_ADDR	0x4230
 
 
 /* BitBlt Instructions
@@ -877,6 +892,43 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define VBLANK_EDP	0x6F010
 #define VSYNC_EDP	0x6F014
 #define VSYNCSHIFT_EDP	0x6F028
+
+#define TRANS_VRR_CTL_A                0x60420
+#define TRANS_VRR_CTL_B                0x61420
+#define TRANS_VRR_CTL_C                0x62420
+#define TRANS_VRR_CTL_D                0x63420
+#define TRANS_VRR_VMAX_A               0x60424
+#define TRANS_VRR_VMAX_B               0x61424
+#define TRANS_VRR_VMAX_C               0x62424
+#define TRANS_VRR_VMAX_D               0x63424
+#define TRANS_VRR_VMIN_A               0x60434
+#define TRANS_VRR_VMIN_B               0x61434
+#define TRANS_VRR_VMIN_C               0x62434
+#define TRANS_VRR_VMIN_D               0x63434
+#define TRANS_VRR_VMAXSHIFT_A          0x60428
+#define TRANS_VRR_VMAXSHIFT_B          0x61428
+#define TRANS_VRR_VMAXSHIFT_C          0x62428
+#define TRANS_VRR_VMAXSHIFT_D          0x63428
+#define TRANS_VRR_STATUS_A             0x6042C
+#define TRANS_VRR_STATUS_B             0x6142C
+#define TRANS_VRR_STATUS_C             0x6242C
+#define TRANS_VRR_STATUS_D             0x6342C
+#define TRANS_VRR_VTOTAL_PREV_A        0x60480
+#define TRANS_VRR_VTOTAL_PREV_B        0x61480
+#define TRANS_VRR_VTOTAL_PREV_C        0x62480
+#define TRANS_VRR_VTOTAL_PREV_D        0x63480
+#define TRANS_VRR_FLIPLINE_A           0x60438
+#define TRANS_VRR_FLIPLINE_B           0x61438
+#define TRANS_VRR_FLIPLINE_C           0x62438
+#define TRANS_VRR_FLIPLINE_D           0x63438
+#define TRANS_VRR_STATUS2_A            0x6043C
+#define TRANS_VRR_STATUS2_B            0x6143C
+#define TRANS_VRR_STATUS2_C            0x6243C
+#define TRANS_VRR_STATUS2_D            0x6343C
+#define TRANS_PUSH_A                   0x60A70
+#define TRANS_PUSH_B                   0x61A70
+#define TRANS_PUSH_C                   0x62A70
+#define TRANS_PUSH_D                   0x63A70
 
 #define PP_STATUS	0x61200
 # define PP_ON					(1 << 31)
@@ -1360,6 +1412,11 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define PCH_3DCGDIS1		0x46024
 #define PCH_3DRAMCGDIS0		0x46028
 #define SOUTH_DSPCLK_GATE_D	0xc2020
+
+#define DE_POWER1	0x42400
+#define DE_POWER2	0x42404
+#define DE_POWER2_ABOX0	0x42404
+#define DE_POWER2_ABOX1	0x42408
 
 #define CPU_eDP_A		0x64000
 #define PCH_DP_B		0xe4100
@@ -2255,6 +2312,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 #define PIPEAFRMCOUNT_G4X	0x70040
 #define PIPEAFLIPCOUNT_G4X	0x70044
+#define PIPEAFRMTMSMTP		0x70048
 /*
  * Computing GMCH M and N values.
  *
@@ -2328,6 +2386,9 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #define PIPEEDPCONF		0x7F008
 
+#define DSPAADDR_VLV		0x7017C /* vlv/chv */
+#define DSPBADDR_VLV		0x7117C /* vlv/chv */
+#define DSPCADDR_CHV		0x7417C /* chv */
 #define DSPACNTR		0x70180
 #define DSPBCNTR		0x71180
 #define DSPCCNTR		0x72180
@@ -2481,7 +2542,6 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define I855_CLOCK_166_250			(3 << 0)
 
 /* BLT commands */
-#define COLOR_BLT_CMD		((2<<29)|(0x40<<22)|(0x3))
 #define COLOR_BLT_WRITE_ALPHA	(1<<21)
 #define COLOR_BLT_WRITE_RGB	(1<<20)
 
@@ -2490,17 +2550,12 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define XY_COLOR_BLT_WRITE_RGB		(1<<20)
 #define XY_COLOR_BLT_TILED		(1<<11)
 
+#define XY_PAT_BLT_IMMEDIATE_CMD_NOLEN	((2<<29)|(0x72<<22))
+
 #define XY_SETUP_CLIP_BLT_CMD		((2<<29)|(3<<22)|1)
 
-#define XY_SRC_COPY_BLT_CMD		((2<<29)|(0x53<<22))
 #define XY_SRC_COPY_BLT_WRITE_ALPHA	(1<<21)
 #define XY_SRC_COPY_BLT_WRITE_RGB	(1<<20)
-#define XY_SRC_COPY_BLT_SRC_TILED	(1<<15)
-#define XY_SRC_COPY_BLT_DST_TILED	(1<<11)
-
-#define SRC_COPY_BLT_CMD		((2<<29)|(0x43<<22)|0x4)
-#define SRC_COPY_BLT_WRITE_ALPHA	(1<<21)
-#define SRC_COPY_BLT_WRITE_RGB		(1<<20)
 
 #define XY_PAT_BLT_IMMEDIATE		((2<<29)|(0x72<<22))
 
@@ -2513,6 +2568,10 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define XY_MONO_SRC_BLT_CMD		((0x2<<29)|(0x54<<22)|(0x6))
 #define XY_MONO_SRC_BLT_WRITE_ALPHA	(1<<21)
 #define XY_MONO_SRC_BLT_WRITE_RGB	(1<<20)
+
+#define XY_FAST_COLOR_BLT				((0x2<<29)|(0x44<<22)|0xe)
+#define   XY_FAST_COLOR_BLT_MOCS_INDEX_SHIFT		22
+#define   XE2_XY_FAST_COLOR_BLT_MOCS_INDEX_SHIFT	24
 
 #define XY_FAST_COPY_BLT				((2<<29)|(0x42<<22)|0x8)
 /* dword 0 */
@@ -2536,13 +2595,20 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define   XY_FAST_COPY_COLOR_DEPTH_64			(4  << 24)
 #define   XY_FAST_COPY_COLOR_DEPTH_128			(5  << 24)
 
-#define MI_STORE_DWORD_IMM		((0x20<<23)|2)
-#define   MI_MEM_VIRTUAL	(1 << 22) /* 965+ only */
+/* RAW memory commands */
+#define MEM_COPY_CMD                    ((0x2 << 29)|(0x5a << 22)|0x8)
+#define MEM_SET_CMD                     ((0x2 << 29)|(0x5b << 22)|0x5)
 
-#define MI_SET_CONTEXT			(0x18<<23)
 #define CTXT_NO_RESTORE			(1)
 #define CTXT_PALETTE_SAVE_DISABLE	(1<<3)
 #define CTXT_PALETTE_RESTORE_DISABLE	(1<<2)
+
+#define APPID_CTXREST_INHIBIT           (1 << 9)
+#define APPID_CTXSAVE_INHIBIT           (1 << 8)
+#define APPTYPE(n)                      ((n) << 7)
+#define  DISPLAY_APPTYPE                (0)
+#define  TRANSCODE_APPTYPE              (1)
+#define APPID(n)                        ((n) & 0x7f)
 
 /* Dword 0 */
 #define MI_VERTEX_BUFFER		(0x17<<23)
@@ -2553,28 +2619,26 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define MI_VERTEX_BUFFER_DISABLE	(1)
 
 /* Overlay Flip */
-#define MI_OVERLAY_FLIP			(0x11<<23)
 #define MI_OVERLAY_FLIP_CONTINUE	(0<<21)
 #define MI_OVERLAY_FLIP_ON		(1<<21)
 #define MI_OVERLAY_FLIP_OFF		(2<<21)
 
 /* Wait for Events */
-#define MI_WAIT_FOR_EVENT		(0x03<<23)
 #define MI_WAIT_FOR_PIPEB_SVBLANK	(1<<18)
 #define MI_WAIT_FOR_PIPEA_SVBLANK	(1<<17)
-#define MI_WAIT_FOR_OVERLAY_FLIP	(1<<16)
 #define MI_WAIT_FOR_PIPEB_VBLANK	(1<<7)
 #define MI_WAIT_FOR_PIPEA_VBLANK	(1<<3)
 #define MI_WAIT_FOR_PIPEB_SCAN_LINE_WINDOW	(1<<5)
 #define MI_WAIT_FOR_PIPEA_SCAN_LINE_WINDOW	(1<<1)
 
-#define MI_LOAD_SCAN_LINES_INCL		(0x12<<23)
-#define MI_LOAD_REGISTER_IMM		((0x22 << 23) | 1)
+#define   MI_CS_MMIO_DST		(1 << 19)
+#define   MI_CS_MMIO_SRC		(1 << 18)
+#define   MI_MMIO_REMAP_ENABLE_GEN12	(1 << 17)
+#define   MI_WPARID_ENABLE_GEN12	(1 << 16)
+#define   MI_STORE_PREDICATE_ENABLE_GEN12 (1 << 21)
 
 /* Flush */
-#define MI_FLUSH			(0x04<<23)
 #define MI_WRITE_DIRTY_STATE		(1<<4)
-#define MI_END_SCENE			(1<<3)
 #define MI_GLOBAL_SNAPSHOT_COUNT_RESET	(1<<3)
 #define MI_INHIBIT_RENDER_CACHE_FLUSH	(1<<2)
 #define MI_STATE_INSTRUCTION_CACHE_FLUSH (1<<1)
@@ -2583,19 +2647,30 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define BRW_MI_GLOBAL_SNAPSHOT_RESET   (1 << 3)
 
 /* Noop */
-#define MI_NOOP				0x00
 #define MI_NOOP_WRITE_ID		(1<<22)
 #define MI_NOOP_ID_MASK			(1<<22 - 1)
 
 #define STATE3D_COLOR_FACTOR	((0x3<<29)|(0x1d<<24)|(0x01<<16))
 
+/* Atomics */
+#define   MI_ATOMIC_INC                 (0x5 << 8)
+#define   MI_ATOMIC_DEC                 (0x6 << 8)
+#define   MI_ATOMIC_ADD                 (0x7 << 8)
+
 /* Batch */
-#define MI_BATCH_BUFFER		((0x30 << 23) | 1)
-#define MI_BATCH_BUFFER_START	(0x31 << 23)
-#define MI_BATCH_BUFFER_END	(0xA << 23)
-#define MI_BATCH_NON_SECURE		(1)
-#define MI_BATCH_NON_SECURE_I965	(1 << 8)
-#define MI_BATCH_NON_SECURE_HSW		(1<<13) /* Additional bit for RCS */
+#define MI_COND_BATCH_BUFFER_END	(0x36 << 23)
+#define   MAD_GT_IDD                    (0 << 12)
+#define   MAD_GT_OR_EQ_IDD              (1 << 12)
+#define   MAD_LT_IDD                    (2 << 12)
+#define   MAD_LT_OR_EQ_IDD              (3 << 12)
+#define   MAD_EQ_IDD                    (4 << 12)
+#define   MAD_NEQ_IDD                   (5 << 12)
+
+/* Math */
+/* DG2+ */
+#define   MI_MATH_SHL                   MI_MATH_INSTR(0x105, 0x0, 0x0)
+#define   MI_MATH_SHR                   MI_MATH_INSTR(0x106, 0x0, 0x0)
+#define   MI_MATH_SAR                   MI_MATH_INSTR(0x107, 0x0, 0x0)
 
 #define MAX_DISPLAY_PIPES	2
 
@@ -2752,6 +2827,8 @@ typedef enum {
 #define MCHBAR_RENDER_STANDBY	0x111B8
 #define RENDER_STANDBY_ENABLE	(1 << 30)
 
+#define ILK_TIMESTAMP_HI        0x70070
+#define IVB_TIMESTAMP_CTR       0x44070
 
 /* Ironlake */
 

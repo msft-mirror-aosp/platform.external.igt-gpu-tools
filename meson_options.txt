@@ -20,6 +20,15 @@ option('man',
        type : 'feature',
        description : 'Build man pages')
 
+option('testplan',
+       type : 'feature',
+       description : 'Build testplan documentation pages in ReST and html')
+
+option('sphinx',
+       type : 'feature',
+       value : 'disabled',
+       description : 'Build testplan documentation using Sphinx')
+
 option('docs',
        type : 'feature',
        description : 'Build documentation')
@@ -27,6 +36,21 @@ option('docs',
 option('tests',
        type : 'feature',
        description : 'Build tests')
+
+option('xe_driver',
+       type : 'feature',
+       value : 'enabled',
+       description : 'Build tests for Xe driver')
+
+option('xe_eudebug',
+       type : 'feature',
+       value : 'disabled',
+       description : 'Build library and tests for Xe EU debugger')
+
+option('vmtb',
+       type : 'feature',
+       value : 'disabled',
+       description : 'Build VM Test Bench')
 
 option('libdrm_drivers',
        type : 'array',
@@ -42,7 +66,19 @@ option('runner',
        type : 'feature',
        description : 'Build test runner')
 
+option('oping',
+       type : 'feature',
+       description : 'Build test runner with liboping for pinging support')
+
 option('use_rpath',
        type : 'boolean',
        value : false,
        description : 'Set runpath on installed executables for libigt.so')
+
+option('version_hash',
+       type : 'string',
+       description : 'Override the Git commit hash embedded in the binaries')
+
+option('srcdir',
+       type : 'string',
+       description : 'Override the source code path embedded inside target binaries (optional)')
