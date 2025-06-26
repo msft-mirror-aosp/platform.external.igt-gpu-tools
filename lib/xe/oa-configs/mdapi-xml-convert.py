@@ -208,7 +208,6 @@ chipsets = {
     'MTL': mtl_chipset_oa_formats,
     'LNL': xe2_chipset_oa_formats,
     'BMG': xe2_chipset_oa_formats,
-    'PTL': xe2_chipset_oa_formats,
 }
 
 xehp_plus = ( 'ACM', 'MTL' )

@@ -1,3 +1,0 @@
-FROM quay.io/buildah/stable
-
-RUN dnf install -y podman skopeo

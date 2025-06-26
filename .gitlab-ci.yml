@@ -2,7 +2,6 @@ image: $CI_REGISTRY/$CI_PROJECT_PATH/build-fedora:commit-$CI_COMMIT_SHA
 variables:
   BUILDAH_FORMAT: docker
   BUILDAH_ISOLATION: chroot
-  BUILD_CONTAINERS_IMAGE: $CI_REGISTRY/$CI_PROJECT_PATH/build-buildah:latest
   MESON_OPTIONS: >
     -Dlibdrm_drivers=intel,nouveau,amdgpu
     -Doverlay=enabled
@@ -15,58 +14,41 @@ variables:
   LANG: "C.UTF-8"
 
 stages:
-  - build-base
   - build-containers
   - build
   - test
   - containers
   - deploy
 
-############### BUILD BASE CONTAINER #####################
-
-build-base:build-buildah:
-  stage: build-base
-  image: quay.io/buildah/stable
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "push"
-      changes:
-        - Dockerfile.build-buildah
-  script:
-    - buildah bud --squash -t $BUILD_CONTAINERS_IMAGE -f Dockerfile.build-buildah .
-    - buildah push --creds $CI_REGISTRY_USER:$CI_REGISTRY_PASSWORD $BUILD_CONTAINERS_IMAGE docker://$BUILD_CONTAINERS_IMAGE
-
-build-base:build-buildah-manual:
-  extends: build-base:build-buildah
-  when: manual
-  rules:
-    - when: manual
-    - allow_failure: true
-
 ################# BUILD CONTAINERS #######################
 
 build-containers:build-debian:
   stage: build-containers
-  image: $BUILD_CONTAINERS_IMAGE
+  image: registry.freedesktop.org/wayland/ci-templates/buildah:2019-08-13.0
   script:
+    - podman login -u gitlab-ci-token -p $CI_JOB_TOKEN $CI_REGISTRY
     - .gitlab-ci/pull-or-rebuild.sh base Dockerfile.build-debian-minimal build-debian-minimal
     - .gitlab-ci/pull-or-rebuild.sh base Dockerfile.build-debian build-debian
 
 build-containers:build-debian-armhf:
   stage: build-containers
-  image: $BUILD_CONTAINERS_IMAGE
+  image: registry.freedesktop.org/wayland/ci-templates/buildah:2019-08-13.0
   script:
+    - podman login -u gitlab-ci-token -p $CI_JOB_TOKEN $CI_REGISTRY
     - .gitlab-ci/pull-or-rebuild.sh base Dockerfile.build-debian-armhf build-debian-armhf
 
 build-containers:build-debian-arm64:
   stage: build-containers
-  image: $BUILD_CONTAINERS_IMAGE
+  image: registry.freedesktop.org/wayland/ci-templates/buildah:2019-08-13.0
   script:
+    - podman login -u gitlab-ci-token -p $CI_JOB_TOKEN $CI_REGISTRY
     - .gitlab-ci/pull-or-rebuild.sh base Dockerfile.build-debian-arm64 build-debian-arm64
 
 build-containers:build-fedora:
   stage: build-containers
-  image: $BUILD_CONTAINERS_IMAGE
+  image: registry.freedesktop.org/wayland/ci-templates/buildah:2019-08-13.0
   script:
+    - podman login -u gitlab-ci-token -p $CI_JOB_TOKEN $CI_REGISTRY
     - .gitlab-ci/pull-or-rebuild.sh base Dockerfile.build-fedora build-fedora
 
 #################### BUILD #########################
@@ -74,10 +56,10 @@ build-containers:build-fedora:
 build:tests-fedora:
   stage: build
   script:
-    - meson setup --prefix=/opt/igt $MESON_OPTIONS build
+    - meson --prefix=/opt/igt $MESON_OPTIONS build
     - ninja -C build -j${FDO_CI_CONCURRENT:-4} || ninja -C build -j 1
-    - ninja -C build -j${FDO_CI_CONCURRENT:-4} igt-gpu-tools-doc
     - DESTDIR="$PWD/installdir" ninja -C build install
+    - ninja -C build -j${FDO_CI_CONCURRENT:-4} igt-gpu-tools-doc
   artifacts:
     paths:
       - build
@@ -87,7 +69,7 @@ build:tests-fedora-no-libunwind:
   stage: build
   script:
     - dnf remove -y libunwind-devel
-    - meson setup -Dlibunwind=disabled build
+    - meson -Dlibunwind=disabled build
     - ninja -C build -j${FDO_CI_CONCURRENT:-4} || ninja -C build -j 1
 
 # documentation building is different with meson<0.47
@@ -96,7 +78,7 @@ build:tests-fedora-oldest-meson:
   script:
     - dnf remove -y meson
     - pip install /usr/src/meson-*.tar.gz
-    - meson setup $MESON_OPTIONS build
+    - meson $MESON_OPTIONS build
     - ninja -C build -j${FDO_CI_CONCURRENT:-4} || ninja -C build -j 1
     - ninja -C build -j${FDO_CI_CONCURRENT:-4} igt-gpu-tools-doc
 
@@ -104,7 +86,7 @@ build:tests-fedora-oldest-meson:
 build:tests-fedora-no-libdrm-nouveau:
   stage: build
   script:
-    - meson setup -Dlibdrm_drivers= build
+    - meson -Dlibdrm_drivers= build
     - ninja -C build -j${FDO_CI_CONCURRENT:-4} || ninja -C build -j 1
 
 build:tests-fedora-clang:
@@ -112,7 +94,7 @@ build:tests-fedora-clang:
   variables:
     CC: clang
   script:
-    - meson setup $MESON_OPTIONS build
+    - meson $MESON_OPTIONS build
     - ninja -C build -j${FDO_CI_CONCURRENT:-4} || ninja -C build -j 1
   artifacts:
     paths:
@@ -122,7 +104,7 @@ build:tests-debian-meson:
   image: $CI_REGISTRY/$CI_PROJECT_PATH/build-debian:commit-$CI_COMMIT_SHA
   stage: build
   script:
-    - meson setup $MESON_OPTIONS build
+    - meson $MESON_OPTIONS build
     - ninja -C build -j${FDO_CI_CONCURRENT:-4} || ninja -C build -j 1
     - cp build/tests/test-list.txt meson-test-list.txt
   artifacts:
@@ -133,7 +115,7 @@ build:tests-debian-minimal:
   image: $CI_REGISTRY/$CI_PROJECT_PATH/build-debian-minimal:commit-$CI_COMMIT_SHA
   stage: build
   script:
-    - meson setup -Dtests=disabled -Dlibdrm_drivers="" build
+    - meson -Dtests=disabled -Dlibdrm_drivers="" build
     - ninja -C build -j${FDO_CI_CONCURRENT:-4} || ninja -C build -j 1
   artifacts:
     paths:
@@ -144,7 +126,7 @@ build:tests-debian-meson-armhf:
   stage: build
   script:
     - export PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig/
-    - meson setup --cross-file meson-cross-armhf.txt build
+    - meson --cross-file meson-cross-armhf.txt build
     - ninja -C build -j${FDO_CI_CONCURRENT:-4} || ninja -C build -j 1
   artifacts:
     paths:
@@ -155,7 +137,7 @@ build:tests-debian-meson-arm64:
   stage: build
   script:
     - export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig/
-    - meson setup --cross-file meson-cross-arm64.txt build
+    - meson --cross-file meson-cross-arm64.txt build
     - ninja -C build -j${FDO_CI_CONCURRENT:-4} || ninja -C build -j 1
   artifacts:
     paths:
@@ -253,10 +235,11 @@ pages:
 
 containers:igt:
   stage: containers
-  image: $BUILD_CONTAINERS_IMAGE
+  image: registry.freedesktop.org/wayland/ci-templates/buildah:2019-08-13.0
   dependencies:
     - build:tests-fedora
   variables:
     FORCE_REBUILD: 1
   script:
+    - podman login -u gitlab-ci-token -p $CI_JOB_TOKEN $CI_REGISTRY
     - .gitlab-ci/pull-or-rebuild.sh igt Dockerfile igt

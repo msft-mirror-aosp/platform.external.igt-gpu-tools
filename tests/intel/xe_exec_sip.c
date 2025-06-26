@@ -6,8 +6,8 @@
 /**
  * TEST: Tests for GPGPU shader and system routine (SIP) execution
  * Category: Core
- * Mega feature: EUdebug
- * Sub-category: EUdebug tests
+ * Mega feature: Compute
+ * Sub-category: GPGPU tests
  * Functionality: system routine
  * Description: Exercise interaction between GPGPU shader and system routine
  *              (SIP), which should handle exceptions raised on Execution Unit.

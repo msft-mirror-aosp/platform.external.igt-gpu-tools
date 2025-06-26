@@ -316,13 +316,10 @@ igt_main
 	int r, fd = -1;
 	bool is_secure = true;
 	bool userq_arr_cap[AMD_IP_MAX] = {0};
-
-#ifdef AMDGPU_USERQ_ENABLED
-	bool enable_test;
+	bool enable_test = false;
 	const char *env = getenv("AMDGPU_DISABLE_USERQTEST");
 
 	enable_test = env && atoi(env);
-#endif
 
 	igt_fixture {
 		uint32_t major, minor;
@@ -364,19 +361,21 @@ igt_main
 			AMDGPU_HW_IP_DMA), is_secure);
 
 #ifdef AMDGPU_USERQ_ENABLED
-	igt_describe("amdgpu gfx command submission write linear helper with user queue");
-	igt_subtest("gfx-write-linear-helper-secure-umq")
-	if (enable_test && userq_arr_cap[AMD_IP_GFX])
-		amdgpu_command_submission_write_linear_helper(device,
-						get_ip_block(device, AMDGPU_HW_IP_GFX),
-						is_secure, true);
+	if (enable_test) {
+		igt_describe("amdgpu gfx command submission write linear helper with user queue");
+		igt_subtest("gfx-write-linear-helper-secure-umq")
+		if (userq_arr_cap[AMD_IP_GFX])
+			amdgpu_command_submission_write_linear_helper(device,
+							get_ip_block(device, AMDGPU_HW_IP_GFX),
+							is_secure, true);
 
-	igt_describe("amdgpu compute command submission write linear helper with user queue");
-	igt_subtest("compute-write-linear-helper-secure-umq")
-	if (enable_test && userq_arr_cap[AMD_IP_COMPUTE])
-		amdgpu_command_submission_write_linear_helper(device,
+		igt_describe("amdgpu compute command submission write linear helper with user queue");
+		igt_subtest("compute-write-linear-helper-secure-umq")
+		if (userq_arr_cap[AMD_IP_COMPUTE])
+			amdgpu_command_submission_write_linear_helper(device,
 							get_ip_block(device, AMDGPU_HW_IP_COMPUTE),
 							is_secure, true);
+	}
 #endif
 
 	igt_fixture {
