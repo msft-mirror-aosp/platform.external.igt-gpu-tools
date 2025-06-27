@@ -335,6 +335,8 @@ cc_test {
 cc_test {
     name: "fbdev",
     defaults: ["igt-gpu-tools-test-defaults"],
+    // This test passes null to pread() and pwrite().
+    cflags: ["-Wno-nonnull"],
     srcs: ["tests/fbdev.c"],
 }
 
