@@ -1,11 +1,13 @@
 test_progs = [
 	'core_auth',
+	'core_debugfs',
 	'core_getclient',
 	'core_getstats',
 	'core_getversion',
 	'core_hotunplug',
 	'core_setmaster',
 	'core_setmaster_vs_auth',
+	'core_sysfs',
 	'dmabuf',
 	'dmabuf_sync_file',
 	'device_reset',
@@ -28,6 +30,7 @@ test_progs = [
 	'kms_cursor_crc',
 	'kms_cursor_edge_walk',
 	'kms_cursor_legacy',
+	'kms_debugfs',
 	'kms_dither',
 	'kms_display_modes',
 	'kms_dp_aux_dev',
@@ -84,7 +87,6 @@ test_progs = [
 intel_i915_xe_progs = [
 	'api_intel_allocator',
 	'intel_hwmon',
-	'intel_sysfs_debugfs',
 ]
 
 intel_i915_progs = [
@@ -281,6 +283,7 @@ intel_xe_progs = [
 	'xe_compute_preempt',
 	'xe_copy_basic',
 	'xe_configfs',
+	'xe_debugfs',
 	'xe_dma_buf_sync',
 	'xe_drm_fdinfo',
 	'xe_eu_stall',
@@ -487,6 +490,8 @@ subdir('v3d')
 
 subdir('vc4')
 
+subdir('vkms')
+
 subdir('vmwgfx')
 
 gen_testlist = find_program('generate_testlist.sh')
@@ -526,12 +531,5 @@ if not meson.is_cross_build()
 			capture : true,
 			output : 'gem_stress.testlist')
 endif
-
-image_files = [
-  '1080p-left.png',
-  '1080p-right.png',
-  'pass.png',
-]
-install_data(sources : image_files, install_dir : datadir)
 
 subdir('intel-ci')

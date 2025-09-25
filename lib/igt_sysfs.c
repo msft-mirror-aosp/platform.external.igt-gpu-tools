@@ -226,6 +226,7 @@ int igt_sysfs_open(int device)
 char *xe_sysfs_gt_path(int xe_device, int gt, char *path, int pathlen)
 {
 	struct stat st;
+	struct xe_device *xe_dev;
 
 	if (xe_device < 0)
 		return NULL;
@@ -233,12 +234,12 @@ char *xe_sysfs_gt_path(int xe_device, int gt, char *path, int pathlen)
 	if (igt_debug_on(fstat(xe_device, &st)) || igt_debug_on(!S_ISCHR(st.st_mode)))
 		return NULL;
 
-	if (IS_PONTEVECCHIO(intel_get_drm_devid(xe_device)))
-		snprintf(path, pathlen, "/sys/dev/char/%d:%d/device/tile%d/gt%d",
-			 major(st.st_rdev), minor(st.st_rdev), gt, gt);
-	else
-		snprintf(path, pathlen, "/sys/dev/char/%d:%d/device/tile0/gt%d",
-			 major(st.st_rdev), minor(st.st_rdev), gt);
+	xe_dev = xe_device_get(xe_device);
+
+	igt_assert(xe_dev);
+
+	snprintf(path, pathlen, "/sys/dev/char/%d:%d/device/tile%d/gt%d",
+		 major(st.st_rdev), minor(st.st_rdev), xe_get_tile(xe_dev, gt), gt);
 
 	if (!access(path, F_OK))
 		return path;
@@ -307,7 +308,7 @@ char *
 xe_sysfs_engine_path(int xe_device, int gt, int class, char *path, int pathlen)
 {
 	struct stat st;
-	int tile = IS_PONTEVECCHIO(intel_get_drm_devid(xe_device)) ? gt : 0;
+	char base_path[96];
 
 	if (xe_device < 0)
 		return NULL;
@@ -315,8 +316,8 @@ xe_sysfs_engine_path(int xe_device, int gt, int class, char *path, int pathlen)
 	if (igt_debug_on(fstat(xe_device, &st)) || igt_debug_on(!S_ISCHR(st.st_mode)))
 		return NULL;
 
-	snprintf(path, pathlen, "/sys/dev/char/%d:%d/device/tile%d/gt%d/engines/%s",
-		 major(st.st_rdev), minor(st.st_rdev), tile, gt,
+	xe_sysfs_gt_path(xe_device, gt, base_path, sizeof(base_path));
+	snprintf(path, pathlen, "%s/engines/%s", base_path,
 		 xe_engine_class_short_string(class));
 
 	if (!access(path, F_OK))
@@ -443,23 +444,23 @@ int igt_sysfs_drm_module_params_open(void)
 	return open(path, O_RDONLY);
 }
 
-static int log_level = -1;
+static int saved_drm_debug_mask = -1;
 
 /**
- * igt_drm_debug_level_get:
+ * igt_drm_debug_mask_get:
  *
- * This reads the current debug log level of the machine on
+ * This reads the current debug mask of the machine on
  * which the test is currently executing.
  *
  * Returns:
- * The current log level, or -1 on error.
+ * The current debug mask, or -1 on error.
  */
-int igt_drm_debug_level_get(int dir)
+int igt_drm_debug_mask_get(int dir)
 {
 	char buf[20];
 
-	if (log_level >= 0)
-		return log_level;
+	if (saved_drm_debug_mask >= 0)
+		return saved_drm_debug_mask;
 
 	if (igt_sysfs_read(dir, "debug", buf, sizeof(buf) - 1) < 0)
 		return -1;
@@ -468,44 +469,45 @@ int igt_drm_debug_level_get(int dir)
 }
 
 /**
- * igt_drm_debug_level_reset:
+ * igt_drm_debug_mask_reset:
  *
- * This modifies the current debug log level of the machine
+ * This modifies the current debug mask of the machine
  * to the default value post-test.
  *
  */
-void igt_drm_debug_level_reset(void)
+void igt_drm_debug_mask_reset(void)
 {
 	char buf[20];
 	int dir;
 
-	if (log_level < 0)
+	if (saved_drm_debug_mask < 0)
 		return;
 
 	dir = igt_sysfs_drm_module_params_open();
 	if (dir < 0)
 		return;
 
-	igt_debug("Resetting DRM debug level to %d\n", log_level);
-	snprintf(buf, sizeof(buf), "%d", log_level);
+	igt_debug("Restoring DRM debug mask to %d\n", saved_drm_debug_mask);
+	snprintf(buf, sizeof(buf), "%d", saved_drm_debug_mask);
 	igt_assert(igt_sysfs_set(dir, "debug", buf));
 
 	close(dir);
 }
 
-static void igt_drm_debug_level_reset_exit_handler(int sig)
+void igt_drm_debug_mask_reset_exit_handler(int sig)
 {
-	igt_drm_debug_level_reset();
+	igt_drm_debug_mask_reset();
 }
 
 /**
- * igt_drm_debug_level_update:
- * @debug_level: new debug level to set
+ * igt_drm_debug_mask_update:
+ * @mask_to_set: new debug mask to set
  *
- * This modifies the current drm debug log level to the new value.
+ * This modifies the current drm debug mask to the new value.
  */
-void igt_drm_debug_level_update(unsigned int new_log_level)
+void igt_drm_debug_mask_update(unsigned int mask_to_set)
 {
+	static bool debug_mask_read_once = true;
 	char buf[20];
 	int dir;
 
@@ -513,23 +515,31 @@ void igt_drm_debug_level_update(unsigned int new_log_level)
 	if (dir < 0)
 		return;
 
-	log_level = igt_drm_debug_level_get(dir);
-	if (log_level < 0) {
-		close(dir);
-		return;
+	/* The below flag is used to read the original debug mask only once */
+	if (debug_mask_read_once) {
+		debug_mask_read_once = false;
+		saved_drm_debug_mask = igt_drm_debug_mask_get(dir);
+		if (saved_drm_debug_mask < 0) {
+			close(dir);
+			return;
+		}
 	}
 
-	igt_debug("Setting DRM debug level to %d\n", new_log_level);
-	snprintf(buf, sizeof(buf), "%d", new_log_level);
+	igt_debug("Setting DRM debug mask to %d\n", mask_to_set);
+	snprintf(buf, sizeof(buf), "%d", mask_to_set);
 	igt_assert(igt_sysfs_set(dir, "debug", buf));
 
 	close(dir);
+}
 
-	/*
-	 * TODO: Check whether multiple exit handlers will get installed,
-	 * if we call this api multiple times
-	 */
-	igt_install_exit_handler(igt_drm_debug_level_reset_exit_handler);
+void update_debug_mask_if_ci(unsigned int debug_mask_if_ci)
+{
+	const char *ci_run = getenv("IGT_CI_RUN");
+
+	if (ci_run && ci_run[0] == '1') {
+		igt_debug("Currently under CI execution, reducing the DRM debug mask to 0x4\n");
+		igt_drm_debug_mask_update(debug_mask_if_ci);
+	}
 }
 
 /**

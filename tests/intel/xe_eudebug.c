@@ -20,6 +20,7 @@
 #include <sys/prctl.h>
 
 #include "igt.h"
+#include "igt_sysfs.h"
 #include "intel_pat.h"
 #include "lib/igt_syncobj.h"
 #include "xe/xe_eudebug.h"
@@ -2800,6 +2801,9 @@ igt_main
 	igt_fixture {
 		fd = drm_open_driver(DRIVER_XE);
 		was_enabled = xe_eudebug_enable(fd, true);
+
+		igt_install_exit_handler(igt_drm_debug_mask_reset_exit_handler);
+		update_debug_mask_if_ci(DRM_UT_KMS);
 	}
 
 	igt_subtest("sysfs-toggle")
@@ -2923,7 +2927,6 @@ igt_main
 	igt_subtest_group {
 		igt_fixture {
 			gpu_count = drm_prepare_filtered_multigpu(DRIVER_XE);
-			igt_require(gpu_count >= 2);
 
 			multigpu_was_enabled = malloc(gpu_count * sizeof(bool));
 			igt_assert(multigpu_was_enabled);
@@ -2935,6 +2938,7 @@ igt_main
 		}
 
 		igt_subtest("multigpu-basic-client") {
+			igt_require(gpu_count >= 2);
 			igt_multi_fork(child, gpu_count) {
 				fd = drm_open_filtered_card(child);
 				igt_assert_f(fd > 0, "cannot open gpu-%d, errno=%d\n",
@@ -2948,6 +2952,7 @@ igt_main
 		}
 
 		igt_subtest("multigpu-basic-client-many") {
+			igt_require(gpu_count >= 2);
 			igt_multi_fork(child, gpu_count) {
 				fd = drm_open_filtered_card(child);
 				igt_assert_f(fd > 0, "cannot open gpu-%d, errno=%d\n",

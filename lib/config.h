@@ -8,6 +8,7 @@
 
 #define IGT_SRCDIR "/data/local/tmp/igt"
 #define IGT_DATADIR "/data/local/tmp/igt"
+#define IGT_IMGDIR "/data/local/tmp/igt"
 #define IGT_GIT_SHA1 "GIT"
 #define PACKAGE_VERSION "IGT_VERSION"
 

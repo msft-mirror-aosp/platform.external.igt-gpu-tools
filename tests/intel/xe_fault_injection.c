@@ -27,7 +27,8 @@
 #define INJECT_ERRNO	-ENOMEM
 #define BO_ADDR		0x1a0000
 #define BO_SIZE		(1024*1024)
-#define INJECT_ITERATIONS	100
+#define MAX_INJECT_ITERATIONS	100
+#define MAX_INJECTIONS_PER_ITER	100
 
 int32_t inject_iters_raw;
 struct fault_injection_params {
@@ -194,6 +195,19 @@ static void cleanup_injection_fault(int sig)
 	injection_list_clear();
 }
 
+static int get_remaining_injection_count(void)
+{
+	int dir, val;
+
+	dir = fail_function_open();
+	igt_assert_lte(0, dir);
+
+	val = igt_sysfs_get_s32(dir, "times");
+
+	close(dir);
+	return val;
+}
+
 static void set_retval(const char function_name[], long long retval)
 {
 	char path[96];
@@ -227,6 +241,7 @@ static void ignore_fail_dump_in_dmesg(const char function_name[], bool enable)
  * Functionality: fault
  *
  * arg[1]:
+ * @guc_wait_ucode:			guc_wait_ucode
  * @wait_for_lmem_ready:		wait_for_lmem_ready
  * @xe_add_hw_engine_class_defaults:	xe_add_hw_engine_class_defaults
  * @xe_device_create:			xe_device_create
@@ -242,7 +257,7 @@ static void ignore_fail_dump_in_dmesg(const char function_name[], bool enable)
  * @xe_sriov_init:			xe_sriov_init
  * @xe_tile_init_early:			xe_tile_init_early
  * @xe_uc_fw_init:			xe_uc_fw_init
- * @xe_wa_init:				xe_wa_init
+ * @xe_wa_gt_init:			xe_wa_gt_init
  * @xe_wopcm_init:			xe_wopcm_init
  */
 static int
@@ -288,14 +303,31 @@ static void probe_fail_guc(int fd, const char pci_slot[], const char function_na
 	*/
 	iter = inject_iters_raw;
 	iter_start = iter ? : 0;
-	iter_end = iter ? iter + 1 : INJECT_ITERATIONS;
+	iter_end = iter ? iter + 1 : MAX_INJECT_ITERATIONS;
 	igt_debug("Injecting error for %d - %d iterations\n", iter_start, iter_end);
 	for (int i = iter_start; i < iter_end; i++) {
 		fault_params->space = i;
+		fault_params->times = MAX_INJECTIONS_PER_ITER;
 		setup_injection_fault(fault_params);
 		inject_fault_probe(fd, pci_slot, function_name);
 		igt_kmod_unbind("xe", pci_slot);
+
+		/*
+		 * if no injection occurred we've tested all the injection
+		 * points for this function and can therefore stop iterating.
+		 */
+		if (get_remaining_injection_count() == MAX_INJECTIONS_PER_ITER)
+			break;
 	}
+
+	/*
+	 * In the unlikely case where we haven't covered all the injection
+	 * points for the function (because there are more of them than
+	 * MAX_INJECT_ITERATIONS) fail the test so that we know we need to do an
+	 * update and/or split it in two parts.
+	 */
+	igt_assert_f(inject_iters_raw || iter != MAX_INJECT_ITERATIONS,
+		     "Loop exited without covering all injection points!\n");
 }
 
 /**
@@ -486,7 +518,7 @@ static int opt_handler(int opt, int opt_index, void *data)
 	case 'I':
 		/* Update to 0 if not exported / -ve value */
 		in_param = atoi(optarg);
-		if (!in_param || in_param <= 0 || in_param > INJECT_ITERATIONS)
+		if (!in_param || in_param <= 0 || in_param > MAX_INJECT_ITERATIONS)
 			inject_iters_raw = 0;
 		else
 			inject_iters_raw = in_param;
@@ -516,6 +548,7 @@ igt_main_args("I:", NULL, help_str, opt_handler, NULL)
 		unsigned int flags;
 		bool pf_only;
 	} probe_fail_functions[] = {
+		{ "guc_wait_ucode" },
 		{ "wait_for_lmem_ready" },
 		{ "xe_add_hw_engine_class_defaults" },
 		{ "xe_device_create" },
@@ -531,7 +564,7 @@ igt_main_args("I:", NULL, help_str, opt_handler, NULL)
 		{ "xe_sriov_init" },
 		{ "xe_tile_init_early" },
 		{ "xe_uc_fw_init" },
-		{ "xe_wa_init" },
+		{ "xe_wa_gt_init" },
 		{ "xe_wopcm_init", 0, true },
 		{ }
 	};

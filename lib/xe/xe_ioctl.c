@@ -57,6 +57,106 @@ uint64_t xe_bb_size(int fd, uint64_t reqsize)
 	             xe_get_default_alignment(fd));
 }
 
+int xe_vm_number_vmas_in_range(int fd, struct drm_xe_vm_query_mem_range_attr *vmas_attr)
+{
+	if (igt_ioctl(fd, DRM_IOCTL_XE_VM_QUERY_MEM_RANGE_ATTRS, vmas_attr))
+		return -errno;
+	return 0;
+}
+
+int xe_vm_vma_attrs(int fd, struct drm_xe_vm_query_mem_range_attr *vmas_attr,
+		    struct drm_xe_mem_range_attr *mem_attr)
+{
+	if (!mem_attr)
+		return -EINVAL;
+
+	vmas_attr->vector_of_mem_attr = (uintptr_t)mem_attr;
+
+	if (igt_ioctl(fd, DRM_IOCTL_XE_VM_QUERY_MEM_RANGE_ATTRS, vmas_attr))
+		return -errno;
+
+	return 0;
+}
+
+/**
+ * xe_vm_get_mem_attr_values_in_range:
+ * @fd: xe device fd
+ * @vm: vm_id of the virtual range
+ * @start: start of the virtual address range
+ * @range: size of the virtual address range
+ * @num_ranges: number of vma ranges
+ *
+ * Calls QUERY_MEM_RANGES_ATTRS ioctl to get memory attributes for different
+ * memory ranges from KMD. return memory attributes as returned by KMD for
+ * atomic, prefrred loc and pat index types.
+ *
+ * Returns struct drm_xe_mem_range_attr for success or error for failure
+ */
+
+struct drm_xe_mem_range_attr
+*xe_vm_get_mem_attr_values_in_range(int fd, uint32_t vm, uint64_t start,
+				    uint64_t range, uint32_t *num_ranges)
+{
+	void *ptr_start, *ptr;
+	int err;
+	struct drm_xe_vm_query_mem_range_attr query = {
+		.vm_id = vm,
+		.start = start,
+		.range = range,
+		.num_mem_ranges = 0,
+		.sizeof_mem_range_attr = 0,
+		.vector_of_mem_attr = (uintptr_t)NULL,
+	};
+
+	igt_debug("mem_attr_values_in_range called start = %"PRIu64"\n range = %"PRIu64"\n",
+		  start, range);
+
+	err  = xe_vm_number_vmas_in_range(fd, &query);
+	if (err || !query.num_mem_ranges || !query.sizeof_mem_range_attr) {
+		igt_warn("ioctl failed for xe_vm_number_vmas_in_range\n");
+		igt_debug("vmas_in_range err = %d query.num_mem_ranges = %u query.sizeof_mem_range_attr=%lld\n",
+			  err, query.num_mem_ranges, query.sizeof_mem_range_attr);
+		return NULL;
+	}
+
+	/* Allocate buffer for the memory region attributes */
+	ptr = malloc(query.num_mem_ranges * query.sizeof_mem_range_attr);
+	ptr_start = ptr;
+
+	if (!ptr) {
+		igt_debug("memory allocation failed\n");
+		return NULL;
+	}
+
+	err = xe_vm_vma_attrs(fd, &query, ptr);
+	if (err) {
+		igt_warn("ioctl failed for vma_attrs err = %d\n", err);
+		free(ptr_start);
+		return NULL;
+	}
+
+	ptr = ptr_start; // Reset pointer for iteration
+	/* Iterate over the returned memory region attributes */
+	for (unsigned int i = 0; i < query.num_mem_ranges; ++i) {
+		struct drm_xe_mem_range_attr *mem_attrs = (struct drm_xe_mem_range_attr *)ptr;
+
+		igt_debug("vma_id = %d\nvma_start = 0x%016llx\nvma_end = 0x%016llx\n"
+				"vma:atomic = %d\nvma:pat_index = %d\nvma:preferred_loc_region = %d\n"
+				"vma:preferred_loc_devmem_fd = %d\n\n\n", i, mem_attrs->start,
+				mem_attrs->end,
+				mem_attrs->atomic.val, mem_attrs->pat_index.val,
+				mem_attrs->preferred_mem_loc.migration_policy,
+				mem_attrs->preferred_mem_loc.devmem_fd);
+
+		ptr += query.sizeof_mem_range_attr;
+	}
+
+	if (num_ranges)
+		*num_ranges = query.num_mem_ranges;
+
+	return (struct drm_xe_mem_range_attr *)ptr_start;
+}
+
 uint32_t xe_vm_create(int fd, uint32_t flags, uint64_t ext)
 {
 	struct drm_xe_vm_create create = {
@@ -423,7 +523,7 @@ uint64_t xe_bo_mmap_offset(int fd, uint32_t bo)
 	return mmo.offset;
 }
 
-static void *__xe_bo_map(int fd, uint16_t bo, size_t size, int prot)
+static void *__xe_bo_map(int fd, uint32_t bo, size_t size, int prot)
 {
 	uint64_t mmo;
 	void *map;
@@ -584,4 +684,61 @@ int64_t xe_wait_ufence(int fd, uint64_t *addr, uint64_t value,
 {
 	igt_assert_eq(__xe_wait_ufence(fd, addr, value, exec_queue, &timeout), 0);
 	return timeout;
+}
+
+int __xe_vm_madvise(int fd, uint32_t vm, uint64_t addr, uint64_t range,
+		    uint64_t ext, uint32_t type, uint32_t op_val, uint16_t policy)
+{
+	struct drm_xe_madvise madvise = {
+		.type = type,
+		.extensions = ext,
+		.vm_id = vm,
+		.start = addr,
+		.range = range,
+	};
+
+	switch (type) {
+	case DRM_XE_MEM_RANGE_ATTR_ATOMIC:
+		madvise.atomic.val = op_val;
+		break;
+	case DRM_XE_MEM_RANGE_ATTR_PREFERRED_LOC:
+		madvise.preferred_mem_loc.devmem_fd = op_val;
+		madvise.preferred_mem_loc.migration_policy = policy;
+		igt_debug("madvise.preferred_mem_loc.devmem_fd = %d\n",
+			  madvise.preferred_mem_loc.devmem_fd);
+		break;
+	case DRM_XE_MEM_RANGE_ATTR_PAT:
+		madvise.pat_index.val = op_val;
+		break;
+	default:
+		igt_warn("Unknown attribute\n");
+		return -EINVAL;
+	}
+
+	if (igt_ioctl(fd, DRM_IOCTL_XE_MADVISE, &madvise))
+		return -errno;
+
+	return 0;
+}
+
+/**
+ * xe_vm_madvise:
+ * @fd: xe device fd
+ * @vm: vm_id of the virtual range
+ * @addr: start of the virtual address range
+ * @range: size of the virtual address range
+ * @ext: Pointer to the first extension struct, if any
+ * @type: type of attribute
+ * @op_val: fd/atomic value/pat index, depending upon type of operation
+ * @policy: Page migration policy
+ *
+ * Function initializes different members of struct drm_xe_madvise and calls
+ * MADVISE IOCTL .
+ *
+ * Asserts in case of error returned by DRM_IOCTL_XE_MADVISE.
+ */
+void xe_vm_madvise(int fd, uint32_t vm, uint64_t addr, uint64_t range,
+		   uint64_t ext, uint32_t type, uint32_t op_val, uint16_t policy)
+{
+	igt_assert_eq(__xe_vm_madvise(fd, vm, addr, range, ext, type, op_val, policy), 0);
 }

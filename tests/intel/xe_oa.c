@@ -285,7 +285,7 @@ static struct oa_format lnl_oa_formats[XE_OA_FORMAT_MAX] = {
 		.counter_size = 1,
 		.bc_report = 0 },
 	[XE_OA_FORMAT_PEC32u32_G2] = {
-		"PEC32u64_G2", .size = 192,
+		"PEC32u32_G2", .size = 192,
 		.oa_type = DRM_XE_OA_FMT_TYPE_PEC,
 		.report_hdr_64bit = true,
 		.counter_select = 6,
@@ -307,6 +307,8 @@ static struct oa_format lnl_oa_formats[XE_OA_FORMAT_MAX] = {
 		.bc_report = 0 },
 };
 
+static bool oa_trace = false;
+static uint32_t oa_trace_buf_mb = 1;
 static int drm_fd = -1;
 static int sysfs = -1;
 static int pm_fd = -1;
@@ -387,6 +389,31 @@ static u32 get_stream_status(int fd)
 	errno = _e;
 
 	return status.oa_status;
+}
+
+static void enable_trace_log(void)
+{
+	char cmd[64] = {0};
+
+	if (!oa_trace)
+		return;
+
+	snprintf(cmd, sizeof(cmd) - 1, "echo %d > /sys/kernel/debug/tracing/buffer_size_kb", oa_trace_buf_mb * 1024);
+	system(cmd);
+	system("echo 0 > /sys/kernel/debug/tracing/tracing_on");
+	system("echo > /sys/kernel/debug/tracing/trace");
+	system("echo 1 > /sys/kernel/debug/tracing/events/xe/enable");
+	system("echo 1 > /sys/kernel/debug/tracing/events/xe/xe_reg_rw/enable");
+	system("echo 1 > /sys/kernel/debug/tracing/tracing_on");
+}
+
+static void disable_trace_log(void)
+{
+	if (!oa_trace)
+		return;
+
+	system("echo 0 > /sys/kernel/debug/tracing/tracing_on");
+	system("cat /sys/kernel/debug/tracing/trace");
 }
 
 static void
@@ -998,7 +1025,7 @@ static void pec_sanity_check(const u32 *report0, const u32 *report1,
 			     struct intel_xe_perf_metric_set *set)
 {
 	u64 tick_delta = oa_tick_delta(report1, report0, set->perf_oa_format);
-	int xecore_idx[] = {3, 4, 5, 6, 21, 22, 23, 24};
+	int xecore_to_pec[] = {3, 4, 5, 6, 21, 22, 23, 24};
 	u64 *pec0 = (u64 *)(report0 + 8);
 	u64 *pec1 = (u64 *)(report1 + 8);
 
@@ -1018,17 +1045,17 @@ static void pec_sanity_check(const u32 *report0, const u32 *report1,
 	igt_debug("tick delta = %#" PRIx64 "\n", tick_delta);
 
 	/* Difference in test_event1_cycles_xecore* values should be close to tick_delta */
-	for (int i = 0; i < ARRAY_SIZE(xecore_idx); i++) {
-		int n = xecore_idx[i];
+	for (int i = 0; i < ARRAY_SIZE(xecore_to_pec); i++) {
+		int n = xecore_to_pec[i];
 
 		igt_debug("n %d: pec1[n] - pec0[n] %#" PRIx64 ", tick delta %#" PRIx64 "\n",
 			  n, pec1[n] - pec0[n], tick_delta);
-		/* 0 value for pec[xecore_idx[i]] indicates missing xecore */
-		if (pec1[n] && pec0[n])
+
+		/* Skip missing xecore's */
+		if (intel_xe_perf->devinfo.subslice_mask & BIT(i)) {
+			igt_assert(pec1[n] && pec0[n]);
 			assert_within_epsilon(pec1[n] - pec0[n], tick_delta, 0.1);
-		/* Same test_event1_cycles_xecore* should be present in all reports */
-		if (pec1[n])
-			igt_assert(pec0[n]);
+		}
 	}
 
 	igt_debug("pec1[2] - pec0[2] %#" PRIx64 ", tick_delta * num_xecores: %#" PRIx64 "\n",
@@ -1052,8 +1079,8 @@ static void pec_sanity_check_reports(const u32 *report0, const u32 *report1,
 		return;
 	}
 
-	dump_report(report0, set->perf_raw_size, "pec_report0");
-	dump_report(report1, set->perf_raw_size, "pec_report1");
+	dump_report(report0, set->perf_raw_size / 4, "pec_report0");
+	dump_report(report1, set->perf_raw_size / 4, "pec_report1");
 
 	pec_sanity_check(report0, report1, set);
 }
@@ -1201,6 +1228,7 @@ init_sys_info(void)
 	igt_debug("n_eu_slices: %"PRIu64"\n", intel_xe_perf->devinfo.n_eu_slices);
 	igt_debug("n_eu_sub_slices: %"PRIu64"\n", intel_xe_perf->devinfo.n_eu_sub_slices);
 	igt_debug("n_eus: %"PRIu64"\n", intel_xe_perf->devinfo.n_eus);
+	igt_debug("subslice_mask: %#"PRIx64"\n", intel_xe_perf->devinfo.subslice_mask);
 	igt_debug("timestamp_frequency = %"PRIu64"\n",
 		  intel_xe_perf->devinfo.timestamp_frequency);
 	igt_assert_neq(intel_xe_perf->devinfo.timestamp_frequency, 0);
@@ -1431,7 +1459,7 @@ read_2_oa_reports(int format_id,
 
 		while ((ret = read(stream_fd, buf + len, buf_size)) < 0 && errno == EINTR)
 			;
-		if (errno == EIO) {
+		if (ret < 0 && errno == EIO) {
 			oa_status = get_stream_status(stream_fd);
 			continue;
 		}
@@ -1869,7 +1897,7 @@ static void test_oa_exponents(const struct drm_xe_engine_class_instance *hwe)
 
 			while ((ret = read(stream_fd, buf, buf_size)) < 0 && errno == EINTR)
 				;
-			if (errno == EIO) {
+			if (ret < 0 && errno == EIO) {
 				oa_status = get_stream_status(stream_fd);
 				continue;
 			}
@@ -2487,6 +2515,20 @@ test_oa_tlb_invalidate(const struct drm_xe_engine_class_instance *hwe)
 	igt_assert(num_reports2 > 0.95 * num_expected_reports);
 }
 
+static void
+wait_for_oa_buffer_overflow(int fd, int poll_period_us)
+{
+	char buf;
+
+	while (-1 == read(fd, &buf, 0)) {
+		if (errno == EIO &&
+		    get_stream_status(fd) & DRM_XE_OASTATUS_BUFFER_OVERFLOW)
+			return;
+
+		usleep(poll_period_us);
+	}
+}
+
 /**
  * SUBTEST: buffer-fill
  * Description: Test filling and overflow of OA buffer
@@ -2510,7 +2552,6 @@ test_buffer_fill(const struct drm_xe_engine_class_instance *hwe)
 		DRM_XE_OA_PROPERTY_OA_FORMAT, __ff(fmt),
 		DRM_XE_OA_PROPERTY_OA_PERIOD_EXPONENT, oa_exponent,
 		DRM_XE_OA_PROPERTY_OA_ENGINE_INSTANCE, hwe->engine_instance,
-		DRM_XE_OA_PROPERTY_OA_DISABLED, true,
 		DRM_XE_OA_PROPERTY_OA_BUFFER_SIZE, buffer_fill_size,
 	};
 	struct intel_xe_oa_open_prop param = {
@@ -2525,25 +2566,7 @@ test_buffer_fill(const struct drm_xe_engine_class_instance *hwe)
 	stream_fd = __perf_open(drm_fd, &param, true /* prevent_pm */);
         set_fd_flags(stream_fd, O_CLOEXEC);
 
-	/* OA buffer is disabled, we do not expect any error status */
-	oa_status = get_stream_status(stream_fd);
-	overflow_seen = oa_status & DRM_XE_OASTATUS_BUFFER_OVERFLOW;
-	igt_assert_eq(overflow_seen, 0);
-
-	do_ioctl(stream_fd, DRM_XE_OBSERVATION_IOCTL_ENABLE, 0);
-
-	errno = 0;
-	/* Read 0 bytes repeatedly until you see an EIO */
-	while (-1 == read(stream_fd, buf, 0)) {
-		if (errno == EIO) {
-			oa_status = get_stream_status(stream_fd);
-			overflow_seen = oa_status & DRM_XE_OASTATUS_BUFFER_OVERFLOW;
-			if (overflow_seen)
-				break;
-		}
-		usleep(100);
-	}
-	igt_assert(overflow_seen);
+	wait_for_oa_buffer_overflow(stream_fd, 100);
 
 	/* Make sure the buffer overflow is cleared */
 	read(stream_fd, buf, 0);
@@ -2607,7 +2630,7 @@ test_non_zero_reason(const struct drm_xe_engine_class_instance *hwe, size_t oa_b
 	       ((len = read(stream_fd, &buf[total_len], buf_size - total_len)) > 0 ||
 		(len == -1 && (errno == EINTR || errno == EIO)))) {
 		/* Assert only for default OA buffer size */
-		if (errno == EIO && !oa_buffer_size) {
+		if (len < 0 && errno == EIO && !oa_buffer_size) {
 			oa_status = get_stream_status(stream_fd);
 			igt_assert(!(oa_status & DRM_XE_OASTATUS_BUFFER_OVERFLOW));
 		}
@@ -4450,6 +4473,7 @@ static void mmap_wait_for_periodic_reports(void *oa_vaddr, uint32_t n,
 	struct intel_xe_perf_metric_set *test_set = metric_set(hwe);
 	uint64_t fmt = test_set->perf_oa_format;
 	uint32_t num_periodic_reports = 0;
+	uint32_t report_words = get_oa_format(fmt).size >> 2;
 	uint32_t *reports;
 
 	while (num_periodic_reports < n) {
@@ -4457,7 +4481,7 @@ static void mmap_wait_for_periodic_reports(void *oa_vaddr, uint32_t n,
 		num_periodic_reports = 0;
 		for (reports = (uint32_t *)oa_vaddr;
 		     reports[0] && oa_timestamp(reports, fmt) && oa_report_is_periodic(reports);
-		     reports += get_oa_format(fmt).size) {
+		     reports += report_words) {
 			num_periodic_reports++;
 		}
 	}
@@ -4534,6 +4558,60 @@ static void closed_fd_and_unmapped_access(const struct drm_xe_engine_class_insta
 	__perf_close(stream_fd);
 
 	try_invalid_access(vaddr);
+}
+
+/**
+ * SUBTEST: tail-address-wrap
+ * Description: Test tail address wrap on odd format sizes. Ensure that the
+ * format size is not a power of 2. This means that the last report will not be
+ * broken down across the OA buffer end. Instead it will be written to the
+ * beginning of the OA buffer. We will check the end of the buffer to ensure it
+ * has zeroes in it.
+ */
+static void
+test_tail_address_wrap(const struct drm_xe_engine_class_instance *hwe, size_t oa_buffer_size)
+{
+	struct intel_xe_perf_metric_set *test_set = metric_set(hwe);
+	u64 exponent = max_oa_exponent_for_period_lte(20000);
+	u64 buffer_size = oa_buffer_size ?: buffer_fill_size;
+	u64 fmt = test_set->perf_oa_format;
+	u64 properties[] = {
+		DRM_XE_OA_PROPERTY_OA_UNIT_ID, 0,
+		DRM_XE_OA_PROPERTY_SAMPLE_OA, true,
+		DRM_XE_OA_PROPERTY_OA_METRIC_SET, test_set->perf_oa_metrics_set,
+		DRM_XE_OA_PROPERTY_OA_FORMAT, __ff(fmt),
+		DRM_XE_OA_PROPERTY_OA_PERIOD_EXPONENT, exponent,
+		DRM_XE_OA_PROPERTY_OA_ENGINE_INSTANCE, hwe->engine_instance,
+		DRM_XE_OA_PROPERTY_OA_BUFFER_SIZE, buffer_size,
+	};
+	struct intel_xe_oa_open_prop param = {
+		.num_properties = ARRAY_SIZE(properties) / 2,
+		.properties_ptr = to_user_pointer(properties),
+	};
+	u32 fmt_size = get_oa_format(fmt).size;
+	u32 zero_size = buffer_size % fmt_size;
+	u32 *zero_area, *buffer_end, *buffer_start;
+
+	igt_require(zero_size);
+
+	stream_fd = __perf_open(drm_fd, &param, false);
+	set_fd_flags(stream_fd, O_CLOEXEC);
+
+	wait_for_oa_buffer_overflow(stream_fd, 100);
+
+	buffer_start = mmap(0, buffer_size, PROT_READ, MAP_PRIVATE, stream_fd, 0);
+	igt_assert(buffer_start);
+
+	zero_area = buffer_start + (buffer_size - zero_size) / 4;
+	buffer_end = buffer_start + buffer_size / 4;
+
+	dump_report(zero_area, zero_size / 4, "zero_area");
+	while (zero_area < buffer_end)
+		igt_assert_eq(*zero_area++, 0);
+
+	munmap(buffer_start, buffer_size);
+
+	__perf_close(stream_fd);
 }
 
 /**
@@ -4868,7 +4946,39 @@ static const char *xe_engine_class_name(uint32_t engine_class)
 	igt_require_f(hwe, "no render engine\n"); \
 	igt_dynamic_f("rcs-%d", hwe->engine_instance)
 
-igt_main
+static int opt_handler(int opt, int opt_index, void *data)
+{
+	uint32_t tmp;
+
+	switch (opt) {
+	case 'b':
+		tmp = strtoul(optarg, NULL, 0);
+		if (tmp <= 20 && tmp >= 1)
+			oa_trace_buf_mb = tmp;
+
+		igt_debug("Trace buffer %d Mb\n", oa_trace_buf_mb);
+		break;
+	case 't':
+		oa_trace = true;
+		igt_debug("Trace enabled\n");
+		break;
+	default:
+		return IGT_OPT_HANDLER_ERROR;
+	}
+
+	return IGT_OPT_HANDLER_SUCCESS;
+}
+
+static const char *help_str =  "  --trace		| -t\t\tEnable ftrace\n"
+			       "  --trace_buf_size_mb	| -b\t\tSet ftrace buffer size in MB (default = 1, min = 1, max = 20)\n";
+
+static struct option long_options[] = {
+	{"trace", 0, 0, 't'},
+	{"trace_buf_size_mb", 0, 0, 'b'},
+	{ NULL, 0, 0, 0 }
+};
+
+igt_main_args("b:t", long_options, help_str, opt_handler, NULL)
 {
 	const struct sync_section {
 		const char *name;
@@ -4912,6 +5022,7 @@ igt_main
 		 */
 		igt_assert_eq(drm_fd, -1);
 
+		enable_trace_log();
 		drm_fd = drm_open_driver(DRIVER_XE);
 		xe_dev = xe_device_get(drm_fd);
 
@@ -5094,6 +5205,14 @@ igt_main
 				closed_fd_and_unmapped_access(hwe);
 	}
 
+	igt_subtest_with_dynamic("tail-address-wrap") {
+		long k = random() % num_buf_sizes;
+
+		igt_require(oau->capabilities & DRM_XE_OA_CAPS_OA_BUFFER_SIZE);
+		__for_one_hwe_in_oag_w_arg(hwe, buf_sizes[k].name)
+			test_tail_address_wrap(hwe, buf_sizes[k].size);
+	}
+
 	igt_subtest_group {
 		igt_fixture {
 			perf_init_whitelist();
@@ -5137,5 +5256,6 @@ igt_main
 			intel_xe_perf_free(intel_xe_perf);
 
 		drm_close_driver(drm_fd);
+		disable_trace_log();
 	}
 }

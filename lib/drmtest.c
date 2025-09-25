@@ -223,6 +223,7 @@ static const struct module {
 	{ DRIVER_V3D, "v3d" },
 	{ DRIVER_VC4, "vc4" },
 	{ DRIVER_VGEM, "vgem" },
+	{ DRIVER_VKMS, "vkms" },
 	{ DRIVER_VMWGFX, "vmwgfx" },
 	{ DRIVER_XE, "xe" },
 	{}
@@ -276,30 +277,14 @@ unsigned int drm_get_chipset(int fd)
 
 static const char *chipset_to_str(int chipset)
 {
-	switch (chipset) {
-	case DRIVER_INTEL:
+	if (chipset == DRIVER_INTEL)
 		return "intel";
-	case DRIVER_V3D:
-		return "v3d";
-	case DRIVER_VC4:
-		return "vc4";
-	case DRIVER_VGEM:
-		return "vgem";
-	case DRIVER_AMDGPU:
-		return "amdgpu";
-	case DRIVER_PANFROST:
-		return "panfrost";
-	case DRIVER_MSM:
-		return "msm";
-	case DRIVER_XE:
-		return "xe";
-	case DRIVER_VMWGFX:
-		return "vmwgfx";
-	case DRIVER_ANY:
-		return "any";
-	default:
-		return "other";
-	}
+
+	for (int i = 0, end = ARRAY_SIZE(modules); i < end; i++)
+		if (modules[i].bit == chipset)
+			return modules[i].module;
+
+	return chipset == DRIVER_ANY ? "any" : "other";
 }
 
 
@@ -970,4 +955,22 @@ void igt_require_vc4(int fd)
 void igt_require_xe(int fd)
 {
 	igt_require(is_xe_device(fd));
+}
+
+void igt_require_vkms(void)
+{
+	/*
+	 * Since VKMS can create and destroy virtual drivers at will, instead
+	 * look to make sure the driver is installed.
+	 */
+	struct stat s = {};
+	int ret;
+	const char *vkms_module_dir = "/sys/module/vkms";
+
+	ret = stat(vkms_module_dir, &s);
+
+	igt_require_f(ret == 0, "VKMS stat of %s returned %d (%s)\n",
+		      vkms_module_dir, ret, strerror(ret));
+	igt_require_f(S_ISDIR(s.st_mode),
+		      "VKMS stat of %s was not a directory\n", vkms_module_dir);
 }

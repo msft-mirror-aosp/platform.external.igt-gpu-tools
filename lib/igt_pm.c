@@ -321,6 +321,35 @@ void igt_pm_enable_audio_runtime_pm(void)
 		igt_debug("Failed to enable audio runtime PM! (%d)\n", -err);
 }
 
+static bool lpm_supported_by_sata_host(int host_num)
+{
+	int fd;
+	ssize_t len;
+	char buf[2];
+	char file_name[PATH_MAX];
+
+	snprintf(file_name, PATH_MAX,
+		 "/sys/class/scsi_host/host%d/link_power_management_supported",
+		 host_num);
+
+	fd = open(file_name, O_RDONLY);
+
+	/* assume LPM is supported if sysfs entry is absent. This preserves default behaviour */
+	if (fd < 0)
+		return true;
+
+	len = read(fd, buf, 1);
+
+	close(fd);
+
+	if (len <= 0)
+		return true;
+
+	buf[len] = '\0';
+
+	return buf[0] == '1';
+}
+
 static void __igt_pm_enable_sata_link_power_management(void)
 {
 	int fd, i;
@@ -372,6 +401,9 @@ static void __igt_pm_enable_sata_link_power_management(void)
 	igt_install_exit_handler(__igt_pm_sata_link_pm_exit_handler);
 
 	for (i = 0; i < __scsi_host_cnt; i++) {
+		if (!lpm_supported_by_sata_host(i))
+			continue;
+
 		snprintf(file_name, PATH_MAX,
 			 "/sys/class/scsi_host/host%d/link_power_management_policy",
 			 i);
@@ -411,6 +443,9 @@ static void __igt_pm_restore_sata_link_power_management(void)
 	file_name = malloc(PATH_MAX);
 	for (i = 0; i < __scsi_host_cnt; i++) {
 		int8_t policy;
+
+		if (!lpm_supported_by_sata_host(i))
+			continue;
 
 		if (__sata_pm_policies[i] == POLICY_UNKNOWN)
 			continue;
@@ -1486,4 +1521,25 @@ bool igt_has_pci_pm_capability(struct pci_device *pci_dev)
 	offset = find_pci_cap_offset(pci_dev, PCI_PM_CAP_ID);
 
 	return (offset > 0);
+}
+
+/**
+ * igt_pm_dpms_toggle:
+ * @output: igt output for which DPMS toggle has to be performed
+ *
+ * Toggles the DPMS state of output to OFF and then back ON.
+ */
+void igt_pm_dpms_toggle(igt_output_t *output)
+{
+	igt_require(igt_setup_runtime_pm(output->display->drm_fd));
+
+	kmstest_set_connector_dpms(output->display->drm_fd,
+				   output->config.connector,
+				   DRM_MODE_DPMS_OFF);
+	igt_require(igt_wait_for_pm_status(IGT_RUNTIME_PM_STATUS_SUSPENDED));
+
+	kmstest_set_connector_dpms(output->display->drm_fd,
+				   output->config.connector,
+				   DRM_MODE_DPMS_ON);
+	igt_assert(igt_wait_for_pm_status(IGT_RUNTIME_PM_STATUS_ACTIVE));
 }

@@ -17,9 +17,9 @@ Changing the test lists should only happen with approval from the CI
 people. If you make a new test that should be tested by CI regularly,
 ask a maintainer (see MAINTAINERS).
 
-======================
-fast-feedback.testlist
-======================
+===========================
+i915.fast-feedback.testlist
+===========================
 
 Fast-feedback contains tests that roughly tests a wide coverage of
 features in a short time. If the tests in fast-feedback report no
@@ -30,16 +30,16 @@ considered to mean that the kernel is not obviously broken.
 The results of CI runs on drm-tip and various other kernel trees can
 be found in https://intel-gfx-ci.01.org/CI/
 
-=============
-blacklist.txt
-=============
+==================
+i915.blocklist.txt
+==================
 
 This file contains regular expressions (one per line) for tests that
 are not to be executed in full suite test rounds.
 
-=======================
-blacklist-pre-merge.txt
-=======================
+============================
+i915.blocklist-pre-merge.txt
+============================
 
 This file contains regular expressions (one per line) for tests that
 are not to be executed in pre-merge full suite test rounds.

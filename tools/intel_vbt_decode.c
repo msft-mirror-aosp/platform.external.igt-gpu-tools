@@ -1,5 +1,5 @@
 /*
- * Copyright © 2006 Intel Corporation
+ * Copyright Â© 2006 Intel Corporation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -40,8 +40,8 @@
 
 #include "igt_aux.h"
 #include "igt_halffloat.h"
-#include "intel_io.h"
 #include "intel_chipset.h"
+#include "intel_io.h"
 #include "drmtest.h"
 
 /* kernel types for intel_vbt_defs.h */
@@ -53,6 +53,16 @@ typedef uint64_t u64;
 
 #define _INTEL_BIOS_PRIVATE
 #include "intel_vbt_defs.h"
+
+/* additional macros for parsing */
+#define DEVICE_TYPE_DP_DVI		0x68d6
+#define DEVICE_TYPE_DVI			0x68d2
+#define DEVICE_TYPE_MIPI		0x7cc2
+
+struct bdb_legacy_child_devices {
+	uint8_t child_dev_size;
+	uint8_t devices[0]; /* presumably 7 * 33 */
+} __attribute__ ((packed));
 
 #define YESNO(val) ((val) ? "yes" : "no")
 
@@ -1196,7 +1206,7 @@ static void dump_child_device(struct context *context,
 	       dvo_port(child->dvo_port), child->dvo_port);
 
 	printf("\t\tAIM I2C pin: 0x%02x\n", child->i2c_pin);
-	printf("\t\tAIM Slave address: 0x%02x\n", child->slave_addr);
+	printf("\t\tAIM Target address: 0x%02x\n", child->target_addr);
 	printf("\t\tDDC pin: 0x%02x\n", child->ddc_pin);
 	printf("\t\tEDID buffer ptr: 0x%02x\n", child->edid_ptr);
 	printf("\t\tDVO config: 0x%02x\n", child->dvo_cfg);
@@ -1204,7 +1214,7 @@ static void dump_child_device(struct context *context,
 	if (context->bdb->version < 155) {
 		printf("\t\tDVO2 Port: 0x%02x (%s)\n", child->dvo2_port, dvo_port(child->dvo2_port));
 		printf("\t\tI2C2 pin: 0x%02x\n", child->i2c2_pin);
-		printf("\t\tSlave2 address: 0x%02x\n", child->slave2_addr);
+		printf("\t\tTarget2 address: 0x%02x\n", child->target2_addr);
 		printf("\t\tDDC2 pin: 0x%02x\n", child->ddc2_pin);
 	} else {
 		if (context->bdb->version >= 244)
@@ -1815,10 +1825,10 @@ static void dump_lfp_data(struct context *context,
 }
 
 static const char * const lvds_config[] = {
-	[BDB_DRIVER_NO_LVDS] = "No LVDS",
-	[BDB_DRIVER_INT_LVDS] = "Integrated LVDS",
-	[BDB_DRIVER_SDVO_LVDS] = "SDVO LVDS",
-	[BDB_DRIVER_EDP] = "Embedded DisplayPort",
+	[BDB_DRIVER_FEATURE_NO_LVDS] = "No LVDS",
+	[BDB_DRIVER_FEATURE_INT_LVDS] = "Integrated LVDS",
+	[BDB_DRIVER_FEATURE_SDVO_LVDS] = "SDVO LVDS",
+	[BDB_DRIVER_FEATURE_INT_SDVO_LVDS] = "Embedded DisplayPort",
 };
 
 static const char *default_algorithm(bool algorithm)
@@ -2367,12 +2377,12 @@ static void dump_edp(struct context *context,
 
 		printf("\tPanel %d%s\n", i, panel_str(context, i));
 
-		printf("\t\tPower Sequence: T3 %d T7 %d T9 %d T10 %d T12 %d\n",
-		       edp->power_seqs[i].t3,
-		       edp->power_seqs[i].t7,
+		printf("\t\tPower Sequence: T1-T3 %d T8 %d T9 %d T10 %d T11-T12 %d\n",
+		       edp->power_seqs[i].t1_t3,
+		       edp->power_seqs[i].t8,
 		       edp->power_seqs[i].t9,
 		       edp->power_seqs[i].t10,
-		       edp->power_seqs[i].t12);
+		       edp->power_seqs[i].t11_t12);
 
 		bpp = panel_bits(edp->color_depth, i, 2);
 
@@ -2842,7 +2852,7 @@ static void dump_mipi_config(struct context *context,
 		printf("\tPanel %d%s\n", i, panel_str(context, i));
 
 		printf("\t\tGeneral Param\n");
-		printf("\t\t\t BTA disable: %s\n", config->bta ? "Disabled" : "Enabled");
+		printf("\t\t\t BTA disable: %s\n", config->bta_disable ? "Disabled" : "Enabled");
 		printf("\t\t\t Panel Rotation: %d degrees\n", config->rotation * 90);
 
 		printf("\t\t\t Video Mode Color Format: ");
@@ -2859,16 +2869,16 @@ static void dump_mipi_config(struct context *context,
 		printf("\t\t\t PPS GPIO Pins: %s \n",
 		       config->pwm_blc ? "Using SOC" : "Using PMIC");
 		printf("\t\t\t CABC Support: %s\n",
-		       config->cabc ? "supported" : "not supported");
+		       config->cabc_supported ? "supported" : "not supported");
 		printf("\t\t\t Mode: %s\n",
-		       config->cmd_mode ? "COMMAND" : "VIDEO");
+		       config->is_cmd_mode ? "COMMAND" : "VIDEO");
 		printf("\t\t\t Video transfer mode: %s (0x%x)\n",
-		       config->vtm == 1 ? "non-burst with sync pulse" :
-		       config->vtm == 2 ? "non-burst with sync events" :
-		       config->vtm == 3 ? "burst" : "<unknown>",
-		       config->vtm);
+		       config->video_transfer_mode == 1 ? "non-burst with sync pulse" :
+		       config->video_transfer_mode == 2 ? "non-burst with sync events" :
+		       config->video_transfer_mode == 3 ? "burst" : "<unknown>",
+		       config->video_transfer_mode);
 		printf("\t\t\t Dithering: %s\n",
-		       config->dithering ? "done in Display Controller" : "done in Panel Controller");
+		       config->enable_dithering ? "done in Display Controller" : "done in Panel Controller");
 
 		printf("\t\tPort Desc\n");
 		printf("\t\t\t Pixel overlap: %d\n", config->pixel_overlap);
@@ -2883,9 +2893,9 @@ static void dump_mipi_config(struct context *context,
 
 		printf("\t\tDphy Flags\n");
 		printf("\t\t\t Clock Stop: %s\n",
-		       config->clk_stop ? "ENABLED" : "DISABLED");
+		       config->enable_clk_stop ? "ENABLED" : "DISABLED");
 		printf("\t\t\t EOT disabled: %s\n\n",
-		       config->eot_disabled ? "EOT not to be sent" : "EOT to be sent");
+		       config->eot_pkt_disabled ? "EOT not to be sent" : "EOT to be sent");
 
 		printf("\t\tHSTxTimeOut: 0x%x\n", config->hs_tx_timeout);
 		printf("\t\tLPRXTimeOut: 0x%x\n", config->lp_rx_timeout);

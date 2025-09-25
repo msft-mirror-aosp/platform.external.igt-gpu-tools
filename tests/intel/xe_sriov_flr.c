@@ -21,7 +21,7 @@
  * TEST: xe_sriov_flr
  * Category: Core
  * Mega feature: SR-IOV
- * Sub-category: Reset tests
+ * Sub-category: SR-IOV Reset tests
  * Functionality: FLR
  * Description: Examine behavior of SR-IOV VF FLR
  *
@@ -596,8 +596,9 @@ static void ggtt_subcheck_init(struct subcheck_data *data)
 {
 	struct ggtt_data *gdata = (struct ggtt_data *)data;
 
-	if (xe_is_media_gt(data->pf_fd, data->gt)) {
-		set_skip_reason(data, "GGTT unavailable on media GT\n");
+	if (!xe_is_main_gt(data->pf_fd, data->gt)) {
+		set_skip_reason(data, "GGTT provisioning not exposed on GT%d (non-MAIN)\n",
+				data->gt);
 		return;
 	}
 
@@ -813,6 +814,9 @@ static int populate_vf_lmem_sizes(struct subcheck_data *data)
 	igt_assert(ldata->vf_lmem_size);
 
 	xe_for_each_gt(data->pf_fd, gt) {
+		if (!xe_is_main_gt(data->pf_fd, gt))
+			continue;
+
 		ret = xe_sriov_pf_debugfs_read_provisioned_ranges(data->pf_fd,
 								  XE_SRIOV_SHARED_RES_LMEM,
 								  gt, &ranges, &nr_ranges);
@@ -1008,13 +1012,13 @@ static void clear_tests(int pf_fd, int num_vfs, flr_exec_strategy exec_strategy)
 	};
 	const unsigned int num_checks = num_gts + 3;
 	struct subcheck checks[num_checks];
-	int i;
+	int i = 0, gt_id;
 
 	memset(mmio, 0, sizeof(mmio));
 
-	for (i = 0; i < num_gts; ++i) {
+	xe_for_each_gt(pf_fd, gt_id) {
 		gdata[i] = (struct ggtt_data){
-			.base = { .pf_fd = pf_fd, .num_vfs = num_vfs, .gt = i },
+			.base = { .pf_fd = pf_fd, .num_vfs = num_vfs, .gt = gt_id },
 			.mmio = &xemmio
 		};
 		checks[i] = (struct subcheck){
@@ -1025,6 +1029,7 @@ static void clear_tests(int pf_fd, int num_vfs, flr_exec_strategy exec_strategy)
 			.verify_vf = ggtt_subcheck_verify_vf,
 			.cleanup = ggtt_subcheck_cleanup
 		};
+		i++;
 	}
 	checks[i++] = (struct subcheck) {
 		.data = (struct subcheck_data *)&ldata,

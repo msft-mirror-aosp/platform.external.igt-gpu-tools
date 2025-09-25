@@ -46,6 +46,7 @@
 #include "igt_core.h"
 #include "xe_drm.h"
 #include "xe/xe_ioctl.h"
+#include "xe/xe_query.h"
 
 #define OBSERVATION_PARANOID	"/proc/sys/dev/xe/observation_paranoid"
 
@@ -54,7 +55,6 @@
 #define MAX_XECORES		64
 #define NUM_ITERS_GPGPU_FILL	100
 #define DEFAULT_NUM_REPORTS	1
-#define DEFAULT_SAMPLE_RATE	(251 * 4)
 #define DEFAULT_USER_BUF_SIZE	(64 * 512 * 1024)
 
 #define WIDTH		64
@@ -346,17 +346,17 @@ static void test_invalid_arguments(int drm_fd, uint8_t gt_id, uint32_t rate, uin
 
 static void test_invalid_gt_id(int fd)
 {
-	test_invalid_arguments(fd, 255, DEFAULT_SAMPLE_RATE, DEFAULT_NUM_REPORTS);
+	test_invalid_arguments(fd, 255, p_rate, DEFAULT_NUM_REPORTS);
 }
 
 static void test_invalid_sampling_rate(int fd)
 {
-	test_invalid_arguments(fd, 0, 251 * 10, DEFAULT_NUM_REPORTS);
+	test_invalid_arguments(fd, 0, p_rate * 10, DEFAULT_NUM_REPORTS);
 }
 
 static void test_invalid_event_report_count(int fd)
 {
-	test_invalid_arguments(fd, 0, DEFAULT_SAMPLE_RATE,
+	test_invalid_arguments(fd, 0, p_rate,
 			       NUM_DATA_ROWS(512 * 1024) * MAX_XECORES + 1);
 }
 
@@ -387,7 +387,7 @@ static void test_non_privileged_access(int drm_fd)
 	igt_fork(child, 1) {
 		uint64_t properties[] = {
 			DRM_XE_EU_STALL_PROP_GT_ID, p_gt_id,
-			DRM_XE_EU_STALL_PROP_SAMPLE_RATE, DEFAULT_SAMPLE_RATE,
+			DRM_XE_EU_STALL_PROP_SAMPLE_RATE, p_rate,
 			DRM_XE_EU_STALL_PROP_WAIT_NUM_REPORTS, p_num_reports,
 		};
 
@@ -409,7 +409,7 @@ static void test_non_privileged_access(int drm_fd)
 	igt_fork(child, 1) {
 		uint64_t properties[] = {
 			DRM_XE_EU_STALL_PROP_GT_ID, p_gt_id,
-			DRM_XE_EU_STALL_PROP_SAMPLE_RATE, DEFAULT_SAMPLE_RATE,
+			DRM_XE_EU_STALL_PROP_SAMPLE_RATE, p_rate,
 			DRM_XE_EU_STALL_PROP_WAIT_NUM_REPORTS, p_num_reports,
 		};
 
@@ -647,15 +647,10 @@ static struct option long_options[] = {
 igt_main_args("e:g:o:r:u:w:", long_options, help_str, opt_handler, NULL)
 {
 	bool blocking_read = true;
-	int drm_fd, ret;
+	struct xe_device *xe_dev;
+	int drm_fd;
 	uint32_t devid;
 	struct stat sb;
-	struct drm_xe_device_query query = {
-		.extensions = 0,
-		.query = DRM_XE_DEVICE_QUERY_EU_STALL,
-		.size = 0,
-		.data = 0,
-	};
 
 	igt_fixture {
 		drm_fd = drm_open_driver(DRIVER_XE);
@@ -664,21 +659,12 @@ igt_main_args("e:g:o:r:u:w:", long_options, help_str, opt_handler, NULL)
 
 		igt_require_f(igt_get_gpgpu_fillfunc(devid), "no gpgpu-fill function\n");
 		igt_require_f(!stat(OBSERVATION_PARANOID, &sb), "no observation_paranoid file\n");
+		xe_dev = xe_device_get(drm_fd);
+		igt_require_f(xe_dev->eu_stall, "EU stall monitoring is not available/supported\n");
 
-		ret = igt_ioctl(drm_fd, DRM_IOCTL_XE_DEVICE_QUERY, &query);
-		igt_skip_on_f(ret == -1 && errno == ENODEV,
-			      "EU stall monitoring is not available on this platform\n");
-		igt_skip_on_f(ret == -1 && errno == EINVAL,
-			      "EU stall monitoring is not supported in the driver\n");
-		igt_assert_neq(query.size, 0);
-
-		query_eu_stall_data = malloc(query.size);
-		igt_assert(query_eu_stall_data);
-
-		query.data = to_user_pointer(query_eu_stall_data);
-		igt_assert_eq(igt_ioctl(drm_fd, DRM_IOCTL_XE_DEVICE_QUERY, &query), 0);
-
+		query_eu_stall_data = xe_dev->eu_stall;
 		igt_assert(query_eu_stall_data->num_sampling_rates > 0);
+		/* If the user doesn't pass a sampling rate, use a mid sampling rate */
 		if (p_rate == 0)
 			p_rate = query_eu_stall_data->sampling_rates[0];
 

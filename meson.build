@@ -1,5 +1,5 @@
 project('igt-gpu-tools', 'c',
-	version : '2.0',
+	version : '2.1',
         default_options: [
           'warning_level=2',
           'c_std=gnu11',
@@ -171,8 +171,8 @@ xmlrpc_client = dependency('xmlrpc_client', required : false)
 
 xmlrpc_cmd = find_program('xmlrpc-c-config', required : false)
 if not xmlrpc.found() and xmlrpc_cmd.found()
-	libs_cmd = run_command(xmlrpc_cmd, 'client', '--libs')
-	cflags_cmd = run_command(xmlrpc_cmd, 'client', '--cflags')
+	libs_cmd = run_command(xmlrpc_cmd, 'client', '--libs', check: false)
+	cflags_cmd = run_command(xmlrpc_cmd, 'client', '--cflags', check: false)
 
 	if libs_cmd.returncode() == 0 and cflags_cmd.returncode() == 0
 		xmlrpc = declare_dependency(compile_args: cflags_cmd.stdout().strip().split(),
@@ -290,10 +290,12 @@ msmdir = join_paths(libexecdir, 'msm')
 panfrostdir = join_paths(libexecdir, 'panfrost')
 v3ddir = join_paths(libexecdir, 'v3d')
 vc4dir = join_paths(libexecdir, 'vc4')
+vkmsdir = join_paths(libexecdir, 'vkms')
 vmwgfxdir = join_paths(libexecdir, 'vmwgfx')
 mandir = get_option('mandir')
 pkgconfigdir = join_paths(libdir, 'pkgconfig')
 python3 = find_program('python3', required : true)
+imgdir = join_paths(build_root, 'data')
 
 if get_option('use_rpath')
 	# Set up runpath for the test executables towards libigt.so.
@@ -351,6 +353,12 @@ if get_option('use_rpath')
 	endforeach
 	vc4_rpathdir = join_paths(vc4_rpathdir, libdir)
 
+	vkms_rpathdir = '$ORIGIN'
+	foreach p : vkmsdir.split('/')
+		vkms_rpathdir = join_paths(vkms_rpathdir, '..')
+	endforeach
+	vkms_rpathdir = join_paths(vkms_rpathdir, libdir)
+
 	vmwgfx_rpathdir = '$ORIGIN'
 	foreach p : vmwgfxdir.split('/')
 		vmwgfx_rpathdir = join_paths(vmwgfx_rpathdir, '..')
@@ -364,6 +372,7 @@ else
 	panfrost_rpathdir = ''
 	v3d_rpathdir = ''
 	vc4_rpathdir = ''
+	vkms_rpathdir = ''
 	vmwgfx_rpathdir = ''
 endif
 
@@ -389,6 +398,7 @@ endif
 subdir('overlay')
 subdir('man')
 subdir('docs')
+subdir('data')
 
 message('Build options')
 message('=============')

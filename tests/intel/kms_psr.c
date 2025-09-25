@@ -719,6 +719,12 @@ static void test_setup(data_t *data)
 
 	igt_require_f(data->output,
 		      "No available output found\n");
+
+	/* FBC disabled: Wa_16023588340 */
+	igt_skip_on_f(data->op_fbc_mode == FBC_ENABLED &&
+		      intel_is_fbc_disabled_by_wa(data->drm_fd),
+		      "WA has disabled FBC on BMG\n");
+
 	if (data->op_fbc_mode == FBC_ENABLED)
 		igt_require_f(data->fbc_flag,
 			      "Can't test FBC with PSR\n");
@@ -893,7 +899,8 @@ igt_main
 				igt_subtest_with_dynamic_f("%s%scursor-%s", append_fbc_subtest[y],
 					      append_subtest_name[z], op_str(op)) {
 					igt_skip_on(is_xe_device(data.drm_fd) &&
-						    (op == MMAP_CPU || op == MMAP_GTT));
+						    (op == MMAP_CPU || op == MMAP_GTT ||
+						     op == BLT || op == RENDER));
 					for_each_connected_output(&data.display, output) {
 						if (!psr_sink_support(data.drm_fd, data.debugfs_fd,
 								      data.op_psr_mode, output))

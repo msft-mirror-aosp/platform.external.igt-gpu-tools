@@ -36,11 +36,20 @@ struct xe_device {
 	/** @gt_list: gt info */
 	struct drm_xe_query_gt_list *gt_list;
 
+	/** @gt_mask: bitmask of GT IDs */
+	uint64_t gt_mask;
+
+	/** @tile_mask: bitmask of Tile IDs */
+	uint64_t tile_mask;
+
 	/** @memory_regions: bitmask of all memory regions */
 	uint64_t memory_regions;
 
 	/** @engines: hardware engines */
 	struct drm_xe_query_engines *engines;
+
+	/** @eu_stall: information about EU stall data */
+	struct drm_xe_query_eu_stall *eu_stall;
 
 	/** @mem_regions: regions memory information and usage */
 	struct drm_xe_query_mem_regions *mem_regions;
@@ -74,8 +83,9 @@ struct xe_device {
 	for (__class = 0; __class < DRM_XE_ENGINE_CLASS_COMPUTE + 1; \
 	     ++__class)
 #define xe_for_each_gt(__fd, __gt) \
-	for (__gt = 0; __gt < xe_number_gt(__fd); ++__gt)
-
+	for (uint64_t igt_unique(__mask) = xe_device_get(__fd)->gt_mask; \
+	     __gt = ffsll(igt_unique(__mask)) - 1, igt_unique(__mask) != 0; \
+	     igt_unique(__mask) &= ~(1ull << __gt))
 #define xe_for_each_mem_region(__fd, __memreg, __r) \
 	for (uint64_t igt_unique(__i) = 0; igt_unique(__i) < igt_fls(__memreg); igt_unique(__i)++) \
 		for_if(__r = (__memreg & (1ull << igt_unique(__i))))
@@ -90,8 +100,11 @@ struct xe_device {
 #define XE_MAX_ENGINE_INSTANCE	9
 
 unsigned int xe_number_gt(int fd);
+unsigned int xe_dev_max_gt(int fd);
 uint64_t all_memory_regions(int fd);
 uint64_t system_memory(int fd);
+const struct drm_xe_gt *drm_xe_get_gt(struct xe_device *xe_dev, int gt_id);
+int xe_get_tile(struct xe_device *xe_dev, int gt_id);
 uint64_t vram_memory(int fd, int gt);
 uint64_t vram_if_possible(int fd, int gt);
 struct drm_xe_engine *xe_engines(int fd);
@@ -118,7 +131,9 @@ const char *xe_engine_class_short_string(uint32_t engine_class);
 bool xe_has_engine_class(int fd, uint16_t engine_class);
 struct drm_xe_engine *xe_find_engine_by_class(int fd, uint16_t engine_class);
 bool xe_has_media_gt(int fd);
+uint16_t xe_gt_type(int fd, int gt);
 bool xe_is_media_gt(int fd, int gt);
+bool xe_is_main_gt(int fd, int gt);
 uint16_t xe_gt_get_tile_id(int fd, int gt);
 uint32_t *xe_hwconfig_lookup_value(int fd, enum intel_hwconfig attribute, uint32_t *len);
 

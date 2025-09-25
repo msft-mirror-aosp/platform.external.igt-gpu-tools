@@ -72,6 +72,15 @@
  * SUBTEST: engine-activity-render-node-load-idle
  * Description: Test to validate engine activity on render node by running workload and trailing idle
  *
+ * SUBTEST: engine-activity-accuracy-2
+ * Description: Test to validate accuracy of engine activity for 2% by running workload
+ *
+ * SUBTEST: engine-activity-accuracy-50
+ * Description: Test to validate accuracy of engine activity for 50% by running workload
+ *
+ * SUBTEST: engine-activity-accuracy-90
+ * Description: Test to validate accuracy of engine activity for 90% by running workload
+ *
  * SUBTEST: all-fn-engine-activity-load
  * Description: Test to validate engine activity by running load on all functions simultaneously
  *
@@ -106,12 +115,24 @@ const double tolerance = 0.1;
 static char xe_device[NAME_MAX];
 static bool autoprobe;
 static int total_exec_quantum;
+static bool has_engine_active_ticks;
 
 #define test_each_engine(test, fd, hwe) \
 	igt_subtest_with_dynamic(test) \
 		xe_for_each_engine(fd, hwe) \
 			igt_dynamic_f("engine-%s%d", xe_engine_class_string(hwe->engine_class), \
 				      hwe->engine_instance)
+
+static bool has_event(const char *device, const char *event)
+{
+	char buf[512];
+
+	snprintf(buf, sizeof(buf),
+		 "/sys/bus/event_source/devices/%s/events/%s",
+		 device,
+		 event);
+	return (!!access(buf, F_OK));
+}
 
 static int open_pmu(int xe, uint64_t config)
 {
@@ -190,6 +211,8 @@ static uint64_t get_event_config(unsigned int gt, struct drm_xe_engine_class_ins
 {
 	uint64_t pmu_config = 0;
 	int ret;
+
+	igt_skip_on(has_engine_active_ticks);
 
 	ret = perf_event_config(xe_device, event, &pmu_config);
 	igt_assert(ret >= 0);
@@ -321,7 +344,8 @@ static void engine_activity_load_single(int fd, int num_engines,
 		flag[engine_idx] = TEST_IDLE;
 
 		if (eci_->engine_class == eci->engine_class &&
-		    eci_->engine_instance == eci->engine_instance)
+		    eci_->engine_instance == eci->engine_instance &&
+		    eci_->gt_id == eci->gt_id)
 			flag[engine_idx] = TEST_LOAD;
 
 		config = get_event_config(eci_->gt_id, eci_, "engine-active-ticks");
@@ -379,7 +403,8 @@ static void engine_activity_load_most(int fd, int num_engines, struct drm_xe_eng
 		flag[engine_idx] = TEST_LOAD;
 
 		if (eci_->engine_class == eci->engine_class &&
-		    eci_->engine_instance == eci->engine_instance) {
+		    eci_->engine_instance == eci->engine_instance &&
+		    eci_->gt_id == eci->gt_id) {
 			flag[engine_idx] = TEST_IDLE;
 			cork[engine_idx] = NULL;
 		} else {
@@ -464,6 +489,140 @@ static void engine_activity_load_all(int fd, int num_engines, unsigned int flags
 	put_ahnd(ahnd);
 
 	check_all_engines(num_engines, flag, before, after);
+}
+
+#define assert_within(x, ref, tol) \
+	igt_assert_f((double)(x) <= ((double)(ref) + (tol)) && \
+		     (double)(x) >= ((double)(ref) - (tol)), \
+		     "%f not within +%f/-%f of %f! ('%s' vs '%s')\n", \
+		     (double)(x), (double)(tol), (double)(tol), \
+		     (double)(ref), #x, #ref)
+
+static void accuracy(int fd, struct drm_xe_engine_class_instance *eci,
+		     unsigned long target_percentage, unsigned long target_iter)
+{
+	unsigned long active_us, cycle_us, calibration_us, idle_us, test_us;
+	const unsigned long min_test_us = 1e6;
+	uint64_t config, before[2], after[2];
+	int link[2], pmu_fd[2];
+	double engine_activity, expected;
+
+	cycle_us = min_test_us / target_iter;
+	active_us = cycle_us * target_percentage / 100;
+	idle_us = cycle_us - active_us;
+	test_us = cycle_us * target_iter;
+	calibration_us = test_us / 2;
+
+	while (idle_us < 2500 || active_us < 2500) {
+		active_us *= 2;
+		idle_us *= 2;
+	}
+
+	igt_info("calibration=%lums, test=%lums, cycle=%lums; ratio=%.2f%% (%luus/%luus)\n",
+		 calibration_us / 1000, test_us / 1000, cycle_us / 1000,
+		 ((double)active_us / cycle_us) * 100.0, active_us, idle_us);
+
+	igt_assert(pipe(link) == 0);
+
+	igt_fork(child, 1) {
+		const unsigned int timeout[] = { calibration_us * 1000, test_us * 1000 };
+		uint64_t total_active_ns = 0, total_ns = 0;
+		igt_spin_t *spin;
+		uint64_t vm, ahnd;
+
+		vm = xe_vm_create(fd, 0, 0);
+		intel_allocator_init();
+		ahnd = intel_allocator_open(fd, 0, INTEL_ALLOCATOR_RELOC);
+
+		for (int pass = 0; pass < ARRAY_SIZE(timeout); pass++) {
+			unsigned int target_idle_us = idle_us;
+			struct timespec start = { };
+			uint64_t pass_active_ns = 0;
+			unsigned long pass_ns = 0;
+			double avg = 0.0, var = 0.0;
+			int n = 0;
+
+			igt_nsec_elapsed(&start);
+
+			while (pass_ns < timeout[pass]) {
+				unsigned long loop_ns, loop_active_ns, loop_idle_ns, now;
+				double err, prev_avg, cur_val;
+
+				/* idle sleep */
+				igt_measured_usleep(target_idle_us);
+
+				/* start spinner */
+				spin = igt_spin_new(fd, .ahnd = ahnd, .vm = vm, .hwe = eci);
+				loop_idle_ns = igt_nsec_elapsed(&start);
+				igt_measured_usleep(active_us);
+				igt_spin_free(fd, spin);
+
+				now = igt_nsec_elapsed(&start);
+				loop_active_ns = now - loop_idle_ns;
+				loop_ns = now - pass_ns;
+				pass_ns = now;
+
+				pass_active_ns += loop_active_ns;
+				total_active_ns += loop_active_ns;
+				total_ns += loop_ns;
+
+				/* Re-calibrate according to err */
+				err = (double)total_active_ns / total_ns -
+				      (double)target_percentage / 100.0;
+
+				target_idle_us = (double)target_idle_us * (1.0 + err);
+
+				/* Running average and variance for debug. */
+				cur_val = 100.0 * total_active_ns / total_ns;
+				prev_avg = avg;
+				avg += (cur_val - avg) / ++n;
+				var += (cur_val - avg) * (cur_val - prev_avg);
+			}
+
+			expected = (double)pass_active_ns / pass_ns;
+
+			igt_info("%u: %d cycles, busy %" PRIu64 " us, idle %" PRIu64 " us -> %.2f%% "
+				 "(target: %lu%%; average = %.2f ± %.3f%%)\n",
+				 pass, n, pass_active_ns / 1000, (pass_ns - pass_active_ns) / 1000,
+				 100 * expected, target_percentage, avg, sqrt(var / n));
+
+			igt_assert_eq(write(link[1], &expected, sizeof(expected)),
+				      sizeof(expected));
+		}
+
+		xe_vm_destroy(fd, vm);
+		put_ahnd(ahnd);
+	}
+
+	config = get_event_config(eci->gt_id, eci, "engine-active-ticks");
+	pmu_fd[0] = open_group(fd, config, -1);
+
+	config = get_event_config(eci->gt_id, eci, "engine-total-ticks");
+	pmu_fd[1] = open_group(fd, config, pmu_fd[0]);
+
+	/* wait for calibration cycle to complete */
+	igt_assert_eq(read(link[0], &expected, sizeof(expected)),
+		      sizeof(expected));
+
+	pmu_read_multi(pmu_fd[0], 2, before);
+	igt_assert_eq(read(link[0], &expected, sizeof(expected)),
+		      sizeof(expected));
+	pmu_read_multi(pmu_fd[0], 2, after);
+
+	close(pmu_fd[0]);
+	close(pmu_fd[1]);
+
+	close(link[1]);
+	close(link[0]);
+
+	igt_waitchildren();
+
+	engine_activity = (double)(after[0] - before[0]) / (after[1] - before[1]);
+
+	igt_info("error=%.2f%% (%.2f%% vs %.2f%%)\n",
+		 (engine_activity - expected) * 100, 100 * engine_activity, 100 * expected);
+
+	assert_within(100.0 * engine_activity, 100.0 * expected, 3);
 }
 
 static void engine_activity_all_fn(int fd, struct drm_xe_engine_class_instance *eci, int num_fns)
@@ -905,6 +1064,7 @@ igt_main
 		fd = drm_open_driver(DRIVER_XE);
 		xe_perf_device(fd, xe_device, sizeof(xe_device));
 		num_engines = xe_number_engines(fd);
+		has_engine_active_ticks = has_event(xe_device, "engine-active-ticks");
 	}
 
 	igt_describe("Validate PMU gt-c6 residency counters when idle");
@@ -967,6 +1127,20 @@ igt_main
 		engine_activity_load_all(fd, num_engines, TEST_LOAD);
 		igt_system_suspend_autoresume(SUSPEND_STATE_FREEZE, SUSPEND_TEST_NONE);
 		engine_activity_load_all(fd, num_engines, TEST_LOAD);
+	}
+
+	igt_subtest_group {
+		const unsigned int percent[] = { 2, 50, 90 };
+
+		for (unsigned int i = 0; i < ARRAY_SIZE(percent); i++) {
+			char test_name[NAME_MAX];
+
+			igt_describe_f("Validate accuracy of engine activity for %u%%"
+				       " workload", percent[i]);
+			snprintf(test_name, NAME_MAX, "engine-activity-accuracy-%u", percent[i]);
+			test_each_engine(test_name, fd, eci)
+				accuracy(fd, eci, percent[i], 10);
+		}
 	}
 
 	igt_describe("Validate engine activity when PMU is opened after load");
