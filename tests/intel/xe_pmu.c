@@ -40,12 +40,37 @@
  * Description: Test to validate engine activity by running workload on all engines
  *		simultaneously and trailing idle
  *
+ * SUBTEST: engine-activity-gt-reset-idle
+ * Description: Test to validate engine activity is idle after gt reset
+ *
+ * SUBTEST: engine-activity-gt-reset
+ * Description: Test to validate engine activity on all engines before and after gt reset
+ *
+ * SUBTEST: engine-activity-suspend
+ * Description: Test to validate engine activity on all engines before and after s2idle
+ *
+ * SUBTEST: engine-activity-multi-client
+ * Description: Test to validate engine activity with multiple PMU clients and check that
+ *		they do not interfere with each other
+ *
+ * SUBTEST: engine-activity-after-load-start
+ * Description: Validates engine activity when PMU is opened after load started
+ *
  * SUBTEST: engine-activity-most-load
  * Description: Test to validate engine activity by running workload on all engines except one
  *
  * SUBTEST: engine-activity-most-load-idle
  * Description: Test to validate engine activity by running workload and trailing idle on all engines
  * 		except one
+ *
+ * SUBTEST: engine-activity-render-node-idle
+ * Description: Test to validate engine activity on render node shows no load when idle
+ *
+ * SUBTEST: engine-activity-render-node-load
+ * Description: Test to validate engine activity on render node by running workload
+ *
+ * SUBTEST: engine-activity-render-node-load-idle
+ * Description: Test to validate engine activity on render node by running workload and trailing idle
  *
  * SUBTEST: all-fn-engine-activity-load
  * Description: Test to validate engine activity by running load on all functions simultaneously
@@ -75,6 +100,7 @@
 #define TEST_LOAD		BIT(0)
 #define TEST_TRAILING_IDLE	BIT(1)
 #define TEST_IDLE		BIT(2)
+#define TEST_GT_RESET		BIT(3)
 
 const double tolerance = 0.1;
 static char xe_device[NAME_MAX];
@@ -238,7 +264,10 @@ static void engine_activity(int fd, struct drm_xe_engine_class_instance *eci, un
 		end_cork(fd, cork);
 	pmu_read_multi(pmu_fd[0], 2, after);
 
-	end_cork(fd, cork);
+	if (flags & TEST_GT_RESET)
+		xe_force_gt_reset_sync(fd, eci->gt_id);
+	else
+		end_cork(fd, cork);
 
 	engine_active_ticks = after[0] - before[0];
 	engine_total_ticks = after[1] - before[1];
@@ -248,6 +277,24 @@ static void engine_activity(int fd, struct drm_xe_engine_class_instance *eci, un
 	igt_debug("Engine total ticks: after %" PRIu64 ", before %" PRIu64 " delta %" PRIu64 "\n", after[1], before[1],
 		  engine_total_ticks);
 
+	if (flags & TEST_LOAD)
+		assert_within_epsilon(engine_active_ticks, engine_total_ticks, tolerance);
+	else
+		igt_assert(!engine_active_ticks);
+
+	if (flags & TEST_GT_RESET) {
+		pmu_read_multi(pmu_fd[0], 2, before);
+		usleep(SLEEP_DURATION * USEC_PER_SEC);
+		pmu_read_multi(pmu_fd[0], 2, after);
+
+		engine_active_ticks = after[0] - before[0];
+
+		igt_debug("Engine active ticks after gt reset:  after %ld, before %ld delta %ld\n",
+			  after[0], before[0], engine_active_ticks);
+
+		igt_assert(!engine_active_ticks);
+	}
+
 	if (cork)
 		xe_cork_destroy(fd, cork);
 
@@ -255,11 +302,6 @@ static void engine_activity(int fd, struct drm_xe_engine_class_instance *eci, un
 
 	close(pmu_fd[0]);
 	close(pmu_fd[1]);
-
-	if (flags & TEST_LOAD)
-		assert_within_epsilon(engine_active_ticks, engine_total_ticks, tolerance);
-	else
-		igt_assert(!engine_active_ticks);
 }
 
 static void engine_activity_load_single(int fd, int num_engines,
@@ -554,6 +596,102 @@ static void engine_activity_fn(int fd, struct drm_xe_engine_class_instance *eci,
 		assert_within_epsilon(busy_percent, exec_quantum_ratio, tolerance);
 }
 
+static void engine_activity_load_start(int fd, struct drm_xe_engine_class_instance *eci)
+{
+	uint64_t ahnd, config, engine_active_ticks, engine_total_ticks, before[2], after[2];
+	struct xe_cork *cork = NULL;
+	uint32_t vm;
+	int pmu_fd[2];
+
+	vm = xe_vm_create(fd, 0, 0);
+	ahnd = intel_allocator_open(fd, 0, INTEL_ALLOCATOR_RELOC);
+	cork = xe_cork_create_opts(fd, eci, vm, 1, 1, .ahnd = ahnd);
+	xe_cork_sync_start(fd, cork);
+
+	config = get_event_config(eci->gt_id, eci, "engine-active-ticks");
+	pmu_fd[0] = open_group(fd, config, -1);
+
+	config = get_event_config(eci->gt_id, eci, "engine-total-ticks");
+	pmu_fd[1] = open_group(fd, config, pmu_fd[0]);
+
+	pmu_read_multi(pmu_fd[0], 2, before);
+	usleep(SLEEP_DURATION * USEC_PER_SEC);
+	pmu_read_multi(pmu_fd[0], 2, after);
+	end_cork(fd, cork);
+
+	engine_active_ticks = after[0] - before[0];
+	engine_total_ticks = after[1] - before[1];
+
+	igt_debug("Engine active ticks:  after %ld, before %ld delta %ld\n", after[0], before[0],
+		  engine_active_ticks);
+	igt_debug("Engine total ticks: after %ld, before %ld delta %ld\n", after[1], before[1],
+		  engine_total_ticks);
+
+	xe_cork_destroy(fd, cork);
+	xe_vm_destroy(fd, vm);
+	put_ahnd(ahnd);
+	close(pmu_fd[0]);
+	close(pmu_fd[1]);
+
+	assert_within_epsilon(engine_active_ticks, engine_total_ticks, tolerance);
+}
+
+static void engine_activity_multi_client(int fd, struct drm_xe_engine_class_instance *eci)
+{
+#define NUM_CLIENTS 2
+	struct pmu_client {
+		uint64_t before[2];
+		uint64_t after[2];
+		int pmu_fd[2];
+	} client[NUM_CLIENTS];
+	uint64_t ahnd, config, engine_active_ticks, engine_total_ticks;
+	struct xe_cork *cork = NULL;
+	uint32_t vm;
+	int i = 0;
+
+	vm = xe_vm_create(fd, 0, 0);
+	ahnd = intel_allocator_open(fd, 0, INTEL_ALLOCATOR_RELOC);
+
+	for (i = 0; i < NUM_CLIENTS; i++) {
+		config = get_event_config(eci->gt_id, eci, "engine-active-ticks");
+		client[i].pmu_fd[0] = open_group(fd, config, -1);
+		config = get_event_config(eci->gt_id, eci, "engine-total-ticks");
+		client[i].pmu_fd[1] = open_group(fd, config, client[i].pmu_fd[0]);
+	}
+
+	cork = xe_cork_create_opts(fd, eci, vm, 1, 1, .ahnd = ahnd);
+	xe_cork_sync_start(fd, cork);
+
+	for (i = 0; i < NUM_CLIENTS; i++)
+		pmu_read_multi(client[i].pmu_fd[0], 2, client[i].before);
+
+	usleep(SLEEP_DURATION * USEC_PER_SEC);
+
+	for (i = 0; i < NUM_CLIENTS; i++)
+		pmu_read_multi(client[i].pmu_fd[0], 2, client[i].after);
+
+	end_cork(fd, cork);
+	xe_cork_destroy(fd, cork);
+	xe_vm_destroy(fd, vm);
+	put_ahnd(ahnd);
+
+	for (i = 0; i < NUM_CLIENTS; i++) {
+		engine_active_ticks = client[i].after[0] - client[i].before[0];
+		engine_total_ticks = client[i].after[1] - client[i].before[1];
+
+		igt_debug("Client %d: Engine active ticks:  after %ld, before %ld delta %ld\n",
+			  i + 1, client[i].after[0], client[i].before[0], engine_active_ticks);
+
+		igt_debug("Client %d Engine total ticks: after %ld, before %ld delta %ld\n",
+			  i + 1, client[i].after[1], client[i].before[1], engine_total_ticks);
+
+		close(client[i].pmu_fd[0]);
+		close(client[i].pmu_fd[1]);
+
+		assert_within_epsilon(engine_active_ticks, engine_active_ticks, tolerance);
+	}
+}
+
 static void test_gt_c6_idle(int xe, unsigned int gt)
 {
 	int pmu_fd;
@@ -811,6 +949,57 @@ igt_main
 	igt_describe("Validate engine activity by loading all engines simultaenously and trailing idle");
 	igt_subtest("engine-activity-all-load-idle")
 		engine_activity_load_all(fd, num_engines, TEST_LOAD | TEST_TRAILING_IDLE);
+
+	igt_describe("Validate engine activity is idle after gt reset");
+	test_each_engine("engine-activity-gt-reset-idle", fd, eci)
+		engine_activity(fd, eci, TEST_LOAD | TEST_GT_RESET);
+
+	igt_describe("Validate engine activity before and after gt reset");
+	igt_subtest("engine-activity-gt-reset") {
+		engine_activity_load_all(fd, num_engines, TEST_LOAD);
+		xe_for_each_gt(fd, gt)
+			xe_force_gt_reset_sync(fd, gt);
+		engine_activity_load_all(fd, num_engines, TEST_LOAD);
+	}
+
+	igt_describe("Validate engine activity before and after s2idle");
+	igt_subtest("engine-activity-suspend") {
+		engine_activity_load_all(fd, num_engines, TEST_LOAD);
+		igt_system_suspend_autoresume(SUSPEND_STATE_FREEZE, SUSPEND_TEST_NONE);
+		engine_activity_load_all(fd, num_engines, TEST_LOAD);
+	}
+
+	igt_describe("Validate engine activity when PMU is opened after load");
+	test_each_engine("engine-activity-after-load-start", fd, eci)
+		engine_activity_load_start(fd, eci);
+
+	igt_describe("Validate multiple PMU clients do not interfere with each other");
+	test_each_engine("engine-activity-multi-client", fd, eci)
+		engine_activity_multi_client(fd, eci);
+
+	igt_subtest_group {
+		int render_fd;
+
+		igt_fixture {
+			render_fd = __drm_open_driver_render(DRIVER_XE);
+			igt_require(render_fd);
+		}
+
+		igt_describe("Validate engine activity on render node when idle");
+		test_each_engine("engine-activity-render-node-idle", render_fd, eci)
+			engine_activity(render_fd, eci, 0);
+
+		igt_describe("Validate engine activity on render node when loaded");
+		test_each_engine("engine-activity-render-node-load", render_fd, eci)
+			engine_activity(render_fd, eci, TEST_LOAD);
+
+		igt_describe("Validate engine activity on render node with load and trailing idle");
+		test_each_engine("engine-activity-render-node-load-idle", render_fd, eci)
+			engine_activity(render_fd, eci, TEST_LOAD | TEST_TRAILING_IDLE);
+
+		igt_fixture
+			drm_close_driver(render_fd);
+	}
 
 	igt_subtest_group {
 		unsigned int num_fns;
