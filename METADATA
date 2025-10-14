@@ -8,14 +8,14 @@ third_party {
   license_type: NOTICE
   last_upgrade_date {
     year: 2025
-    month: 6
-    day: 25
+    month: 10
+    day: 14
   }
   homepage: "https://gitlab.freedesktop.org/drm/igt-gpu-tools"
   identifier {
     type: "Git"
     value: "https://gitlab.freedesktop.org/drm/igt-gpu-tools"
-    version: "233d56b87ac7c7b0a274f834899513a9879e9f47"
+    version: "ec6fde8fbe795da5b9246f7c32dac84c708fe25a"
     primary_source: true
   }
 }

@@ -44,6 +44,10 @@ struct xe_eudebug_debugger {
 	pthread_t worker_thread;
 	enum xe_eudebug_debugger_worker_state worker_state;
 
+	bool received_sigint;
+	bool handled_sigint;
+	bool received_signal;
+
 	int p_client[2];
 };
 
@@ -65,6 +69,8 @@ struct xe_eudebug_client {
 	int master_fd;
 
 	int timeout_ms;
+
+	bool allow_dead_client;
 
 	pthread_mutex_t lock;
 };
@@ -158,6 +164,7 @@ void xe_eudebug_debugger_remove_trigger(struct xe_eudebug_debugger *d, int type,
 				     xe_eudebug_trigger_fn fn);
 void xe_eudebug_debugger_signal_stage(struct xe_eudebug_debugger *d, uint64_t stage);
 void xe_eudebug_debugger_wait_stage(struct xe_eudebug_session *s, uint64_t stage);
+void xe_eudebug_debugger_kill(struct xe_eudebug_debugger *d, int sig);
 
 struct xe_eudebug_client *
 xe_eudebug_client_create(int xe, xe_eudebug_client_work_fn work, uint64_t flags, void *data);

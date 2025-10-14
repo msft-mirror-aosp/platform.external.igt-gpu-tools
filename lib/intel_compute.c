@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /*
  * Copyright © 2023 Intel Corporation
- *
+ * TODO: Add kernel for PVC for preemption test
  * Authors:
  *    Francois Dugast <francois.dugast@intel.com>
  */
@@ -72,7 +72,6 @@
  * WMTP - Walker Mid Thread Preemption
  */
 #define TGP_long_kernel_loop_count		10
-#define WMTP_long_kernel_loop_count		1000000
 #define XE2_THREADGROUP_PREEMPT_XDIM		0x4000
 
 struct bo_dict_entry {
@@ -1927,23 +1926,80 @@ static const struct {
 	},
 };
 
+static const struct intel_compute_kernels
+		*intel_compute_find_kernels(const struct intel_compute_kernels *kernels,
+					    unsigned int ip_ver)
+{
+	if (!kernels) {
+		igt_debug("%s: kernel_list is NULL\n", __func__);
+		return NULL;
+	}
+
+	while (kernels->kernel) {
+		if (ip_ver == kernels->ip_ver)
+			return kernels;
+		kernels++;
+	}
+
+	return NULL;
+}
+
+static bool validate_kernels(const struct intel_compute_kernels *kernels,
+			     bool check_preemption, bool threadgroup_preemption,
+			     unsigned int ip_ver)
+{
+	if (!kernels) {
+		igt_warn("No kernel entry found for IP version 0x%x\n", ip_ver);
+		return false;
+	}
+
+	if (!kernels->kernel) {
+		igt_warn("Missing compute square kernel for IP version 0x%x\n", ip_ver);
+		return false;
+	}
+
+	if (!check_preemption)
+		return true;
+
+	/* The following checks are only performed if preemption check is enabled. */
+	if (threadgroup_preemption && !kernels->long_kernel) {
+		igt_warn("Missing Long kernel for IP version 0x%x\n", ip_ver);
+		return false;
+	} else if (!threadgroup_preemption) {
+		if (!kernels->sip_kernel) {
+			igt_warn("Missing SIP kernel for IP version 0x%x\n", ip_ver);
+			return false;
+		}
+		if (!kernels->loop_kernel) {
+			igt_warn("Missing Loop kernel for IP version 0x%x\n", ip_ver);
+			return false;
+		}
+	}
+	return true;
+}
+
+static int find_compute_batch(unsigned int ip_ver)
+{
+	for (int batch_idx = 0; batch_idx < ARRAY_SIZE(intel_compute_batches); batch_idx++)
+		if (ip_ver == intel_compute_batches[batch_idx].ip_ver)
+			return batch_idx;
+	return -1;
+}
+
 static bool __run_intel_compute_kernel(int fd,
 				       struct drm_xe_engine_class_instance *eci,
 				       struct user_execenv *user,
 				       enum execenv_alloc_prefs alloc_prefs)
 {
 	unsigned int ip_ver = intel_graphics_ver(intel_get_drm_devid(fd));
-	unsigned int batch;
-	const struct intel_compute_kernels *kernels = intel_compute_square_kernels;
+	int batch;
+	const struct intel_compute_kernels *kernel_entries = intel_compute_square_kernels, *kernels;
 	enum intel_driver driver = get_intel_driver(fd);
 	const unsigned char *kernel;
 	unsigned int kernel_size;
 
-	for (batch = 0; batch < ARRAY_SIZE(intel_compute_batches); batch++) {
-		if (ip_ver == intel_compute_batches[batch].ip_ver)
-			break;
-	}
-	if (batch == ARRAY_SIZE(intel_compute_batches)) {
+	batch = find_compute_batch(ip_ver);
+	if (batch < 0) {
 		igt_debug("GPU version 0x%x not supported\n", ip_ver);
 		return false;
 	}
@@ -1960,12 +2016,8 @@ static bool __run_intel_compute_kernel(int fd,
 		kernel = user->kernel;
 		kernel_size = user->kernel_size;
 	} else {
-		while (kernels->kernel) {
-			if (ip_ver == kernels->ip_ver)
-				break;
-			kernels++;
-		}
-		if (!kernels->kernel)
+		kernels = intel_compute_find_kernels(kernel_entries, ip_ver);
+		if (!validate_kernels(kernels, false, false, ip_ver))
 			return false;
 		kernel = kernels->kernel;
 		kernel_size = kernels->size;
@@ -2088,8 +2140,6 @@ static void xe2lpg_compute_preempt_exec(int fd, const unsigned char *long_kernel
 
 	if (threadgroup_preemption)
 		long_kernel_loop_count = TGP_long_kernel_loop_count;
-	else
-		long_kernel_loop_count = WMTP_long_kernel_loop_count;
 
 	for (int i = 0; i < entries; ++i)
 		bo_dict_short[i] = bo_dict_long[i];
@@ -2199,23 +2249,55 @@ static const struct {
 			     bool threadgroup_preemption,
 			     enum execenv_alloc_prefs alloc_prefs);
 	uint32_t compat;
+	enum xe_compute_preempt_type preempt_type;
 } intel_compute_preempt_batches[] = {
 	{
 		.ip_ver = IP_VER(20, 01),
 		.compute_exec = xe2lpg_compute_preempt_exec,
 		.compat = COMPAT_DRIVER_XE,
+		.preempt_type = PREEMPT_TGP | PREEMPT_WMTP,
 	},
 	{
 		.ip_ver = IP_VER(20, 04),
 		.compute_exec = xe2lpg_compute_preempt_exec,
 		.compat = COMPAT_DRIVER_XE,
+		.preempt_type = PREEMPT_TGP | PREEMPT_WMTP,
 	},
 	{
 		.ip_ver = IP_VER(30, 00),
 		.compute_exec = xe2lpg_compute_preempt_exec,
 		.compat = COMPAT_DRIVER_XE,
+		.preempt_type = PREEMPT_TGP | PREEMPT_WMTP,
 	},
 };
+
+static int find_preempt_batch(unsigned int ip_ver)
+{
+	for (int batch_idx = 0; batch_idx < ARRAY_SIZE(intel_compute_preempt_batches); batch_idx++)
+		if (ip_ver == intel_compute_preempt_batches[batch_idx].ip_ver)
+			return batch_idx;
+	return -1;
+}
+
+static bool is_preemptable(int batch, enum xe_compute_preempt_type required_preempt)
+{
+	if (required_preempt &&
+	    !(intel_compute_preempt_batches[batch].preempt_type & required_preempt))
+		return false;
+	return true;
+}
+
+static const char *xe_preempt_type_to_str(enum xe_compute_preempt_type type)
+{
+	switch (type) {
+	case PREEMPT_TGP:
+		return "PREEMPT_TGP";
+	case PREEMPT_WMTP:
+		return "PREEMPT_WMTP";
+	default:
+		return "UNKNOWN_PREEMPT_TYPE";
+	}
+}
 
 static bool __run_intel_compute_kernel_preempt(int fd,
 		struct drm_xe_engine_class_instance *eci,
@@ -2223,16 +2305,14 @@ static bool __run_intel_compute_kernel_preempt(int fd,
 		enum execenv_alloc_prefs alloc_prefs)
 {
 	unsigned int ip_ver = intel_graphics_ver(intel_get_drm_devid(fd));
-	unsigned int batch;
-	const struct intel_compute_kernels *kernels = intel_compute_square_kernels;
+	int batch;
+	const struct intel_compute_kernels *kernel_entries = intel_compute_square_kernels, *kernels;
 	enum intel_driver driver = get_intel_driver(fd);
+	enum xe_compute_preempt_type required_preempt =
+		threadgroup_preemption ? PREEMPT_TGP : PREEMPT_WMTP;
 
-	for (batch = 0; batch < ARRAY_SIZE(intel_compute_preempt_batches); batch++)
-		if (ip_ver == intel_compute_preempt_batches[batch].ip_ver)
-			break;
-
-
-	if (batch == ARRAY_SIZE(intel_compute_preempt_batches)) {
+	batch = find_preempt_batch(ip_ver);
+	if (batch < 0) {
 		igt_debug("GPU version 0x%x not supported\n", ip_ver);
 		return false;
 	}
@@ -2244,15 +2324,16 @@ static bool __run_intel_compute_kernel_preempt(int fd,
 		return false;
 	}
 
-	while (kernels->kernel) {
-		if (ip_ver == kernels->ip_ver)
-			break;
-		kernels++;
+	if (!is_preemptable(batch, required_preempt)) {
+		igt_debug("Preemption type %s not supported on GPU version 0x%x\n",
+			  xe_preempt_type_to_str(required_preempt), ip_ver);
+		return false;
 	}
 
-	if (!kernels->kernel || !kernels->sip_kernel || !kernels->long_kernel)
-		return 0;
+	kernels = intel_compute_find_kernels(kernel_entries, ip_ver);
 
+	if (!validate_kernels(kernels, true, threadgroup_preemption, ip_ver))
+		return false;
 	intel_compute_preempt_batches[batch].compute_exec(fd, kernels->long_kernel,
 							  kernels->long_kernel_size,
 							  kernels->kernel, kernels->size,
@@ -2266,6 +2347,33 @@ static bool __run_intel_compute_kernel_preempt(int fd,
 
 	return true;
 }
+
+/**
+ * xe_kernel_preempt_check - Checks IP version to confirm if provided
+ *			     preempt type is supported.
+ * @fd: file descriptor of the opened DRM Xe device
+ * @required_preempt: Preemption type (WMTP/TGP)
+ *
+ * Returns true on success, false otherwise.
+ */
+bool xe_kernel_preempt_check(int fd, enum xe_compute_preempt_type required_preempt)
+{
+	unsigned int ip_ver = intel_graphics_ver(intel_get_drm_devid(fd));
+	int batch = find_preempt_batch(ip_ver);
+
+	if (batch < 0) {
+		igt_debug("GPU version 0x%x not supported\n", ip_ver);
+		return false;
+	}
+	if (!is_preemptable(batch, required_preempt)) {
+		igt_debug("Preemption type %s not supported on GPU version 0x%x\n",
+			  xe_preempt_type_to_str(required_preempt), ip_ver);
+		return false;
+	}
+
+	return true;
+}
+
 /**
  * run_intel_compute_kernel_preempt - runs compute kernels to
  * exercise preemption scenario.
