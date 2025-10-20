@@ -36,6 +36,7 @@
 #include "igt.h"
 #include "igt_aux.h"
 #include "igt_psr.h"
+#include "igt_vec.h"
 #include <sys/ioctl.h>
 #include <sys/time.h>
 #include <poll.h>
@@ -86,6 +87,12 @@
  * SUBTEST: async-flip-suspend-resume
  * Description: Verify the async flip functionality with suspend and resume cycle
  *
+ * SUBTEST: async-flip-hang
+ * Description: Verify the async flip functionality with hang cycle
+ *
+ * SUBTEST: async-flip-dpms
+ * Description: Verify the async flip functionality with dpms cycle
+ *
  * SUBTEST: overlay-atomic
  * Description: Verify overlay planes with async flips in atomic API
  *
@@ -96,6 +103,10 @@
  * SUBTEST: async-flip-with-page-flip-events-linear-atomic
  * Description: Verify the async flip functionality and the fps during async flips
  *		with linear modifier in Atomic API
+ *
+ * SUBTEST: basic-modeset-with-all-modifiers-formats
+ * Description: Verify the basic sanity check of async flip functionality with
+ *		all supported modifiers and formats
  */
 
 #define CURSOR_POS 128
@@ -106,7 +117,7 @@
  */
 
 #define RUN_TIME 2
-#define MIN_FLIPS_PER_FRAME 5
+#define MIN_FLIPS_PER_FRAME_60HZ 5
 #define NUM_FBS 4
 
 IGT_TEST_DESCRIPTION("Test asynchronous page flips.");
@@ -132,12 +143,37 @@ typedef struct {
 	enum pipe pipe;
 	bool alternate_sync_async;
 	bool suspend_resume;
-	bool allow_fail;
+	bool hang;
+	bool dpms;
 	struct buf_ops *bops;
 	bool atomic_path;
 	bool overlay_path;
 	bool linear_modifier;
+	unsigned int plane_format;
+	bool async_mod_formats;
+	bool single_pipe;
 } data_t;
+
+struct format_mod {
+	uint64_t modifier;
+	uint32_t format;
+};
+
+static int min_flips_per_frame(unsigned int refresh_rate)
+{
+	/*
+	 * Calculate minimum flips per frame based on refresh rate scaling from 60Hz baseline
+	 *
+	 * High refresh rate displays fail async flip tests due to
+	 * unrealistic timing expectations.
+	 * This ensures async flip tests remain meaningful across all refresh rates
+	 * while avoiding false failures due to overly strict timing requirements.
+	 */
+	int min_flips = MIN_FLIPS_PER_FRAME_60HZ * 60 / refresh_rate;
+
+	/* Ensure to have at least 1 flip per frame */
+	return max(min_flips, 1);
+}
 
 static void flip_handler(int fd_, unsigned int sequence, unsigned int tv_sec,
 			 unsigned int tv_usec, void *_data)
@@ -211,7 +247,7 @@ static void make_fb(data_t *data, struct igt_fb *fb,
 
 	rec_width = width / (NUM_FBS * 2);
 
-	igt_create_color_fb(data->drm_fd, width, height, DRM_FORMAT_XRGB8888,
+	igt_create_color_fb(data->drm_fd, width, height, data->plane_format,
 			    data->modifier, 0.0, 0.0, 0.5, fb);
 
 	cr = igt_get_cairo_ctx(data->drm_fd, fb);
@@ -371,12 +407,34 @@ static int perform_flip(data_t *data, int frame, int flags)
 	return ret;
 }
 
+static void check_dpms(igt_output_t *output)
+{
+	igt_require(igt_setup_runtime_pm(output->display->drm_fd));
+
+	kmstest_set_connector_dpms(output->display->drm_fd,
+				   output->config.connector,
+				   DRM_MODE_DPMS_OFF);
+	igt_require(igt_wait_for_pm_status(IGT_RUNTIME_PM_STATUS_SUSPENDED));
+
+	kmstest_set_connector_dpms(output->display->drm_fd,
+				   output->config.connector,
+				   DRM_MODE_DPMS_ON);
+	igt_assert(igt_wait_for_pm_status(IGT_RUNTIME_PM_STATUS_ACTIVE));
+}
+
 static void test_async_flip(data_t *data)
 {
 	int ret, frame;
 	long long int fps;
 	struct timeval start, end, diff;
-	int suspend_time = RUN_TIME / 2;
+	igt_hang_t hang;
+	uint64_t ahnd = 0;
+	int mid_time = RUN_TIME / 2;
+	float run_time;
+	bool temp = data->suspend_resume || data->hang || data->dpms;
+	int min_flips;
+
+	min_flips = min_flips_per_frame(data->refresh_rate);
 
 	igt_display_commit2(&data->display, data->display.is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY);
 
@@ -408,9 +466,23 @@ static void test_async_flip(data_t *data)
 			}
 		}
 
+		if (data->async_mod_formats) {
+			if (async_flip_needs_extra_frame(data)) {
+				ret = perform_flip(data, frame, flags);
+				igt_assert_eq(ret, 0);
+
+				wait_flip_event(data);
+			}
+		}
+
 		ret = perform_flip(data, frame, flags);
 
-		if (frame == 1 && data->allow_fail)
+		/* AMD cannot perform async page flip if fb mem type changes,
+		 * and this condition cannot be controlled by any userspace
+		 * configuration. Therefore allow EINVAL failure and skip the
+		 * test for AMD devices.
+		 */
+		if (is_amdgpu_device(data->drm_fd))
 			igt_skip_on(ret == -EINVAL);
 		else
 			igt_assert_eq(ret, 0);
@@ -421,22 +493,61 @@ static void test_async_flip(data_t *data)
 		timersub(&end, &start, &diff);
 
 		if (data->alternate_sync_async) {
-			igt_assert_f(data->flip_interval < 1000.0 / (data->refresh_rate * MIN_FLIPS_PER_FRAME),
+			igt_assert_f(data->flip_interval < 1000.0 / (data->refresh_rate * min_flips),
 				     "Flip interval not significantly smaller than vblank interval\n"
 				     "Flip interval: %lfms, Refresh Rate = %dHz, Threshold = %d\n",
-				     data->flip_interval, data->refresh_rate, MIN_FLIPS_PER_FRAME);
+				     data->flip_interval, data->refresh_rate, min_flips);
 		}
 
-		if (data->suspend_resume && diff.tv_sec == suspend_time) {
-			data->suspend_resume = false;
+		if (data->suspend_resume && diff.tv_sec == mid_time && temp) {
+			temp = false;
 			igt_system_suspend_autoresume(SUSPEND_STATE_MEM, SUSPEND_TEST_NONE);
 		}
+
+		if (data->hang && diff.tv_sec == mid_time && temp) {
+			temp = false;
+			memset(&hang, 0, sizeof(hang));
+
+			ahnd = is_i915_device(data->drm_fd) ?
+			       get_reloc_ahnd(data->drm_fd, 0) :
+			       intel_allocator_open(data->drm_fd, 0, INTEL_ALLOCATOR_RELOC);
+			hang = igt_hang_ring_with_ahnd(data->drm_fd, I915_EXEC_DEFAULT, ahnd);
+		}
+
+		/*
+		 * Temporarily Reduce test execution for all formats and modifiers.
+		 *
+		 * TODO: Extend support for full execution for all formats and modifiers,
+		 * possibly controlled via an extended flag
+		 */
+		if (data->async_mod_formats) {
+			igt_assert_f(ret == 0, "Async flip failed with %s modifier and %s format",
+				     igt_fb_modifier_name(data->modifier),
+				     igt_format_str(data->plane_format));
+			break;
+		}
+
+		if (data->dpms && diff.tv_sec == mid_time && temp) {
+			temp = false;
+			check_dpms(data->output);
+		}
+
 		frame++;
 	} while (diff.tv_sec < RUN_TIME);
 
-	if (!data->alternate_sync_async) {
-		fps = frame * 1000 / RUN_TIME;
-		igt_assert_f((fps / 1000) > (data->refresh_rate * MIN_FLIPS_PER_FRAME),
+	if (data->suspend_resume || data->dpms)
+		run_time = RUN_TIME - (1.0 / data->refresh_rate);
+	else
+		run_time = RUN_TIME;
+
+	if (data->hang) {
+		igt_post_hang_ring(data->drm_fd, hang);
+		put_ahnd(ahnd);
+	}
+
+	if (!data->alternate_sync_async && !data->async_mod_formats) {
+		fps = frame * 1000 / run_time;
+		igt_assert_f((fps / 1000) > (data->refresh_rate * min_flips),
 			     "FPS should be significantly higher than the refresh rate\n");
 	}
 }
@@ -559,6 +670,7 @@ static void test_invalid(data_t *data)
 	struct igt_fb fb[2];
 	drmModeModeInfo *mode;
 	int flags;
+	uint64_t mod1, mod2;
 
 	igt_display_commit2(&data->display, data->display.is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY);
 
@@ -568,10 +680,20 @@ static void test_invalid(data_t *data)
 
 	flags = DRM_MODE_PAGE_FLIP_ASYNC | DRM_MODE_PAGE_FLIP_EVENT;
 
+	mod1 = data->plane->async_modifiers[0];
+	mod2 = data->plane->async_modifiers[data->plane->async_format_mod_count - 1];
+
+	/* Need at least 2 different modifiers to test invalid case */
+	igt_require_f(data->plane->async_format_mod_count >= 2 && mod1 != mod2,
+		      "Need at least 2 different async modifiers for invalid test\n");
+
+	igt_info("using modifier1 %s and modifier2 %s\n",
+		 igt_fb_modifier_name(mod1), igt_fb_modifier_name(mod2));
+
 	igt_create_fb(data->drm_fd, width, height, DRM_FORMAT_XRGB8888,
-		      I915_FORMAT_MOD_X_TILED, &fb[0]);
+		      mod1, &fb[0]);
 	igt_create_fb(data->drm_fd, width, height, DRM_FORMAT_XRGB8888,
-		      I915_FORMAT_MOD_Y_TILED, &fb[1]);
+		      mod2, &fb[1]);
 
 	igt_plane_set_fb(data->plane, &fb[0]);
 	igt_display_commit2(&data->display, data->display.is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY);
@@ -766,6 +888,23 @@ static void test_crc(data_t *data)
 	igt_assert_lt(data->frame_count * 2, data->flip_count);
 }
 
+static void require_linear_modifier(data_t *data)
+{
+	if(!igt_plane_has_prop(data->plane, IGT_PLANE_IN_FORMATS_ASYNC)) {
+		data->modifier = DRM_FORMAT_MOD_LINEAR;
+		return;
+	}
+
+	for (int i = 0; i < data->plane->async_format_mod_count; i++) {
+		if (data->plane->async_modifiers[i] == DRM_FORMAT_MOD_LINEAR) {
+			data->modifier = DRM_FORMAT_MOD_LINEAR;
+			return;
+		}
+	}
+
+	igt_skip("Linear modifier not supported for async flips on this platform\n");
+}
+
 static void run_test(data_t *data, void (*test)(data_t *))
 {
 	igt_display_t *display = &data->display;
@@ -782,12 +921,10 @@ static void run_test(data_t *data, void (*test)(data_t *))
 
 		test_init(data);
 
-		if (data->linear_modifier && is_intel_device(data->drm_fd))
-			data->allow_fail = true;
+		if (data->linear_modifier)
+			require_linear_modifier(data);
 		else
-			data->allow_fail = false;
-
-		data->modifier = data->linear_modifier ? DRM_FORMAT_MOD_LINEAR : default_modifier(data);
+			data->modifier = default_modifier(data);
 
 		igt_dynamic_f("pipe-%s-%s", kmstest_pipe_name(data->pipe), data->output->name) {
 			/*
@@ -799,7 +936,91 @@ static void run_test(data_t *data, void (*test)(data_t *))
 			test_init_fbs(data);
 			test(data);
 		}
+		/* Restrict to single pipe in simulation */
+		if (data->single_pipe)
+			break;
 	}
+}
+
+static bool skip_async_format_mod(data_t *data,
+			    uint32_t format, uint64_t modifier,
+			    struct igt_vec *tested_formats)
+{
+	/* test each format "class" only once in non-extended tests */
+	struct format_mod rf = {
+		.format = igt_reduce_format(format),
+		.modifier = modifier,
+	};
+
+	/* igt doesn't know how to sw generate UBWC: */
+	if (is_msm_device(data->drm_fd) &&
+	    modifier == DRM_FORMAT_MOD_QCOM_COMPRESSED)
+		return true;
+
+	/* VEBOX just hangs with an actual 10bpc format */
+	if (igt_fb_is_gen12_mc_ccs_modifier(modifier) &&
+	    igt_reduce_format(format) == DRM_FORMAT_XRGB2101010)
+		return true;
+
+	if (igt_vec_index(tested_formats, &rf) >= 0)
+		return true;
+
+	igt_vec_push(tested_formats, &rf);
+
+	return false;
+}
+
+static void run_test_with_async_format_modifiers(data_t *data, void (*test)(data_t *))
+{
+	struct igt_vec tested_formats;
+
+	igt_vec_init(&tested_formats, sizeof(struct format_mod));
+
+	for_each_pipe_with_valid_output(&data->display, data->pipe, data->output) {
+		test_init(data);
+
+		igt_assert_f(data->plane->async_format_mod_count > 0,
+			     "No async format/modifier supported\n");
+
+		for (int i = 0; i < data->plane->async_format_mod_count; i++) {
+			struct format_mod f = {
+				.format = data->plane->async_formats[i],
+				.modifier = data->plane->async_modifiers[i],
+			};
+
+			if (skip_async_format_mod(data, f.format, f.modifier, &tested_formats)) {
+				igt_debug("Skipping format " IGT_FORMAT_FMT " / modifier "
+					   IGT_MODIFIER_FMT " on %s.%u\n",
+					   IGT_FORMAT_ARGS(f.format),
+					   IGT_MODIFIER_ARGS(f.modifier),
+					   kmstest_pipe_name(data->pipe),
+					   data->plane->index);
+				continue;
+			}
+
+			data->modifier = f.modifier;
+			data->plane_format = f.format;
+			data->async_mod_formats = true;
+
+			igt_dynamic_f("pipe-%s-%s-%s-%s", kmstest_pipe_name(data->pipe),
+				      data->output->name,
+				      igt_fb_modifier_name(data->modifier),
+				      igt_format_str(data->plane_format)) {
+				      /*
+				       * FIXME: joiner+async flip is busted currently in KMD.
+				       * Remove this check once the issues are fixed in KMD.
+				       */
+				      igt_skip_on_f(is_joiner_mode(data->drm_fd,
+								   data->output),
+						    "Skipping, async flip not supported "
+						    "on joiner mode\n");
+				      test_init_fbs(data);
+				      test(data);
+			}
+		}
+	}
+
+	igt_vec_fini(&tested_formats);
 }
 
 static void run_test_with_modifiers(data_t *data, void (*test)(data_t *))
@@ -810,8 +1031,11 @@ static void run_test_with_modifiers(data_t *data, void (*test)(data_t *))
 	for_each_pipe_with_valid_output(&data->display, data->pipe, data->output) {
 		test_init(data);
 
-		for (int i = 0; i < data->plane->format_mod_count; i++) {
-			uint64_t modifier = data->plane->modifiers[i];
+		igt_require_f(data->plane->async_format_mod_count > 0,
+			     "No async format/modifier supported\n");
+
+		for (int i = 0; i < data->plane->async_format_mod_count; i++) {
+			uint64_t modifier = data->plane->async_modifiers[i];
 
 			if (data->plane->formats[i] != DRM_FORMAT_XRGB8888)
 				continue;
@@ -819,7 +1043,6 @@ static void run_test_with_modifiers(data_t *data, void (*test)(data_t *))
 			if (modifier == DRM_FORMAT_MOD_LINEAR)
 				continue;
 
-			data->allow_fail = true;
 			data->modifier = modifier;
 
 			igt_dynamic_f("pipe-%s-%s-%s", kmstest_pipe_name(data->pipe),
@@ -860,6 +1083,7 @@ igt_main
 
 		if (is_intel_device(data.drm_fd))
 			data.bops = buf_ops_create(data.drm_fd);
+		data.plane_format = DRM_FORMAT_XRGB8888;
 	}
 
 	igt_describe("Verify the async flip functionality and the fps during async flips");
@@ -975,11 +1199,6 @@ igt_main
 		test_init_ops(&data);
 		/* TODO: support more vendors */
 		igt_require(is_intel_device(data.drm_fd));
-		igt_require(igt_display_has_format_mod(&data.display, DRM_FORMAT_XRGB8888,
-						       I915_FORMAT_MOD_X_TILED));
-		igt_require(igt_display_has_format_mod(&data.display, DRM_FORMAT_XRGB8888,
-						       I915_FORMAT_MOD_Y_TILED));
-
 		run_test(&data, test_invalid);
 	}
 
@@ -990,11 +1209,6 @@ igt_main
 		data.atomic_path = true;
 		/* TODO: support more vendors */
 		igt_require(is_intel_device(data.drm_fd));
-		igt_require(igt_display_has_format_mod(&data.display, DRM_FORMAT_XRGB8888,
-						       I915_FORMAT_MOD_X_TILED));
-		igt_require(igt_display_has_format_mod(&data.display, DRM_FORMAT_XRGB8888,
-						       I915_FORMAT_MOD_Y_TILED));
-
 		run_test(&data, test_invalid);
 	}
 
@@ -1003,8 +1217,10 @@ igt_main
 		test_init_ops(&data);
 		/* Devices without CRC can't run this test */
 		igt_require_pipe_crc(data.drm_fd);
-
+		if (igt_run_in_simulation())
+			data.single_pipe = true;
 		run_test(&data, test_crc);
+		data.single_pipe = false;
 	}
 
 	igt_describe("Use CRC to verify async flip scans out the correct framebuffer "
@@ -1013,9 +1229,11 @@ igt_main
 		test_init_ops(&data);
 		/* Devices without CRC can't run this test */
 		igt_require_pipe_crc(data.drm_fd);
-
+		if (igt_run_in_simulation())
+			data.single_pipe = true;
 		data.atomic_path = true;
 		run_test(&data, test_crc);
+		data.single_pipe = false;
 	}
 
 	igt_describe("Verify the async flip functionality after suspend and resume cycle");
@@ -1023,6 +1241,35 @@ igt_main
 		test_init_ops(&data);
 		data.suspend_resume = true;
 		run_test(&data, test_async_flip);
+		data.suspend_resume = false;
+	}
+
+	igt_describe("Verify basic modeset with all supported modifier and format combinations");
+	igt_subtest_with_dynamic("basic-modeset-with-all-modifiers-formats") {
+		run_test_with_async_format_modifiers(&data, test_async_flip);
+	}
+
+	igt_describe("Verify the async flip functionality after hang cycle");
+	igt_subtest_with_dynamic("async-flip-hang") {
+		igt_require(is_intel_device(data.drm_fd));
+		test_init_ops(&data);
+		data.hang = true;
+		if (igt_run_in_simulation())
+			data.single_pipe = true;
+		run_test(&data, test_async_flip);
+		data.hang = false;
+		data.single_pipe = false;
+	}
+
+	igt_describe("Verify the async flip functionality after dpms cycle");
+	igt_subtest_with_dynamic("async-flip-dpms") {
+		test_init_ops(&data);
+		data.dpms = true;
+		if (igt_run_in_simulation())
+			data.single_pipe = true;
+		run_test(&data, test_async_flip);
+		data.dpms = false;
+		data.single_pipe = false;
 	}
 
 	igt_fixture {

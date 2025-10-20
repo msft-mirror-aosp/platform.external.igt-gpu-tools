@@ -160,6 +160,32 @@ static struct drm_xe_query_mem_regions *xe_query_mem_regions_new(int fd)
 	return mem_regions;
 }
 
+static struct drm_xe_query_eu_stall *xe_query_eu_stall_new(int fd)
+{
+	struct drm_xe_query_eu_stall *query_eu_stall;
+	struct drm_xe_device_query query = {
+		.extensions = 0,
+		.query = DRM_XE_DEVICE_QUERY_EU_STALL,
+		.size = 0,
+		.data = 0,
+	};
+
+	/* Support older kernels where this uapi is not yet available */
+	if (igt_ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, &query))
+		return NULL;
+	igt_assert_neq(query.size, 0);
+
+	query_eu_stall = malloc(query.size);
+	igt_assert(query_eu_stall);
+
+	query.data = to_user_pointer(query_eu_stall);
+	igt_assert_eq(igt_ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, &query), 0);
+
+	VG(VALGRIND_MAKE_MEM_DEFINED(query_eu_stall, query.size));
+
+	return query_eu_stall;
+}
+
 static struct drm_xe_query_oa_units *xe_query_oa_units_new(int fd)
 {
 	struct drm_xe_query_oa_units *oa_units;
@@ -185,21 +211,21 @@ static struct drm_xe_query_oa_units *xe_query_oa_units_new(int fd)
 	return oa_units;
 }
 
-static uint64_t native_region_for_gt(const struct drm_xe_query_gt_list *gt_list, int gt)
+static uint64_t native_region_for_gt(const struct drm_xe_gt *gt)
 {
 	uint64_t region;
 
-	igt_assert(gt_list->num_gt > gt);
-	region = gt_list->gt_list[gt].near_mem_regions;
+	igt_assert(gt);
+	region = gt->near_mem_regions;
 	igt_assert(region);
 
 	return region;
 }
 
 static uint64_t gt_vram_size(const struct drm_xe_query_mem_regions *mem_regions,
-			     const struct drm_xe_query_gt_list *gt_list, int gt)
+			     const struct drm_xe_gt *gt)
 {
-	int region_idx = ffs(native_region_for_gt(gt_list, gt)) - 1;
+	int region_idx = ffsll(native_region_for_gt(gt)) - 1;
 
 	if (XE_IS_CLASS_VRAM(&mem_regions->mem_regions[region_idx]))
 		return mem_regions->mem_regions[region_idx].total_size;
@@ -208,9 +234,9 @@ static uint64_t gt_vram_size(const struct drm_xe_query_mem_regions *mem_regions,
 }
 
 static uint64_t gt_visible_vram_size(const struct drm_xe_query_mem_regions *mem_regions,
-				     const struct drm_xe_query_gt_list *gt_list, int gt)
+				     const struct drm_xe_gt *gt)
 {
-	int region_idx = ffs(native_region_for_gt(gt_list, gt)) - 1;
+	int region_idx = ffsll(native_region_for_gt(gt)) - 1;
 
 	if (XE_IS_CLASS_VRAM(&mem_regions->mem_regions[region_idx]))
 		return mem_regions->mem_regions[region_idx].cpu_visible_size;
@@ -317,6 +343,7 @@ static void xe_device_free(struct xe_device *xe_dev)
 	free(xe_dev->engines);
 	free(xe_dev->mem_regions);
 	free(xe_dev->vram_size);
+	free(xe_dev->eu_stall);
 	free(xe_dev);
 }
 
@@ -332,6 +359,7 @@ static void xe_device_free(struct xe_device *xe_dev)
 struct xe_device *xe_device_get(int fd)
 {
 	struct xe_device *xe_dev, *prev;
+	int max_gt;
 
 	xe_dev = find_in_cache(fd);
 	if (xe_dev)
@@ -346,18 +374,36 @@ struct xe_device *xe_device_get(int fd)
 	xe_dev->va_bits = xe_dev->config->info[DRM_XE_QUERY_CONFIG_VA_BITS];
 	xe_dev->dev_id = xe_dev->config->info[DRM_XE_QUERY_CONFIG_REV_AND_DEVICE_ID] & 0xffff;
 	xe_dev->gt_list = xe_query_gt_list_new(fd);
+
+	/* GT IDs may be non-consecutive; keep a mask of valid IDs */
+	for (int gt = 0; gt < xe_dev->gt_list->num_gt; gt++)
+		xe_dev->gt_mask |= (1ull << xe_dev->gt_list->gt_list[gt].gt_id);
+
+	/* Tile IDs may be non-consecutive; keep a mask of valid IDs */
+	for (int gt = 0; gt < xe_dev->gt_list->num_gt; gt++)
+		xe_dev->tile_mask |= (1ull << xe_dev->gt_list->gt_list[gt].tile_id);
+
 	xe_dev->memory_regions = __memory_regions(xe_dev->gt_list);
 	xe_dev->engines = xe_query_engines(fd);
 	xe_dev->mem_regions = xe_query_mem_regions_new(fd);
+	xe_dev->eu_stall = xe_query_eu_stall_new(fd);
 	xe_dev->oa_units = xe_query_oa_units_new(fd);
-	xe_dev->vram_size = calloc(xe_dev->gt_list->num_gt, sizeof(*xe_dev->vram_size));
-	xe_dev->visible_vram_size = calloc(xe_dev->gt_list->num_gt, sizeof(*xe_dev->visible_vram_size));
-	for (int gt = 0; gt < xe_dev->gt_list->num_gt; gt++) {
-		xe_dev->vram_size[gt] = gt_vram_size(xe_dev->mem_regions,
-						     xe_dev->gt_list, gt);
-		xe_dev->visible_vram_size[gt] =
-			gt_visible_vram_size(xe_dev->mem_regions,
-					     xe_dev->gt_list, gt);
+
+	/*
+	 * vram_size[] and visible_vram_size[] are indexed by uapi ID; ensure
+	 * the allocation is large enough to hold the highest GT ID
+	 */
+	max_gt = igt_fls(xe_dev->gt_mask) - 1;
+	xe_dev->vram_size = calloc(max_gt + 1, sizeof(*xe_dev->vram_size));
+	xe_dev->visible_vram_size = calloc(max_gt + 1, sizeof(*xe_dev->visible_vram_size));
+
+	for (int idx = 0; idx < xe_dev->gt_list->num_gt; idx++) {
+		struct drm_xe_gt *gt = &xe_dev->gt_list->gt_list[idx];
+
+		xe_dev->vram_size[gt->gt_id] =
+			gt_vram_size(xe_dev->mem_regions, gt);
+		xe_dev->visible_vram_size[gt->gt_id] =
+			gt_visible_vram_size(xe_dev->mem_regions, gt);
 	}
 	xe_dev->default_alignment = __mem_default_alignment(xe_dev->mem_regions);
 	xe_dev->has_vram = __mem_has_vram(xe_dev->mem_regions);
@@ -456,6 +502,20 @@ _TYPE _NAME(int fd)			\
 xe_dev_FN(xe_number_gt, gt_list->num_gt, unsigned int);
 
 /**
+ * xe_max_gt:
+ * @fd: xe device fd
+ *
+ * Return maximum GT ID in xe device's GT list.
+ */
+unsigned int xe_dev_max_gt(int fd)
+{
+	struct xe_device *xe_dev = find_in_cache(fd);
+
+	igt_assert(xe_dev);
+	return igt_fls(xe_dev->gt_mask) - 1;
+}
+
+/**
  * all_memory_regions:
  * @fd: xe device fd
  *
@@ -476,6 +536,32 @@ uint64_t system_memory(int fd)
 	return regions & 0x1;
 }
 
+/*
+ * Given a uapi GT ID, lookup the corresponding drm_xe_gt structure in the
+ * GT list.
+ */
+const struct drm_xe_gt *drm_xe_get_gt(struct xe_device *xe_dev, int gt_id)
+{
+	for (int i = 0; i < xe_dev->gt_list->num_gt; i++)
+		if (xe_dev->gt_list->gt_list[i].gt_id == gt_id)
+			return &xe_dev->gt_list->gt_list[i];
+
+	return NULL;
+}
+
+/*
+ * Given a uapi GT ID, lookup the corresponding drm_xe_gt structure in the
+ * GT list and return valid tile_id otherwise invalid.
+ */
+int xe_get_tile(struct xe_device *xe_dev, int gt_id)
+{
+	for (int i = 0; i < xe_dev->gt_list->num_gt; i++)
+		if (xe_dev->gt_list->gt_list[i].gt_id == gt_id)
+			return xe_dev->gt_list->gt_list[i].tile_id;
+
+	return -ENOENT;
+}
+
 /**
  * vram_memory:
  * @fd: xe device fd
@@ -489,9 +575,9 @@ uint64_t vram_memory(int fd, int gt)
 
 	xe_dev = find_in_cache(fd);
 	igt_assert(xe_dev);
-	igt_assert(gt >= 0 && gt < xe_dev->gt_list->num_gt);
+	igt_assert(xe_dev->gt_mask & BIT(gt));
 
-	return xe_has_vram(fd) ? native_region_for_gt(xe_dev->gt_list, gt) : 0;
+	return xe_has_vram(fd) ? native_region_for_gt(drm_xe_get_gt(xe_dev, gt)) : 0;
 }
 
 static uint64_t __xe_visible_vram_size(int fd, int gt)
@@ -711,7 +797,7 @@ static void __available_vram_size_snapshot(int fd, int gt, struct __available_vr
 	xe_dev = find_in_cache(fd);
 	igt_assert(xe_dev);
 
-	region_idx = ffs(native_region_for_gt(xe_dev->gt_list, gt)) - 1;
+	region_idx = ffsll(native_region_for_gt(drm_xe_get_gt(xe_dev, gt))) - 1;
 	mem_region = &xe_dev->mem_regions->mem_regions[region_idx];
 
 	if (XE_IS_CLASS_VRAM(mem_region)) {
@@ -847,24 +933,47 @@ bool xe_has_media_gt(int fd)
 }
 
 /**
+ * xe_gt_type:
+ * @fd: xe device fd
+ * @gt: gt id
+ *
+ * Returns the type of @gt for device @fd (e.g.,
+ * DRM_XE_QUERY_GT_TYPE_MAIN, DRM_XE_QUERY_GT_TYPE_MEDIA).
+ */
+uint16_t xe_gt_type(int fd, int gt)
+{
+	struct xe_device *xe_dev = find_in_cache(fd);
+	const struct drm_xe_gt *xe_gt;
+
+	igt_assert(xe_dev);
+	xe_gt = drm_xe_get_gt(xe_dev, gt);
+	igt_assert(xe_gt);
+
+	return xe_gt->type;
+}
+
+/**
  * xe_is_media_gt:
  * @fd: xe device fd
  * @gt: gt id
  *
- * Returns true if @gt for device @fd is media GT, otherwise false.
+ * Returns true if @gt for device @fd is MEDIA GT, otherwise false.
  */
 bool xe_is_media_gt(int fd, int gt)
 {
-	struct xe_device *xe_dev;
+	return xe_gt_type(fd, gt) == DRM_XE_QUERY_GT_TYPE_MEDIA;
+}
 
-	xe_dev = find_in_cache(fd);
-	igt_assert(xe_dev);
-	igt_assert(gt < xe_number_gt(fd));
-
-	if (xe_dev->gt_list->gt_list[gt].type == DRM_XE_QUERY_GT_TYPE_MEDIA)
-		return true;
-
-	return false;
+/**
+ * xe_is_main_gt:
+ * @fd: xe device fd
+ * @gt: gt id
+ *
+ * Returns true if @gt for device @fd is MAIN GT, otherwise false.
+ */
+bool xe_is_main_gt(int fd, int gt)
+{
+	return xe_gt_type(fd, gt) == DRM_XE_QUERY_GT_TYPE_MAIN;
 }
 
 /**
@@ -924,6 +1033,87 @@ uint32_t *xe_hwconfig_lookup_value(int fd, enum intel_hwconfig attribute, uint32
 	}
 
 	return NULL;
+}
+
+/**
+ * xe_query_pxp_status:
+ * @fd: xe device fd
+ *
+ * Returns the PXP status value if PXP is supported, a negative errno otherwise.
+ * See DRM_XE_DEVICE_QUERY_PXP_STATUS documentation for the possible errno
+ * values and their meaning.
+ */
+int xe_query_pxp_status(int fd)
+{
+	struct drm_xe_query_pxp_status *pxp_query;
+	struct drm_xe_device_query query = {
+		.extensions = 0,
+		.query = DRM_XE_DEVICE_QUERY_PXP_STATUS,
+		.size = 0,
+		.data = 0,
+	};
+	int ret;
+
+	if (igt_ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, &query))
+		return -errno;
+
+	pxp_query = malloc(query.size);
+	igt_assert(pxp_query);
+	memset(pxp_query, 0, query.size);
+
+	query.data = to_user_pointer(pxp_query);
+
+	if (igt_ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, &query))
+		ret = -errno;
+	else
+		ret = pxp_query->status;
+
+	free(pxp_query);
+
+	return ret;
+}
+
+/**
+ * xe_wait_for_pxp_init:
+ * @fd: xe device fd
+ *
+ * Returns 0 once PXP is initialized and ready, -EINVAL if PXP is not supported
+ * in the kernel, -ENODEV if PXP is not supported in HW. This function asserts
+ * if something went wrong during PXP initialization.
+ */
+int xe_wait_for_pxp_init(int fd)
+{
+	int pxp_status;
+	int i = 0;
+
+	/* PXP init completes after driver init, so we might have to wait for it */
+	while (i++ < 50) {
+		pxp_status = xe_query_pxp_status(fd);
+
+		/*
+		 * -EINVAL and -ENODEV are both valid return values and they
+		 * respectively indicate that the the PXP interface is not
+		 * available (i.e., kernel too old) and that PXP is not
+		 * supported or disabled in HW.
+		 */
+		if (pxp_status == -EINVAL || pxp_status == -ENODEV)
+			return pxp_status;
+
+		/* status 1 means pxp is ready */
+		if (pxp_status == 1)
+			return 0;
+
+		/*
+		 * 0 means init still in progress, any other remaining state
+		 * is an unexpected error
+		 */
+		igt_assert_eq(pxp_status, 0);
+
+		usleep(50*1000);
+	}
+
+	igt_assert_f(0, "PXP failed to initialize within the timeout\n");
+	return -ETIMEDOUT;
 }
 
 igt_constructor

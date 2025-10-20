@@ -2275,6 +2275,10 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define FW_BLC2		0x020dc
 #define FW_BLC_SELF	0x020e0 /* 915+ only */
 
+#define DSB_STATUS_0_A			0x70B24
+#define   DSB_SAFE_WINDOW_LIVE		(1 << 26)
+#define   DSB_SAFE_WINDOW_STICKY	(1 << 19)
+
 #define DSPARB			0x70030
 #define   DSPARB_CSTART_SHIFT	7
 #define   DSPARB_BSTART_SHIFT	0
@@ -3531,6 +3535,7 @@ typedef enum {
 /* Those bits are ignored by pipe EDP since it can only connect to DDI A */
 #define  PIPE_DDI_PORT_MASK		(0xf<<28)
 #define  PIPE_DDI_SELECT_PORT(x)	((x)<<28)
+#define  PIPE_DDI_MODE_SELECT_MASK	(7<<24)
 #define  PIPE_DDI_MODE_SELECT_HDMI	(0<<24)
 #define  PIPE_DDI_MODE_SELECT_DVI	(1<<24)
 #define  PIPE_DDI_MODE_SELECT_DP_SST	(2<<24)

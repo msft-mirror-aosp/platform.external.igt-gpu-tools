@@ -11,6 +11,7 @@
 #include "igt_device.h"
 #include "igt_sriov_device.h"
 #include "intel_chipset.h"
+#include "intel_vram.h"
 #include "linux_scaffold.h"
 #include "xe/xe_mmio.h"
 #include "xe/xe_query.h"
@@ -21,7 +22,7 @@
  * TEST: xe_sriov_flr
  * Category: Core
  * Mega feature: SR-IOV
- * Sub-category: Reset tests
+ * Sub-category: SR-IOV Reset tests
  * Functionality: FLR
  * Description: Examine behavior of SR-IOV VF FLR
  *
@@ -596,8 +597,9 @@ static void ggtt_subcheck_init(struct subcheck_data *data)
 {
 	struct ggtt_data *gdata = (struct ggtt_data *)data;
 
-	if (xe_is_media_gt(data->pf_fd, data->gt)) {
-		set_skip_reason(data, "GGTT unavailable on media GT\n");
+	if (!xe_is_main_gt(data->pf_fd, data->gt)) {
+		set_skip_reason(data, "GGTT provisioning not exposed on GT%d (non-MAIN)\n",
+				data->gt);
 		return;
 	}
 
@@ -676,94 +678,28 @@ struct lmem_data {
 	size_t *vf_lmem_size;
 };
 
-struct lmem_info {
-	/* pointer to the mapped area */
-	char *addr;
-	/* size of mapped area */
-	size_t size;
-};
-
 const size_t STEP = SZ_1M;
 
-static void *mmap_vf_lmem(int pf_fd, int vf_num, size_t length, int prot, off_t offset)
+static bool lmem_write_pattern(struct vram_mapping *m, uint8_t value, size_t start, size_t step)
 {
-	int open_flags = ((prot & PROT_WRITE) != 0) ? O_RDWR : O_RDONLY;
-	struct stat st;
-	int sysfs, fd;
-	void *addr;
+	uint8_t read;
 
-	sysfs = igt_sriov_device_sysfs_open(pf_fd, vf_num);
-	if (sysfs < 0) {
-		igt_debug("Failed to open sysfs for VF%d: %s\n", vf_num, strerror(errno));
-		return NULL;
-	}
-
-	fd = openat(sysfs, "resource2", open_flags | O_SYNC);
-	close(sysfs);
-	if (fd < 0) {
-		igt_debug("Failed to open resource2 for VF%d: %s\n", vf_num, strerror(errno));
-		return NULL;
-	}
-
-	if (fstat(fd, &st)) {
-		igt_debug("Failed to stat resource2 for VF%d: %s\n", vf_num, strerror(errno));
-		close(fd);
-		return NULL;
-	}
-
-	if (st.st_size < length) {
-		igt_debug("Mapping length (%zu) exceeds BAR2 size (%" PRIu64 ")\n", length, (uint64_t)st.st_size);
-		close(fd);
-		return NULL;
-	}
-
-	addr = mmap(NULL, length, prot, MAP_SHARED, fd, offset);
-	close(fd);
-	if (addr == MAP_FAILED) {
-		igt_debug("Failed mmap resource2 for VF%d: %s\n", vf_num, strerror(errno));
-		return NULL;
-	}
-
-	return addr;
-}
-
-static void munmap_vf_lmem(struct lmem_info *lmem)
-{
-	igt_debug_on_f(munmap(lmem->addr, lmem->size),
-		       "Failed munmap %p: %s\n", lmem->addr, strerror(errno));
-}
-
-static char lmem_read(const char *addr, size_t idx)
-{
-	return READ_ONCE(*(addr + idx));
-}
-
-static char lmem_write_readback(char *addr, size_t idx, char value)
-{
-	WRITE_ONCE(*(addr + idx), value);
-	return lmem_read(addr, idx);
-}
-
-static bool lmem_write_pattern(struct lmem_info *lmem, char value, size_t start, size_t step)
-{
-	char read;
-
-	for (; start < lmem->size; start += step) {
-		read = lmem_write_readback(lmem->addr, start, value);
+	for (; start < m->size; start += step) {
+		read = intel_vram_write_readback8(m, start, value);
 		if (igt_debug_on_f(read != value, "LMEM[%zu]=%u != %u\n", start, read, value))
 			return false;
 	}
 	return true;
 }
 
-static bool lmem_contains_expected_values_(struct lmem_info *lmem,
-					   char expected, size_t start,
+static bool lmem_contains_expected_values_(struct vram_mapping *m,
+					   uint8_t expected, size_t start,
 					   size_t step)
 {
-	char read;
+	uint8_t read;
 
-	for (; start < lmem->size; start += step) {
-		read = lmem_read(lmem->addr, start);
+	for (; start < m->size; start += step) {
+		read = intel_vram_read8(m, start);
 		if (igt_debug_on_f(read != expected,
 				   "LMEM[%zu]=%u != %u\n", start, read, expected))
 			return false;
@@ -774,30 +710,27 @@ static bool lmem_contains_expected_values_(struct lmem_info *lmem,
 static bool lmem_contains_expected_values(int pf_fd, int vf_num, size_t length,
 					  char expected)
 {
-	struct lmem_info lmem = { .size = length };
+	struct vram_mapping vram;
 	bool result;
 
-	lmem.addr = mmap_vf_lmem(pf_fd, vf_num, length, PROT_READ | PROT_WRITE, 0);
-	if (igt_debug_on(!lmem.addr))
+	if (igt_debug_on(intel_vram_mmap(pf_fd, vf_num, 0, length, PROT_READ | PROT_WRITE, &vram)))
 		return false;
 
-	result = lmem_contains_expected_values_(&lmem, expected, 0, STEP);
-	munmap_vf_lmem(&lmem);
+	result = lmem_contains_expected_values_(&vram, expected, 0, STEP);
+	intel_vram_munmap(&vram);
 
 	return result;
 }
 
 static bool lmem_mmap_write_munmap(int pf_fd, int vf_num, size_t length, char value)
 {
-	struct lmem_info lmem;
+	struct vram_mapping vram;
 	bool result;
 
-	lmem.size = length;
-	lmem.addr = mmap_vf_lmem(pf_fd, vf_num, length, PROT_READ | PROT_WRITE, 0);
-	if (igt_debug_on(!lmem.addr))
+	if (igt_debug_on(intel_vram_mmap(pf_fd, vf_num, 0, length, PROT_READ | PROT_WRITE, &vram)))
 		return false;
-	result = lmem_write_pattern(&lmem, value, 0, STEP);
-	munmap_vf_lmem(&lmem);
+	result = lmem_write_pattern(&vram, value, 0, STEP);
+	intel_vram_munmap(&vram);
 
 	return result;
 }
@@ -813,6 +746,9 @@ static int populate_vf_lmem_sizes(struct subcheck_data *data)
 	igt_assert(ldata->vf_lmem_size);
 
 	xe_for_each_gt(data->pf_fd, gt) {
+		if (!xe_is_main_gt(data->pf_fd, gt))
+			continue;
+
 		ret = xe_sriov_pf_debugfs_read_provisioned_ranges(data->pf_fd,
 								  XE_SRIOV_SHARED_RES_LMEM,
 								  gt, &ranges, &nr_ranges);
@@ -1008,13 +944,13 @@ static void clear_tests(int pf_fd, int num_vfs, flr_exec_strategy exec_strategy)
 	};
 	const unsigned int num_checks = num_gts + 3;
 	struct subcheck checks[num_checks];
-	int i;
+	int i = 0, gt_id;
 
 	memset(mmio, 0, sizeof(mmio));
 
-	for (i = 0; i < num_gts; ++i) {
+	xe_for_each_gt(pf_fd, gt_id) {
 		gdata[i] = (struct ggtt_data){
-			.base = { .pf_fd = pf_fd, .num_vfs = num_vfs, .gt = i },
+			.base = { .pf_fd = pf_fd, .num_vfs = num_vfs, .gt = gt_id },
 			.mmio = &xemmio
 		};
 		checks[i] = (struct subcheck){
@@ -1025,6 +961,7 @@ static void clear_tests(int pf_fd, int num_vfs, flr_exec_strategy exec_strategy)
 			.verify_vf = ggtt_subcheck_verify_vf,
 			.cleanup = ggtt_subcheck_cleanup
 		};
+		i++;
 	}
 	checks[i++] = (struct subcheck) {
 		.data = (struct subcheck_data *)&ldata,

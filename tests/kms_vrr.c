@@ -920,13 +920,15 @@ test_cmrr(data_t *data, enum pipe pipe, igt_output_t *output, uint32_t flags)
 	}
 
 	igt_output_override_mode(output, &mode);
-	igt_display_commit2(&data->display, COMMIT_ATOMIC);
 
-	prepare_test(data, output, pipe);
-	result = flip_and_measure_cmrr(data, output, pipe, TEST_DURATION_NS * 2);
-	igt_assert_f(result > 75,
-		     "Refresh rate (%u Hz) %"PRIu64"ns: Target CMRR on threshold not reached, result was %u%%\n",
-		     mode.vrefresh, igt_kms_frame_time_from_vrefresh(mode.vrefresh), result);
+	if (!igt_display_try_commit2(&data->display, COMMIT_ATOMIC)) {
+		prepare_test(data, output, pipe);
+		result = flip_and_measure_cmrr(data, output, pipe, TEST_DURATION_NS * 2);
+		igt_assert_f(result > 75,
+			     "Refresh rate (%u Hz) %"PRIu64"ns: Target CMRR on threshold not reached, result was %u%%\n",
+			     mode.vrefresh, igt_kms_frame_time_from_vrefresh(mode.vrefresh),
+			     result);
+	}
 }
 
 static void test_cleanup(data_t *data, enum pipe pipe, igt_output_t *output)
@@ -959,6 +961,12 @@ static bool output_constraint(data_t *data, igt_output_t *output, uint32_t flags
 	}
 
 	if (flags & TEST_LINK_OFF) {
+		if (!psr_sink_support(data->drm_fd,
+				      data->debugfs_fd, PR_MODE, NULL)) {
+			igt_info("LOBF not supported\n");
+			return false;
+		}
+
 		if (psr_sink_support(data->drm_fd, data->debugfs_fd, PSR_MODE_1, NULL) ||
 		    psr_sink_support(data->drm_fd, data->debugfs_fd, PR_MODE, NULL))
 			psr_disable(data->drm_fd, data->debugfs_fd, NULL);
@@ -1008,7 +1016,7 @@ static bool config_constraint(data_t *data, igt_output_t *output, uint32_t flags
 		return false;
 	}
 
-	if (flags & TEST_SEAMLESS_DRRS)
+	if (flags & TEST_LINK_OFF)
 		goto out;
 
 	/* For Negative tests, panel should be non-vrr. */
@@ -1019,6 +1027,12 @@ static bool config_constraint(data_t *data, igt_output_t *output, uint32_t flags
 
 	if ((flags & ~TEST_NEGATIVE) && !vrr_capable(output)) {
 		igt_info("%s: Can't run VRR tests on non-VRR panel.\n", igt_output_name(output));
+		return false;
+	}
+
+	if ((flags & (TEST_SEAMLESS_VRR | TEST_SEAMLESS_DRRS)) &&
+	    (intel_display_ver(data->drm_fd) >= 14)) {
+		igt_info("DRRS is not supported on LNL and newer platforms\n");
 		return false;
 	}
 

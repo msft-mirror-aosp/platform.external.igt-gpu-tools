@@ -98,7 +98,7 @@ mem_copy(int fd, uint32_t src_handle, uint32_t dst_handle, const intel_ctx_t *ct
 	igt_debug("size: %u, pitch: %u, width: %u, height: %u (type: %d, mode: %d)\n",
 		  size, pitch, width, height, type, mode);
 
-	bb = xe_bo_create(fd, 0, bb_size, region, 0);
+	bb = xe_bo_create(fd, 0, bb_size, region, DRM_XE_GEM_CREATE_FLAG_NEEDS_VISIBLE_VRAM);
 
 	blt_mem_copy_init(fd, &mem, mode, type);
 	mem.print_bb = param.print_bb;
@@ -185,7 +185,7 @@ mem_set(int fd, uint32_t dst_handle, const intel_ctx_t *ctx, uint32_t size,
 	uint32_t bb;
 	uint8_t *result;
 
-	bb = xe_bo_create(fd, 0, bb_size, region, 0);
+	bb = xe_bo_create(fd, 0, bb_size, region, DRM_XE_GEM_CREATE_FLAG_NEEDS_VISIBLE_VRAM);
 	blt_mem_set_init(fd, &mem, TYPE_LINEAR);
 	blt_set_mem_object(&mem.dst, dst_handle, size, width, width, height, region,
 			   dst_mocs, DEFAULT_PAT_INDEX, COMPRESSION_DISABLED);
@@ -217,8 +217,10 @@ static void copy_test(int fd, struct rect *rect, enum blt_cmd_type cmd, uint32_t
 	uint32_t bo_size = ALIGN(blocksize * rect->height, xe_get_default_alignment(fd));
 	intel_ctx_t *ctx;
 
-	src_handle = xe_bo_create(fd, 0, bo_size, region, 0);
-	dst_handle = xe_bo_create(fd, 0, bo_size, region, 0);
+	src_handle = xe_bo_create(fd, 0, bo_size, region,
+				  DRM_XE_GEM_CREATE_FLAG_NEEDS_VISIBLE_VRAM);
+	dst_handle = xe_bo_create(fd, 0, bo_size, region,
+				  DRM_XE_GEM_CREATE_FLAG_NEEDS_VISIBLE_VRAM);
 	vm = xe_vm_create(fd, 0, 0);
 	exec_queue = xe_exec_queue_create(fd, vm, &inst, 0);
 	ctx = intel_ctx_xe(fd, vm, exec_queue, 0, 0, 0);
@@ -259,6 +261,7 @@ const char *help_str =
 igt_main_args("b", NULL, help_str, opt_handler, NULL)
 {
 	int fd;
+	uint16_t dev_id;
 	struct igt_collection *set, *regions;
 	uint32_t region;
 	struct rect linear[] = { { 0, 0xfd, 1, MODE_BYTE },
@@ -272,6 +275,7 @@ igt_main_args("b", NULL, help_str, opt_handler, NULL)
 
 	igt_fixture {
 		fd = drm_open_driver(DRIVER_XE);
+		dev_id = intel_get_drm_devid(fd);
 		xe_device_get(fd);
 		set = xe_get_memory_region_set(fd,
 					       DRM_XE_MEM_REGION_CLASS_SYSMEM,
@@ -291,6 +295,7 @@ igt_main_args("b", NULL, help_str, opt_handler, NULL)
 	for (int i = 0; i < ARRAY_SIZE(page); i++) {
 		igt_subtest_f("mem-page-copy-%u", page[i].width) {
 			igt_require(blt_has_mem_copy(fd));
+			igt_require(intel_get_device_info(dev_id)->graphics_ver >= 20);
 			for_each_variation_r(regions, 1, set) {
 				region = igt_collection_get_value(regions, 0);
 				copy_test(fd, &page[i], MEM_COPY, region);
@@ -310,6 +315,13 @@ igt_main_args("b", NULL, help_str, opt_handler, NULL)
 
 	for (int i = 0; i < ARRAY_SIZE(linear); i++) {
 		igt_subtest_f("mem-set-linear-0x%x", linear[i].width) {
+			/* Skip mem-set-linear test for values greater than
+			 * 0x3FFFF. As hardware with graphics_ver<20 support
+			 * till 0x3FFFF.
+			 */
+			if (linear[i].width > 0x3ffff &&
+			    (intel_get_device_info(dev_id)->graphics_ver < 20))
+				igt_skip("Skipping: width exceeds 18-bit limit on gfx_ver < 20\n");
 			igt_require(blt_has_mem_set(fd));
 			for_each_variation_r(regions, 1, set) {
 				region = igt_collection_get_value(regions, 0);

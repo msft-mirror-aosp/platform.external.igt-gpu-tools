@@ -13,10 +13,9 @@
 #include <signal.h>
 #include "amd_memory.h"
 #include "amd_deadlock_helpers.h"
-#include "lib/amdgpu/amd_userq.h"
 #include "lib/amdgpu/amd_command_submission.h"
 
-#define MAX_JOB_COUNT 200
+#define MAX_JOB_COUNT 20
 
 #define MEMORY_OFFSET 256 /* wait for this memory to change */
 struct thread_param {
@@ -46,7 +45,7 @@ write_mem_address(void *data)
 }
 
 static void
-amdgpu_wait_memory(amdgpu_device_handle device_handle, unsigned int ip_type, uint32_t priority)
+amdgpu_wait_memory(amdgpu_device_handle device_handle, unsigned int ip_type, uint32_t priority, bool userq)
 {
 	amdgpu_context_handle context_handle;
 	amdgpu_bo_handle ib_result_handle;
@@ -57,7 +56,7 @@ amdgpu_wait_memory(amdgpu_device_handle device_handle, unsigned int ip_type, uin
 	struct amdgpu_cs_ib_info ib_info;
 	struct amdgpu_cs_fence fence_status;
 	uint32_t expired;
-	int r;
+	int r = 0;
 	amdgpu_bo_list_handle bo_list;
 	amdgpu_va_handle va_handle;
 	int bo_cmd_size = 4096;
@@ -65,23 +64,34 @@ amdgpu_wait_memory(amdgpu_device_handle device_handle, unsigned int ip_type, uin
 	pthread_t stress_thread = {0};
 	struct thread_param param = {0};
 	int job_count = 0;
+	struct amdgpu_ring_context *ring_context = NULL;
 	struct amdgpu_cmd_base *base_cmd = get_cmd_base();
+	const struct amdgpu_ip_block_version *ip_block = get_ip_block(device_handle, ip_type);
 
-	if (priority == AMDGPU_CTX_PRIORITY_HIGH)
-		r = amdgpu_cs_ctx_create2(device_handle, AMDGPU_CTX_PRIORITY_HIGH, &context_handle);
-	else
-		r = amdgpu_cs_ctx_create(device_handle, &context_handle);
-
-	igt_assert_eq(r, 0);
+	if (userq) {
+		ring_context = calloc(1, sizeof(*ring_context));
+		igt_assert(ring_context);
+		ip_block->funcs->userq_create(device_handle, ring_context, ip_block->type);
+	} else {
+		if (priority == AMDGPU_CTX_PRIORITY_HIGH)
+			r = amdgpu_cs_ctx_create2(device_handle, AMDGPU_CTX_PRIORITY_HIGH, &context_handle);
+		else
+			r = amdgpu_cs_ctx_create(device_handle, &context_handle);
+		igt_assert_eq(r, 0);
+	}
 
 	r = amdgpu_bo_alloc_and_map_raw(device_handle, bo_cmd_size, bo_cmd_size,
 			AMDGPU_GEM_DOMAIN_GTT, 0, use_uc_mtype ? AMDGPU_VM_MTYPE_UC : 0,
 						    &ib_result_handle, &ib_result_cpu,
 						    &ib_result_mc_address, &va_handle);
 	igt_assert_eq(r, 0);
-
-	r = amdgpu_get_bo_list(device_handle, ib_result_handle, NULL, &bo_list);
-	igt_assert_eq(r, 0);
+	if (userq) {
+		r = amdgpu_timeline_syncobj_wait(device_handle, ring_context->timeline_syncobj_handle, ring_context->point);
+		igt_assert_eq(r, 0);
+	} else {
+		r = amdgpu_get_bo_list(device_handle, ib_result_handle, NULL, &bo_list);
+		igt_assert_eq(r, 0);
+	}
 
 	base_cmd->attach_buf(base_cmd, ib_result_cpu, bo_cmd_size);
 
@@ -101,8 +111,14 @@ amdgpu_wait_memory(amdgpu_device_handle device_handle, unsigned int ip_type, uin
 
 	base_cmd->emit(base_cmd, 0);/* reference value */
 	base_cmd->emit(base_cmd, 0xffffffff); /* and mask */
-	base_cmd->emit(base_cmd, 0x00000004);/* poll interval */
-	base_cmd->emit_repeat(base_cmd, GFX_COMPUTE_NOP, 16 - base_cmd->cdw);
+
+	if (ip_type == AMDGPU_HW_IP_DMA) {
+		base_cmd->emit(base_cmd, 0x0fff0004);/* poll interval and infinite retry */
+		base_cmd->emit_repeat(base_cmd, SDMA_NOP, 16 - base_cmd->cdw);
+	} else {
+		base_cmd->emit(base_cmd, 0x00000004);/* poll interval */
+		base_cmd->emit_repeat(base_cmd, GFX_COMPUTE_NOP, 16 - base_cmd->cdw);
+	}
 
 	ib_result_cpu2 = ib_result_cpu;
 	ib_result_cpu2[MEMORY_OFFSET] = 0x0; /* the memory we wait on to change */
@@ -140,42 +156,54 @@ amdgpu_wait_memory(amdgpu_device_handle device_handle, unsigned int ip_type, uin
 		/* GPU hung is detected becouse we wait for register value*/
 		/* submit jobs until it is cancelled , it is about 33 jobs for gfx */
 		/* before GPU hung */
-		r = amdgpu_cs_submit(context_handle, 0, &ibs_request, 1);
+		if (userq) {
+			ring_context->pm4_dw = ib_info.size;
+			ip_block->funcs->userq_submit(device_handle, ring_context, ip_block->type, ib_result_mc_address);
+		} else {
+			r = amdgpu_cs_submit(context_handle, 0, &ibs_request, 1);
+		}
 		job_count++;
 	} while (r == 0 && job_count < MAX_JOB_COUNT);
 
 	if (r != 0 && r != -ECANCELED && r != -ENODATA)
 		igt_assert(0);
 
+	// Wait for completion (syncobj for userq, fence for kernel queue)
+	if (userq) {
+		r = amdgpu_timeline_syncobj_wait(device_handle, ring_context->timeline_syncobj_handle, ring_context->point);
+	} else {
+		memset(&fence_status, 0, sizeof(struct amdgpu_cs_fence));
+		fence_status.context = context_handle;
+		fence_status.ip_type = ip_type;
+		fence_status.ip_instance = 0;
+		fence_status.ring = 0;
+		fence_status.fence = ibs_request.seq_no;
 
-
-	memset(&fence_status, 0, sizeof(struct amdgpu_cs_fence));
-	fence_status.context = context_handle;
-	fence_status.ip_type = ip_type;
-	fence_status.ip_instance = 0;
-	fence_status.ring = 0;
-	fence_status.fence = ibs_request.seq_no;
-
-	r = amdgpu_cs_query_fence_status(&fence_status, AMDGPU_TIMEOUT_INFINITE, 0,
-			&expired);
-	if (r != 0 && r != -ECANCELED && r != -ENODATA)
-		igt_assert(0);
-
+		r = amdgpu_cs_query_fence_status(&fence_status, AMDGPU_TIMEOUT_INFINITE, 0,
+				&expired);
+		if (r != 0 && r != -ECANCELED && r != -ENODATA && r != -ETIME)
+			igt_assert(0);
+	}
 	/* send signal to modify the memory we wait for */
 	pthread_kill(stress_thread, SIGUSR2);
 
 	pthread_join(stress_thread, NULL);
 
-	amdgpu_bo_list_destroy(bo_list);
+	// Cleanup
+	if (!userq) {
+		amdgpu_bo_list_destroy(bo_list);
+		amdgpu_cs_ctx_free(context_handle);
+	} else {
+		ip_block->funcs->userq_destroy(device_handle, ring_context, ip_block->type);
+		free(ring_context);
+	}
 
 	amdgpu_bo_unmap_and_free(ib_result_handle, va_handle,
 							 ib_result_mc_address, 4096);
-
-	amdgpu_cs_ctx_free(context_handle);
 	free_cmd_base(base_cmd);
 }
 
-void amdgpu_wait_memory_helper(amdgpu_device_handle device_handle, unsigned int ip_type, struct pci_addr *pci)
+void amdgpu_wait_memory_helper(amdgpu_device_handle device_handle, unsigned int ip_type, struct pci_addr *pci, bool userq)
 {
 	int r;
 	FILE *fp;
@@ -191,6 +219,18 @@ void amdgpu_wait_memory_helper(amdgpu_device_handle device_handle, unsigned int 
 	igt_assert_eq(r, 0);
 	if (!info.available_rings)
 		igt_info("SKIP ... as there's no ring for ip %d\n", ip_type);
+
+	if (userq) {
+		/* User queue specific setup */
+		igt_info("Using user queue mode\n");
+
+		/* For user queues, we typically want to use normal priority */
+		prio = AMDGPU_CTX_PRIORITY_NORMAL;
+
+		/* Skip the scheduler mask manipulation for user queues */
+		amdgpu_wait_memory(device_handle, ip_type, prio, true);
+		return;
+	}
 
 	support_page = is_support_page_queue(ip_type, pci);
 
@@ -262,7 +302,7 @@ void amdgpu_wait_memory_helper(amdgpu_device_handle device_handle, unsigned int 
 			igt_assert_eq(r, 0);
 		}
 
-		amdgpu_wait_memory(device_handle, ip_type, prio);
+		amdgpu_wait_memory(device_handle, ip_type, prio, false);
 	}
 
 	/* recover the sched mask */
@@ -286,11 +326,12 @@ bad_access_helper(amdgpu_device_handle device_handle, unsigned int cmd_error,
 	struct amdgpu_ring_context *ring_context;
 	int r = 0;
 
+	ip_block = get_ip_block(device_handle, ip_type);
 	ring_context = calloc(1, sizeof(*ring_context));
 	igt_assert(ring_context);
 
 	if (user_queue) {
-		amdgpu_user_queue_create(device_handle, ring_context, ip_type);
+		ip_block->funcs->userq_create(device_handle, ring_context, ip_type);
 	} else {
 		if (priority == AMDGPU_CTX_PRIORITY_HIGH)
 			r = amdgpu_cs_ctx_create2(device_handle, AMDGPU_CTX_PRIORITY_HIGH, &ring_context->context_handle);
@@ -308,7 +349,6 @@ bad_access_helper(amdgpu_device_handle device_handle, unsigned int cmd_error,
 	ring_context->user_queue = user_queue;
 	ring_context->time_out = 0x7ffff;
 	igt_assert(ring_context->pm4);
-	ip_block = get_ip_block(device_handle, ip_type);
 	r = amdgpu_bo_alloc_and_map_sync(device_handle,
 				    ring_context->write_length * sizeof(uint32_t),
 				    4096, AMDGPU_GEM_DOMAIN_GTT,
@@ -339,7 +379,7 @@ bad_access_helper(amdgpu_device_handle device_handle, unsigned int cmd_error,
 	amdgpu_bo_unmap_and_free(ring_context->bo, ring_context->va_handle, ring_context->bo_mc,
 				 ring_context->write_length * sizeof(uint32_t));
 	if (user_queue) {
-		amdgpu_user_queue_destroy(device_handle, ring_context, ip_block->type);
+		ip_block->funcs->userq_destroy(device_handle, ring_context, ip_block->type);
 	} else {
 		free(ring_context->pm4);
 		free(ring_context);
@@ -452,17 +492,15 @@ void bad_access_ring_helper(amdgpu_device_handle device_handle, unsigned int cmd
 	uint32_t prio;
 	char sysfs[125];
 	bool support_page;
-
+	uint32_t available_rings = 0;
 	r = amdgpu_query_hw_ip_info(device_handle, ip_type, 0, &info);
 	igt_assert_eq(r, 0);
-	if (!info.available_rings)
+
+	available_rings = user_queue ? ((1 << info.num_userq_slots) -1) : info.available_rings;
+	if (!available_rings)
 		igt_info("SKIP ... as there's no ring for ip %d\n", ip_type);
 
 	if (user_queue) {
-		if (info.hw_ip_version_major < 11) {
-			igt_info("SKIP ... as user queueu doesn't support %d\n", ip_type);
-			return;
-		}
 		/* No need to iterate each ring, user queues are scheduled by hardware */
 		bad_access_helper(device_handle, cmd_error, ip_type, prio, user_queue);
 		return;

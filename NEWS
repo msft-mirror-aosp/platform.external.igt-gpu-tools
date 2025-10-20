@@ -1,3 +1,165 @@
+Release 2.02 (2025-09-26)
+-------------------------
+
+General changes:
+
+- PNG images moved to new data/ directory. (Naladala Ramanaidu, Swati Sharma)
+
+- Added default checkpatch config. (Peter Senna Tschudin)
+
+Library changes:
+
+- New VKMS driver in drmtest lib. (José Expósito)
+
+- Added PCI ids for BMG and WildcatLake.(Ravi Kumar Vodapalli, Jani Nikula)
+
+- Separation of Intel compute kernels for easy maintainance. (Zbigniew
+  Kempczyński)
+
+- Reduced logs for KMS tests with IGT_CI_RUN env var. (Pranay Samala)
+
+- New ASIC-aware gfx hooks for amdgpu. (Vitaly Prosyak)
+
+- Added SDMA support for user queues for amdgpu. (Jesse Zhang)
+
+- Improved GTs id handling in Xe. (Matt Roper)
+
+- New lib for Intel WA checks. (Mohammed Thasleem)
+
+- New lib for directory traversal and file handling. (Peter Senna Tschudin)
+
+- Added support for the device filters during device scan. (Soham Purkait)
+
+Test changes:
+
+- New tests for VKMS. (José Expósito, Louis Chauvet, Jim Shargo, Marius Vlad)
+
+- Added madvise subtests for Xe system allocator. (Nishit Sharma)
+
+- Improved Xe configfs testing. (Lucas De Marchi)
+
+- Improved KMS HDR panel testing. (Chaitanya Kumar Borah)
+
+- Added subtests for engine activity accuracy. (Soham Purkait, Riana Tauro)
+
+- Improved Xe OA testing. (Ashutosh Dixit, Umesh Nerlige Ramappa, Sushma
+  Venkatesh Reddy)
+
+- New core and kms tests for sysfs and debugfs. (Peter Senna Tschudin)
+
+- Improved Xe system allocator testing. (Matthew Brost)
+
+- Improved Xe SRIOV testing. (Marcin Bernatowicz)
+
+- Improved KMS async flips tests with async modifiers. (Santhosh Reddy Guddati)
+
+- New multi-GPU test cases for amdgpu. (Jesse Zhang)
+
+- Added subtest for async flips with DPMS. (Karthik B S)
+
+- Added tests for MSM. (Rob Clark)
+
+Tools changes:
+
+- Improved intel_vbt_decode. (Jani Nikula)
+
+- Added Xe support to intel_dp_compliance. (Disantkumar Mistry)
+
+Runner changes:
+
+- Relaxed timeout reduction on soft lockup. (Janusz Krzysztofik)
+
+- Added a hook for kmemleak scan after the unbind operation. (Peter Senna
+  Tschudin)
+
+Scripts changes:
+
+- Renamed blocklist verify script. (Kamil Konieczny)
+
+
+And many other bug fixes, improvements, cleanups and new tests.
+
+
+Release 2.01 (2025-06-27)
+-------------------------
+
+General changes:
+
+- Bumped required meson version to 0.52.1 (Andrzej Hajda)
+
+- Added man page for lsgpu. (Peter Senna Tschudin)
+
+Devops changes:
+
+- Improved GitLab CI pipeline. (Andrzej Hajda)
+
+- Bumped Debian version to bullseye and Fedora to latest 42 (Andrzej Hajda)
+
+- Removed MIPS testing (Ryszard Knop and Andrzej Hajda)
+
+Library changes:
+
+- Updated PCI ids for BMG/PTL. (Shekhar Chauhan and Kamil Konieczny)
+
+- Preliminary enablement for Android compilation (Sapna Singh and Jeevaka
+  Prabu Badrappan)
+
+- Improved kernel module un/binding. (Lucas De Marchi and Francois Dugast)
+
+- Added user mode queues UMQ support for amdgpu. (Sunil Khatri)
+
+- Improved Intel GPGPU compute libs. (Francois Dugast and Zbigniew Kempczyński)
+
+- New configfs library. (José Expósito, Jim Shargo, Marius Vlad, Riana Tauro)
+
+- Added PTL support in Xe OA libs. (Sushma Venkatesh Reddy)
+
+- Improved capturing logs for child processes. (Pawel Sikora)
+
+Test changes:
+
+- New test drm_virtgpu for VirtIO-GPU. (Dorinda Bassey)
+
+- New Xe survivability mode testing. (Riana Tauro)
+
+- New amdgpu tests for jpeg and vcn queues. (Ruili Ji)
+
+- New Xe system allocator test. (Matthew Brost).
+
+- Improved Xe fault injection. (Satyanarayana K V P)
+
+- New Xe PXP test. (Daniele Ceraolo Spurio)
+
+- Unified Intel sysfs and debugfs testing. (Peter Senna Tschudin)
+
+- Improved chamelium color test. (Swati Sharma)
+
+- Improved Xe OA testing. (Ashutosh Dixit, Sai Teja Pottumuttu and Umesh
+  Nerlige Ramappa)
+
+- Added dual display subtest in multi plane test. (Karthik B S)
+
+Tools changes:
+
+- New tool intel_hdcp for printing HDCP info on connected outputs. (Santhosh
+  Reddy Guddati)
+
+- Add support for gen10+ devices in intel_gtt (Tomita Moeko)
+
+- Add support for Xe in intel_pm_rpm (Soham Purkait)
+
+Runner changes:
+
+- Use boottime for time checks. (Kamil Konieczny)
+
+Benchmark changes:
+
+- New Xe benchmarks. (Pravalika Gurram)
+
+
+And many other bug fixes, improvements, cleanups and new tests.
+
+
 Release 2.00 (2025-03-13)
 -------------------------
 

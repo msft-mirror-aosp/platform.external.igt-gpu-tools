@@ -13,7 +13,6 @@
 #include "lib/amdgpu/amd_gfx.h"
 #include "lib/amdgpu/amd_shaders.h"
 #include "lib/amdgpu/amd_dispatch.h"
-#include "lib/amdgpu/amd_userq.h"
 
 #define BUFFER_SIZE (8 * 1024)
 
@@ -116,7 +115,7 @@ static void amdgpu_command_submission_compute(amdgpu_device_handle device, bool 
 						     get_ip_block(device, AMDGPU_HW_IP_COMPUTE),
 						     user_queue);
 	/* nop test */
-	amdgpu_command_submission_compute_nop(device, user_queue);
+	amdgpu_command_submission_nop(device, AMDGPU_HW_IP_COMPUTE, user_queue);
 }
 
 /**
@@ -136,8 +135,18 @@ static void amdgpu_command_submission_sdma(amdgpu_device_handle device, bool use
 	amdgpu_command_submission_copy_linear_helper(device,
 						     get_ip_block(device, AMDGPU_HW_IP_DMA),
 						     user_queue);
+	/* nop test */
+	amdgpu_command_submission_nop(device, AMDGPU_HW_IP_DMA, user_queue);
 }
 
+static void amdgpu_test_all_queues(amdgpu_device_handle device, bool user_queue)
+{
+	amdgpu_command_submission_write_linear_helper2(device, AMDGPU_HW_IP_GFX, false, user_queue);
+	amdgpu_command_submission_write_linear_helper2(device, AMDGPU_HW_IP_COMPUTE, false, user_queue);
+	amdgpu_command_submission_write_linear_helper2(device, AMDGPU_HW_IP_DMA, false, user_queue);
+	amdgpu_command_submission_write_linear_helper2(device, AMDGPU_HW_IP_GFX |AMDGPU_HW_IP_COMPUTE |
+							AMDGPU_HW_IP_DMA, false, user_queue);
+}
 /**
  * SEMAPHORE
  * @param device
@@ -507,7 +516,7 @@ amdgpu_sync_dependency_test(amdgpu_device_handle device_handle, bool user_queue)
 	igt_assert(ring_context);
 
 	if (user_queue) {
-		amdgpu_user_queue_create(device_handle, ring_context, ip_block->type);
+		ip_block->funcs->userq_create(device_handle, ring_context, ip_block->type);
 	} else {
 		r = amdgpu_cs_ctx_create(device_handle, &context_handle[0]);
 		igt_assert_eq(r, 0);
@@ -542,53 +551,19 @@ amdgpu_sync_dependency_test(amdgpu_device_handle device_handle, bool user_queue)
 	/* assign cmd buffer */
 	base->attach_buf(base, ib_result_cpu, const_size);
 
+	/* program compute */
+	ip_block->funcs->gfx_program_compute(
+		ip_block->funcs,
+		base,
+		ib_result_mc_address + (uint64_t)code_offset * 4,
+		ib_result_mc_address + (uint64_t)data_offset * 4,
+		0x002c0040,
+		0x00000010,
+		1, 1, 1);
 
-	base->emit(base, PACKET3(PKT3_CONTEXT_CONTROL, 1));
-	base->emit(base, 0x80000000);
-	base->emit(base, 0x80000000);
+	/* dispatch (flags chosen per-family in overrides) */
+	ip_block->funcs->gfx_dispatch_direct( ip_block->funcs, base, 1, 1, 1, 0);
 
-	base->emit(base, PACKET3(PKT3_CLEAR_STATE, 0));
-	base->emit(base, 0x80000000);
-
-	/* Program compute regs */
-	/* TODO ASIC registers do based on predefined offsets */
-	base->emit(base, PACKET3(PKT3_SET_SH_REG, 2));
-	base->emit(base, ip_block->funcs->get_reg_offset(COMPUTE_PGM_LO));
-	base->emit(base, (ib_result_mc_address + code_offset * 4) >> 8);
-	base->emit(base, (ib_result_mc_address + code_offset * 4) >> 40);
-
-	base->emit(base, PACKET3(PKT3_SET_SH_REG, 2));
-	base->emit(base, ip_block->funcs->get_reg_offset(COMPUTE_PGM_RSRC1));
-
-	base->emit(base, 0x002c0040);
-	base->emit(base, 0x00000010);
-
-	base->emit(base, PACKET3(PKT3_SET_SH_REG, 1));
-	base->emit(base, ip_block->funcs->get_reg_offset(COMPUTE_TMPRING_SIZE));
-	base->emit(base, 0x00000100);
-
-	base->emit(base, PACKET3(PKT3_SET_SH_REG, 2));
-	base->emit(base, ip_block->funcs->get_reg_offset(COMPUTE_USER_DATA_0));
-	base->emit(base, 0xffffffff & (ib_result_mc_address + data_offset * 4));
-	base->emit(base, (0xffffffff00000000 & (ib_result_mc_address + data_offset * 4)) >> 32);
-
-	base->emit(base, PACKET3(PKT3_SET_SH_REG, 1));
-	base->emit(base, ip_block->funcs->get_reg_offset(COMPUTE_RESOURCE_LIMITS));
-	base->emit(base, 0);
-
-	base->emit(base, PACKET3(PKT3_SET_SH_REG, 3));
-	base->emit(base, ip_block->funcs->get_reg_offset(COMPUTE_NUM_THREAD_X));
-	base->emit(base, 1);
-	base->emit(base, 1);
-	base->emit(base, 1);
-
-	/* Dispatch */
-	base->emit(base, PACKET3(PACKET3_DISPATCH_DIRECT, 3));
-	base->emit(base, 1);
-	base->emit(base, 1);
-	base->emit(base, 1);
-	base->emit(base, 0x00000045);
-	base->emit_aligned(base, 7, GFX_COMPUTE_NOP);
 
 	memcpy(base->buf + code_offset, shader, size_bytes);
 
@@ -606,7 +581,7 @@ amdgpu_sync_dependency_test(amdgpu_device_handle device_handle, bool user_queue)
 
 	if (user_queue) {
 		ring_context->pm4_dw = ib_info.size;
-		amdgpu_user_queue_submit(device_handle, ring_context, ip_block->type,
+		ip_block->funcs->userq_submit(device_handle, ring_context, ip_block->type,
 					 ib_result_mc_address);
 	} else {
 		r = amdgpu_cs_submit(context_handle[1], 0, &ibs_request, 1);
@@ -617,12 +592,10 @@ amdgpu_sync_dependency_test(amdgpu_device_handle device_handle, bool user_queue)
 
 	cdw_old = base->cdw;
 
-	base->emit(base, PACKET3(PACKET3_WRITE_DATA, 3));
-	base->emit(base, WRITE_DATA_DST_SEL(5) | WR_CONFIRM);
-	base->emit(base,  0xfffffffc & (ib_result_mc_address + data_offset * 4));
-	base->emit(base,  (0xffffffff00000000 & (ib_result_mc_address + data_offset * 4)) >> 32);
-	base->emit(base,  99);
-	base->emit_aligned(base, 7, GFX_COMPUTE_NOP);
+	/* confirmed write */
+	ip_block->funcs->gfx_write_confirm(
+		ip_block->funcs, base, ib_result_mc_address + (uint64_t)data_offset * 4,
+		99);
 
 	memset(&ib_info, 0, sizeof(struct amdgpu_cs_ib_info));
 	ib_info.ib_mc_address = ib_result_mc_address + cdw_old * 4;
@@ -646,7 +619,7 @@ amdgpu_sync_dependency_test(amdgpu_device_handle device_handle, bool user_queue)
 
 	if (user_queue) {
 		ring_context->pm4_dw = ib_info.size;
-		amdgpu_user_queue_submit(device_handle, ring_context, ip_block->type,
+		ip_block->funcs->userq_submit(device_handle, ring_context, ip_block->type,
 					ib_info.ib_mc_address);
 	} else {
 		r = amdgpu_cs_submit(context_handle[0], 0, &ibs_request, 1);
@@ -678,7 +651,7 @@ amdgpu_sync_dependency_test(amdgpu_device_handle device_handle, bool user_queue)
 				 ib_result_mc_address, const_alignment);
 
 	if (user_queue) {
-		amdgpu_user_queue_destroy(device_handle, ring_context, ip_block->type);
+		ip_block->funcs->userq_destroy(device_handle, ring_context, ip_block->type);
 	} else {
 		amdgpu_cs_ctx_free(context_handle[0]);
 		amdgpu_cs_ctx_free(context_handle[1]);
@@ -698,6 +671,12 @@ igt_main
 	int r;
 	bool arr_cap[AMD_IP_MAX] = {0};
 	bool userq_arr_cap[AMD_IP_MAX] = {0};
+	bool enable_test = false;
+#ifdef AMDGPU_USERQ_ENABLED
+	const char *env = getenv("AMDGPU_ENABLE_USERQTEST");
+
+	enable_test = env && atoi(env);
+#endif
 
 	igt_fixture {
 		uint32_t major, minor;
@@ -790,11 +769,9 @@ igt_main
 		}
 	}
 
-#ifdef AMDGPU_USERQ_ENABLED
-
 	igt_describe("Check-GFX-CS-for-every-available-ring-works-for-write-const-fill-and-copy-operation-using-more-than-one-IB-and-shared-IB");
 	igt_subtest_with_dynamic("cs-gfx-with-IP-GFX-UMQ") {
-		if (userq_arr_cap[AMD_IP_GFX]) {
+		if (enable_test && userq_arr_cap[AMD_IP_GFX]) {
 			igt_dynamic_f("cs-gfx-with-umq")
 			amdgpu_command_submission_gfx(device, info.hw_ip_version_major < 11, true);
 		}
@@ -802,7 +779,7 @@ igt_main
 
 	igt_describe("Check-COMPUTE-CS-for-every-available-ring-works-for-write-const-fill-copy-and-nop-operation");
 	igt_subtest_with_dynamic("cs-compute-with-IP-COMPUTE-UMQ") {
-		if (userq_arr_cap[AMD_IP_COMPUTE]) {
+		if (enable_test && userq_arr_cap[AMD_IP_COMPUTE]) {
 			igt_dynamic_f("cs-compute-with-umq")
 			amdgpu_command_submission_compute(device, true);
 		}
@@ -810,12 +787,29 @@ igt_main
 
 	igt_describe("Check-sync-dependency-using-GFX-ring");
 	igt_subtest_with_dynamic("sync-dependency-test-with-IP-GFX-UMQ") {
-		if (userq_arr_cap[AMD_IP_GFX]) {
+		if (enable_test && userq_arr_cap[AMD_IP_GFX]) {
 			igt_dynamic_f("sync-dependency-test-with-umq")
 			amdgpu_sync_dependency_test(device, true);
 		}
 	}
-#endif
+
+	igt_describe("Check-DMA-CS-for-every-available-ring-works-for-write-const-fill-copy-operation");
+	igt_subtest_with_dynamic("cs-sdma-with-IP-DMA-UMQ") {
+		if (enable_test && userq_arr_cap[AMD_IP_DMA]) {
+			igt_dynamic_f("cs-sdma-with-umq")
+			amdgpu_command_submission_sdma(device, true);
+		}
+	}
+
+	igt_describe("Check-all-user-queues-for-write-operation");
+	igt_subtest_with_dynamic("all-queues-test-with-UMQ") {
+		if (enable_test && userq_arr_cap[AMD_IP_GFX] &&
+				userq_arr_cap[AMD_IP_COMPUTE] &&
+				userq_arr_cap[AMD_IP_DMA]) {
+			igt_dynamic_f("all-queues-with-umq")
+			amdgpu_test_all_queues(device, true);
+		}
+	}
 
 	igt_fixture {
 		amdgpu_device_deinitialize(device);

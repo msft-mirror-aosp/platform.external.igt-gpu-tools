@@ -25,14 +25,14 @@
 #include "amd_PM4.h"
 #include "amd_memory.h"
 #include "amd_compute.h"
-#include "amd_userq.h"
+#include "amd_sdma.h"
 
 /**
  *
  * @param device
  * @param user_queue
  */
-void amdgpu_command_submission_compute_nop(amdgpu_device_handle device, bool user_queue)
+void amdgpu_command_submission_nop(amdgpu_device_handle device, enum amd_ip_block_type type, bool user_queue)
 {
 	amdgpu_context_handle context_handle;
 	amdgpu_bo_handle ib_result_handle;
@@ -41,29 +41,33 @@ void amdgpu_command_submission_compute_nop(amdgpu_device_handle device, bool use
 	struct amdgpu_cs_request ibs_request;
 	struct amdgpu_cs_ib_info ib_info;
 	struct amdgpu_cs_fence fence_status;
-	struct drm_amdgpu_info_hw_ip info;
+	const struct amdgpu_ip_block_version *ip_block = NULL;
 	uint32_t *ptr;
 	uint32_t expired;
 	int r, instance;
 	amdgpu_bo_list_handle bo_list;
 	amdgpu_va_handle va_handle;
-
+	uint32_t available_rings = 0;
 	struct amdgpu_ring_context *ring_context;
 
+	ip_block = get_ip_block(device, type);
 	ring_context = calloc(1, sizeof(*ring_context));
 	igt_assert(ring_context);
 
-	r = amdgpu_query_hw_ip_info(device, AMDGPU_HW_IP_COMPUTE, 0, &info);
+	r = amdgpu_query_hw_ip_info(device, type, 0, &ring_context->hw_ip_info);
 	igt_assert_eq(r, 0);
 
+	available_rings = user_queue ? ((1 << ring_context->hw_ip_info.num_userq_slots) -1) :
+						ring_context->hw_ip_info.available_rings;
+
 	if (user_queue) {
-		amdgpu_user_queue_create(device, ring_context, AMD_IP_COMPUTE);
+		ip_block->funcs->userq_create(device, ring_context, type);
 	} else {
 		r = amdgpu_cs_ctx_create(device, &context_handle);
 		igt_assert_eq(r, 0);
 	}
 
-	for (instance = 0; info.available_rings & (1 << instance); instance++) {
+	for (instance = 0; available_rings & (1 << instance); instance++) {
 		r = amdgpu_bo_alloc_and_map_sync(device, 4096, 4096,
 						 AMDGPU_GEM_DOMAIN_GTT, 0,
 						 AMDGPU_VM_MTYPE_UC,
@@ -86,11 +90,14 @@ void amdgpu_command_submission_compute_nop(amdgpu_device_handle device, bool use
 
 		ptr = ib_result_cpu;
 		memset(ptr, 0, 16);
-		ptr[0] = PACKET3(PACKET3_NOP, 14);
+		if (type == AMDGPU_HW_IP_DMA)
+			ptr[0] = SDMA_NOP;
+		else
+			ptr[0] = PACKET3(PACKET3_NOP, 14);
 		ring_context->pm4_dw = 16;
 
 		if (user_queue) {
-			amdgpu_user_queue_submit(device, ring_context, AMD_IP_COMPUTE,
+			ip_block->funcs->userq_submit(device, ring_context, type,
 						 ib_result_mc_address);
 		} else {
 			memset(&ib_info, 0, sizeof(struct amdgpu_cs_ib_info));
@@ -98,7 +105,7 @@ void amdgpu_command_submission_compute_nop(amdgpu_device_handle device, bool use
 			ib_info.size = 16;
 
 			memset(&ibs_request, 0, sizeof(struct amdgpu_cs_request));
-			ibs_request.ip_type = AMDGPU_HW_IP_COMPUTE;
+			ibs_request.ip_type = type;
 			ibs_request.ring = instance;
 			ibs_request.number_of_ibs = 1;
 			ibs_request.ibs = &ib_info;
@@ -110,7 +117,7 @@ void amdgpu_command_submission_compute_nop(amdgpu_device_handle device, bool use
 			igt_assert_eq(r, 0);
 
 			fence_status.context = context_handle;
-			fence_status.ip_type = AMDGPU_HW_IP_COMPUTE;
+			fence_status.ip_type = type;
 			fence_status.ip_instance = 0;
 			fence_status.ring = instance;
 			fence_status.fence = ibs_request.seq_no;
@@ -128,7 +135,7 @@ void amdgpu_command_submission_compute_nop(amdgpu_device_handle device, bool use
 	}
 
 	if (user_queue) {
-		amdgpu_user_queue_destroy(device, ring_context, AMD_IP_COMPUTE);
+		ip_block->funcs->userq_destroy(device, ring_context, type);
 	} else {
 		r = amdgpu_cs_ctx_free(context_handle);
 		igt_assert_eq(r, 0);

@@ -128,6 +128,9 @@
  *
  * SUBTEST: universal-planes-dpms
  * Description: Validate universal plane (set/unset/change) with dpms.
+ *
+ * SUBTEST: system-suspend-idle
+ * Description: Validate suspend-to-idle (S0ix) functionality.
  */
 
 #define MSR_PC8_RES	0x630
@@ -1127,10 +1130,11 @@ __noreturn static void stay_subtest(void)
 		sleep(600);
 }
 
-static void system_suspend_modeset_subtest(void)
+static void system_suspend_modeset_subtest(enum igt_suspend_state state,
+					   enum igt_suspend_test test)
 {
 	disable_all_screens_and_wait(&ms_data);
-	igt_system_suspend_autoresume(SUSPEND_STATE_MEM, SUSPEND_TEST_NONE);
+	igt_system_suspend_autoresume(state, test);
 	igt_assert(wait_for_suspended());
 
 	enable_one_screen_and_wait(&ms_data);
@@ -1682,7 +1686,11 @@ igt_main_args("", long_options, help_str, opt_handler, NULL)
 
 	/* System suspend */
 	igt_subtest("system-suspend-modeset")
-		system_suspend_modeset_subtest();
+		system_suspend_modeset_subtest(SUSPEND_STATE_MEM,
+					       SUSPEND_TEST_NONE);
+	igt_subtest("system-suspend-idle")
+		system_suspend_modeset_subtest(SUSPEND_STATE_FREEZE,
+					       SUSPEND_TEST_NONE);
 
 	/* power-wake reference tests */
 	igt_subtest("pm-tiling") {

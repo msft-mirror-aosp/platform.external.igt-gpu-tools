@@ -1385,15 +1385,15 @@ test_large_binds(int fd, struct drm_xe_engine_class_instance *eci,
 	igt_assert_lte(n_exec_queues, MAX_N_EXEC_QUEUES);
 	vm = xe_vm_create(fd, 0, 0);
 
+	bo_size_prefetch = xe_bb_size(fd, bo_size);
+
 	if (flags & LARGE_BIND_FLAG_USERPTR) {
-		bo_size_prefetch = xe_bb_size(fd, bo_size);
 		map = aligned_alloc(xe_get_default_alignment(fd), bo_size_prefetch);
 		igt_assert(map);
 	} else {
-		igt_skip_on(xe_visible_vram_size(fd, 0) && bo_size >
+		igt_skip_on(xe_visible_vram_size(fd, 0) && bo_size_prefetch >
 			    xe_visible_vram_size(fd, 0));
 
-		bo_size_prefetch = xe_bb_size(fd, bo_size);
 		bo = xe_bo_create(fd, vm, bo_size_prefetch,
 				  vram_if_possible(fd, eci->gt_id),
 				  DRM_XE_GEM_CREATE_FLAG_NEEDS_VISIBLE_VRAM);
@@ -1997,9 +1997,11 @@ test_mmap_style_bind(int fd, struct drm_xe_engine_class_instance *eci,
 		igt_assert(map0 != MAP_FAILED);
 		igt_assert(map1 != MAP_FAILED);
 	} else {
-		bo0 = xe_bo_create(fd, vm, bo_size, vram_if_possible(fd, eci->gt_id), 0);
+		bo0 = xe_bo_create(fd, vm, bo_size, vram_if_possible(fd, eci->gt_id),
+				   DRM_XE_GEM_CREATE_FLAG_NEEDS_VISIBLE_VRAM);
 		map0 = xe_bo_map(fd, bo0, bo_size);
-		bo1 = xe_bo_create(fd, vm, bo_size, vram_if_possible(fd, eci->gt_id), 0);
+		bo1 = xe_bo_create(fd, vm, bo_size, vram_if_possible(fd, eci->gt_id),
+				   DRM_XE_GEM_CREATE_FLAG_NEEDS_VISIBLE_VRAM);
 		map1 = xe_bo_map(fd, bo1, bo_size);
 	}
 	memset(map0, 0, bo_size);
@@ -2175,18 +2177,38 @@ test_mmap_style_bind(int fd, struct drm_xe_engine_class_instance *eci,
 
 static bool pxp_interface_supported(int fd)
 {
-	struct drm_xe_device_query query = {
-		.extensions = 0,
-		.query = DRM_XE_DEVICE_QUERY_PXP_STATUS,
-		.size = 0,
-		.data = 0,
+	return xe_query_pxp_status(fd) != -EINVAL;
+}
+
+static void __bind_flag_valid(int fd, uint32_t bo, struct drm_xe_vm_bind bind,
+			      struct drm_xe_vm_bind_op *bind_ops, int num_binds)
+{
+	struct drm_xe_sync *sync = from_user_pointer(bind.syncs);
+	unsigned int valid_flags[] = {
+		0,
+		DRM_XE_VM_BIND_FLAG_READONLY,
+		DRM_XE_VM_BIND_FLAG_IMMEDIATE,
+		DRM_XE_VM_BIND_FLAG_NULL,
+		DRM_XE_VM_BIND_FLAG_DUMPABLE,
+		DRM_XE_VM_BIND_FLAG_CHECK_PXP,
 	};
-	int ret = 0;
 
-	if (igt_ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, &query))
-		ret = -errno;
+	for (int i = 0; i < ARRAY_SIZE(valid_flags); i++) {
+		if (!pxp_interface_supported(fd) && valid_flags[i] == DRM_XE_VM_BIND_FLAG_CHECK_PXP)
+			continue;
 
-	return ret != -EINVAL;
+		for (int j = 0; j < num_binds; j++) {
+			bind_ops[j].flags = valid_flags[i];
+			bind_ops[j].obj = valid_flags[i] == DRM_XE_VM_BIND_FLAG_NULL ? 0 : bo;
+		}
+
+		if (num_binds == 1)
+			bind.bind = bind_ops[0];
+
+		igt_ioctl(fd, DRM_IOCTL_XE_VM_BIND, &bind);
+		igt_assert(syncobj_wait(fd, &sync[0].handle, 1, INT64_MAX, 0, NULL));
+		syncobj_reset(fd, &sync[0].handle, 1);
+	}
 }
 
 /**
@@ -2194,78 +2216,66 @@ static bool pxp_interface_supported(int fd)
  * Functionality: bind
  * Description: Ensure invalid bind flags are rejected.
  * Test category: negative test
+ *
+ * SUBTEST: bind-array-flag-invalid
+ * Functionality: bind
+ * Description: Ensure invalid bind flags are rejected when submitting an array of binds.
+ * Test category: negative test
  */
-static void bind_flag_invalid(int fd)
+static void test_bind_flag_invalid(int fd, int num_binds)
 {
+	struct drm_xe_vm_bind_op *bind_ops;
+	struct drm_xe_vm_bind bind;
+	uint32_t vm;
+
 	uint32_t bo, bo_size = xe_get_default_alignment(fd);
 	uint64_t addr = 0x1a0000;
-	uint32_t vm;
-	struct drm_xe_vm_bind bind;
 	struct drm_xe_sync sync[1] = {
 		{ .type = DRM_XE_SYNC_TYPE_SYNCOBJ, .flags = DRM_XE_SYNC_FLAG_SIGNAL, },
 	};
+
+	igt_assert(num_binds > 0);
 
 	vm = xe_vm_create(fd, 0, 0);
 	bo = xe_bo_create(fd, vm, bo_size, vram_if_possible(fd, 0), 0);
 	sync[0].handle = syncobj_create(fd, 0);
 
-	memset(&bind, 0, sizeof(bind));
-	bind.vm_id = vm;
-	bind.num_binds = 1;
-	bind.bind.obj = bo;
-	bind.bind.range = bo_size;
-	bind.bind.addr = addr;
-	bind.bind.op = DRM_XE_VM_BIND_OP_MAP;
-	bind.bind.pat_index = intel_get_pat_idx_wb(fd);
-	bind.num_syncs = 1;
-	bind.syncs = (uintptr_t)sync;
-
-	/* Using valid flags should work */
-	bind.bind.flags = 0;
-	igt_ioctl(fd, DRM_IOCTL_XE_VM_BIND, &bind);
-	igt_assert(syncobj_wait(fd, &sync[0].handle, 1, INT64_MAX, 0, NULL));
-	syncobj_reset(fd, &sync[0].handle, 1);
-
-	bind.bind.flags = DRM_XE_VM_BIND_FLAG_READONLY;
-	igt_ioctl(fd, DRM_IOCTL_XE_VM_BIND, &bind);
-	igt_assert(syncobj_wait(fd, &sync[0].handle, 1, INT64_MAX, 0, NULL));
-	syncobj_reset(fd, &sync[0].handle, 1);
-
-	bind.bind.flags = DRM_XE_VM_BIND_FLAG_IMMEDIATE;
-	igt_ioctl(fd, DRM_IOCTL_XE_VM_BIND, &bind);
-	igt_assert(syncobj_wait(fd, &sync[0].handle, 1, INT64_MAX, 0, NULL));
-	syncobj_reset(fd, &sync[0].handle, 1);
-
-	if (pxp_interface_supported(fd)) {
-		bind.bind.flags = DRM_XE_VM_BIND_FLAG_CHECK_PXP;
-		igt_ioctl(fd, DRM_IOCTL_XE_VM_BIND, &bind);
-		igt_assert(syncobj_wait(fd, &sync[0].handle, 1, INT64_MAX, 0, NULL));
-		syncobj_reset(fd, &sync[0].handle, 1);
+	bind_ops = calloc(num_binds, sizeof(*bind_ops));
+	for (int i = 0; i < num_binds; i++) {
+		bind_ops[i].addr = addr + i * bo_size;
+		bind_ops[i].range = bo_size;
+		bind_ops[i].obj = bo;
+		bind_ops[i].op = DRM_XE_VM_BIND_OP_MAP;
+		bind_ops[i].pat_index = intel_get_pat_idx_wb(fd);
 	}
 
-	bind.bind.flags = DRM_XE_VM_BIND_FLAG_NULL;
-	bind.bind.obj = 0;
-	igt_ioctl(fd, DRM_IOCTL_XE_VM_BIND, &bind);
-	igt_assert(syncobj_wait(fd, &sync[0].handle, 1, INT64_MAX, 0, NULL));
-	syncobj_reset(fd, &sync[0].handle, 1);
-	bind.bind.obj = bo;
+	memset(&bind, 0, sizeof(bind));
+	if (num_binds > 1)
+		bind.vector_of_binds = to_user_pointer(bind_ops);
+	bind.num_binds = num_binds;
+	bind.syncs = to_user_pointer(sync);
+	bind.num_syncs = 1;
+	bind.vm_id = vm;
 
-	bind.bind.flags = DRM_XE_VM_BIND_FLAG_DUMPABLE;
-	igt_ioctl(fd, DRM_IOCTL_XE_VM_BIND, &bind);
-	igt_assert(syncobj_wait(fd, &sync[0].handle, 1, INT64_MAX, 0, NULL));
-	syncobj_reset(fd, &sync[0].handle, 1);
+	/* Using valid flags should work */
+	__bind_flag_valid(fd, bo, bind, bind_ops, num_binds);
 
 	/* Using invalid flags should not work */
-	bind.bind.flags = 1 << 5;
-	igt_ioctl(fd, DRM_IOCTL_XE_VM_BIND, &bind);
+	for (int i = 0; i < num_binds; i++) {
+		bind_ops[i].flags = BIT(30);
+		bind_ops[i].obj = bo;
+	}
+
+	if (num_binds == 1)
+		bind.bind = bind_ops[0];
+
 	do_ioctl_err(fd, DRM_IOCTL_XE_VM_BIND, &bind, EINVAL);
 
 	/* Using valid flags should still work */
-	bind.bind.flags = 0;
-	igt_ioctl(fd, DRM_IOCTL_XE_VM_BIND, &bind);
-	igt_assert(syncobj_wait(fd, &sync[0].handle, 1, INT64_MAX, 0, NULL));
+	__bind_flag_valid(fd, bo, bind, bind_ops, num_binds);
 
 	syncobj_destroy(fd, sync[0].handle);
+	gem_close(fd, bo);
 	xe_vm_destroy(fd, vm);
 }
 
@@ -2364,6 +2374,80 @@ static void invalid_vm_id(int fd)
 	};
 
 	do_ioctl_err(fd, DRM_IOCTL_XE_VM_DESTROY, &destroy, ENOENT);
+}
+
+/**
+ * SUBTEST: out-of-memory
+ * Description: Test if vm_bind ioctl results in oom
+ * when creating and vm_binding buffer objects on an LR vm beyond available visible vram size.
+ * Functionality: oom
+ * Test category: functionality test
+ */
+static void test_oom(int fd)
+{
+#define USER_FENCE_VALUE 0xdeadbeefdeadbeefull
+#define BO_SIZE xe_bb_size(fd, SZ_512M)
+#define MAX_BUFS ((int)(xe_visible_vram_size(fd, 0) / BO_SIZE))
+	uint64_t addr = 0x1a0000;
+	uint64_t vm_sync;
+	uint32_t bo[MAX_BUFS + 1];
+	uint32_t *data[MAX_BUFS + 1];
+	uint32_t vm;
+	struct drm_xe_sync sync[1] = {
+		{ .type = DRM_XE_SYNC_TYPE_USER_FENCE, .flags = DRM_XE_SYNC_FLAG_SIGNAL,
+		  .timeline_value = USER_FENCE_VALUE },
+	};
+	size_t bo_size = BO_SIZE;
+	int total_bufs = MAX_BUFS;
+	int bind_vm = 0;
+	bool oom = false;
+
+	vm = xe_vm_create(fd, DRM_XE_VM_CREATE_FLAG_LR_MODE, 0);
+	for (int iter = 0; iter <= total_bufs; iter++) {
+		int err = 0;
+
+		bo[iter] = xe_bo_create(fd, 0, bo_size,
+					vram_if_possible(fd, 0),
+					DRM_XE_GEM_CREATE_FLAG_DEFER_BACKING |
+					DRM_XE_GEM_CREATE_FLAG_NEEDS_VISIBLE_VRAM);
+
+		sync[0].addr = to_user_pointer(&vm_sync);
+		err = __xe_vm_bind(fd, vm, 0, bo[iter], 0,
+				   addr + bo_size * iter, bo_size,
+				   DRM_XE_VM_BIND_OP_MAP, 0, sync,
+				   1, 0, DEFAULT_PAT_INDEX, 0);
+
+		if (err) {
+			if (err == -ENOMEM || err == -ENOSPC) {
+				oom = true;
+				break;
+			}
+			igt_assert_f(err, "Unexpected error %d for vm bind\n",
+				     err);
+		} else {
+			bind_vm = bind_vm + 1;
+		}
+
+		xe_wait_ufence(fd, &vm_sync, USER_FENCE_VALUE, 0, NSEC_PER_SEC);
+		vm_sync = 0;
+		data[iter] = xe_bo_map(fd, bo[iter], bo_size);
+		memset(data[iter], 0, bo_size);
+	}
+
+	igt_assert_f(oom, "OOM scenario is not working as expected\n");
+
+	if (bind_vm < total_bufs)
+		igt_warn("VRAM was smaller than estimated,"
+			 "may be due to leaked VRAM memory\n");
+
+	for (int iter = 0; iter < bind_vm; iter++) {
+		sync[0].addr = to_user_pointer(&vm_sync);
+		xe_vm_unbind_async(fd, vm, 0, 0, addr + bo_size * iter, bo_size,
+				   sync, 1);
+		xe_wait_ufence(fd, &vm_sync, USER_FENCE_VALUE, 0, NSEC_PER_SEC);
+		munmap(data[iter], bo_size);
+		gem_close(fd, bo[iter]);
+	}
 }
 
 igt_main
@@ -2513,7 +2597,7 @@ igt_main
 		userptr_invalid(fd);
 
 	igt_subtest("bind-flag-invalid")
-		bind_flag_invalid(fd);
+		test_bind_flag_invalid(fd, 1);
 
 	igt_subtest("compact-64k-pages")
 		xe_for_each_engine(fd, hwe) {
@@ -2581,6 +2665,9 @@ igt_main
 	igt_subtest("bind-array-conflict-error-inject")
 		xe_for_each_engine(fd, hwe)
 			test_bind_array_conflict(fd, hwe, false, true);
+
+	igt_subtest("bind-array-flag-invalid")
+		test_bind_flag_invalid(fd, 16);
 
 	for (bind_size = 0x1ull << 21; bind_size <= 0x1ull << 31;
 	     bind_size = bind_size << 1) {
@@ -2756,6 +2843,12 @@ igt_main
 
 	igt_subtest("invalid-vm-id")
 		invalid_vm_id(fd);
+
+	igt_subtest("out-of-memory") {
+		igt_require(xe_has_vram(fd));
+		igt_assert(xe_visible_vram_size(fd, 0));
+		test_oom(fd);
+	}
 
 	igt_fixture
 		drm_close_driver(fd);

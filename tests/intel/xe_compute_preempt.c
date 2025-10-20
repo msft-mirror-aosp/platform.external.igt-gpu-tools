@@ -76,6 +76,7 @@ igt_main
 	}
 
 	igt_subtest_with_dynamic("compute-preempt") {
+		igt_require(xe_kernel_preempt_check(xe, PREEMPT_WMTP));
 		xe_for_each_engine(xe, hwe) {
 			if (hwe->engine_class != DRM_XE_ENGINE_CLASS_COMPUTE)
 				continue;
@@ -86,6 +87,7 @@ igt_main
 	}
 
 	igt_subtest_with_dynamic("compute-preempt-many") {
+		igt_require(xe_kernel_preempt_check(xe, PREEMPT_WMTP));
 		xe_for_each_engine(xe, hwe) {
 			if (hwe->engine_class != DRM_XE_ENGINE_CLASS_COMPUTE)
 				continue;
@@ -102,7 +104,6 @@ igt_main
 				igt_debug("RAM: %" PRIu64 ", child count: %d\n",
 					  ram_mb, child_count);
 
-				test_compute_preempt(xe, hwe, false, EXECENV_PREF_SYSTEM);
 				igt_fork(child, child_count)
 					test_compute_preempt(xe, hwe, false, EXECENV_PREF_SYSTEM);
 				igt_waitchildren();
@@ -113,6 +114,7 @@ igt_main
 	igt_subtest_with_dynamic("compute-preempt-many-all-ram") {
 		igt_require(swap_mb > CONTEXT_MB * 10);
 
+		igt_require(xe_kernel_preempt_check(xe, PREEMPT_WMTP));
 		xe_for_each_engine(xe, hwe) {
 			if (hwe->engine_class != DRM_XE_ENGINE_CLASS_COMPUTE)
 				continue;
@@ -129,7 +131,6 @@ igt_main
 				igt_debug("RAM: %" PRIu64 ", child count: %d\n",
 					  ram_mb, child_count);
 
-				test_compute_preempt(xe, hwe, false, EXECENV_PREF_SYSTEM);
 				igt_fork(child, child_count)
 					test_compute_preempt(xe, hwe, false, EXECENV_PREF_SYSTEM);
 				igt_waitchildren();
@@ -140,6 +141,7 @@ igt_main
 	igt_subtest_with_dynamic("compute-preempt-many-vram") {
 		igt_require(xe_has_vram(xe));
 
+		igt_require(xe_kernel_preempt_check(xe, PREEMPT_WMTP));
 		xe_for_each_engine(xe, hwe) {
 			if (hwe->engine_class != DRM_XE_ENGINE_CLASS_COMPUTE)
 				continue;
@@ -156,7 +158,6 @@ igt_main
 				igt_debug("VRAM: %" PRIu64 ", child count: %d\n",
 					  vram_mb, child_count);
 
-				test_compute_preempt(xe, hwe, false, EXECENV_PREF_VRAM);
 				igt_fork(child, child_count)
 					test_compute_preempt(xe, hwe, false, EXECENV_PREF_VRAM);
 				igt_waitchildren();
@@ -167,6 +168,7 @@ igt_main
 	igt_subtest_with_dynamic("compute-preempt-many-vram-evict") {
 		igt_require(xe_has_vram(xe));
 
+		igt_require(xe_kernel_preempt_check(xe, PREEMPT_WMTP));
 		xe_for_each_engine(xe, hwe) {
 			if (hwe->engine_class != DRM_XE_ENGINE_CLASS_COMPUTE)
 				continue;
@@ -183,7 +185,6 @@ igt_main
 				igt_debug("VRAM: %" PRIu64 ", child count: %d\n",
 					  vram_mb, child_count);
 
-				test_compute_preempt(xe, hwe, false, EXECENV_PREF_VRAM);
 				igt_fork(child, child_count)
 					test_compute_preempt(xe, hwe, false, EXECENV_PREF_VRAM);
 				igt_waitchildren();
@@ -192,6 +193,7 @@ igt_main
 	}
 
 	igt_subtest_with_dynamic("compute-threadgroup-preempt") {
+		igt_require(xe_kernel_preempt_check(xe, PREEMPT_TGP));
 		xe_for_each_engine(xe, hwe) {
 			if (hwe->engine_class != DRM_XE_ENGINE_CLASS_COMPUTE)
 				continue;

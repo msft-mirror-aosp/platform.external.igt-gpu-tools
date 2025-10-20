@@ -76,19 +76,19 @@
  */
 
 /**
- * SUBTEST: drrs-1p-offscren-pri-%s-draw-%s
+ * SUBTEST: drrs-1p-offscreen-pri-%s-draw-%s
  * Description: Draw a set of rectangles on the screen using the provided method
  *
- * SUBTEST: fbc-1p-offscren-pri-%s-draw-%s
+ * SUBTEST: fbc-1p-offscreen-pri-%s-draw-%s
  * Description: Draw a set of rectangles on the screen using the provided method
  *
- * SUBTEST: psr-1p-offscren-pri-%s-draw-%s
+ * SUBTEST: psr-1p-offscreen-pri-%s-draw-%s
  * Description: Draw a set of rectangles on the screen using the provided method
  *
- * SUBTEST: fbcdrrs-1p-offscren-pri-%s-draw-%s
+ * SUBTEST: fbcdrrs-1p-offscreen-pri-%s-draw-%s
  * Description: Draw a set of rectangles on the screen using the provided method
  *
- * SUBTEST: fbcpsr-1p-offscren-pri-%s-draw-%s
+ * SUBTEST: fbcpsr-1p-offscreen-pri-%s-draw-%s
  * Description: Draw a set of rectangles on the screen using the provided method
  *
  * arg[1]:
@@ -104,23 +104,23 @@
  */
 
 /**
- * SUBTEST: drrs-1p-offscren-pri-%s-draw-%s
+ * SUBTEST: drrs-1p-offscreen-pri-%s-draw-%s
  * Description: Draw a set of rectangles on the screen using the provided method
  * Driver requirement: i915
  *
- * SUBTEST: fbc-1p-offscren-pri-%s-draw-%s
+ * SUBTEST: fbc-1p-offscreen-pri-%s-draw-%s
  * Description: Draw a set of rectangles on the screen using the provided method
  * Driver requirement: i915
  *
- * SUBTEST: psr-1p-offscren-pri-%s-draw-%s
+ * SUBTEST: psr-1p-offscreen-pri-%s-draw-%s
  * Description: Draw a set of rectangles on the screen using the provided method
  * Driver requirement: i915
  *
- * SUBTEST: fbcdrrs-1p-offscren-pri-%s-draw-%s
+ * SUBTEST: fbcdrrs-1p-offscreen-pri-%s-draw-%s
  * Description: Draw a set of rectangles on the screen using the provided method
  * Driver requirement: i915
  *
- * SUBTEST: fbcpsr-1p-offscren-pri-%s-draw-%s
+ * SUBTEST: fbcpsr-1p-offscreen-pri-%s-draw-%s
  * Description: Draw a set of rectangles on the screen using the provided method
  * Driver requirement: i915
  *
@@ -889,6 +889,9 @@ struct test_mode {
 
 	enum igt_draw_method method;
 };
+
+static bool in_simulation;
+static int r_max;
 
 enum color {
 	COLOR_RED,
@@ -2610,8 +2613,8 @@ static void prepare_subtest_data(const struct test_mode *t,
 static void prepare_subtest_screens(const struct test_mode *t)
 {
 	/* FBC disabled: Wa_16023588340 */
-	igt_skip_on_f((IS_BATTLEMAGE(drm.devid) && t->feature == FEATURE_FBC),
-		      "FBC isn't supported on BMG\n");
+	igt_skip_on_f(t->feature == FEATURE_FBC && intel_is_fbc_disabled_by_wa(drm.fd),
+		      "WA has disabled FBC on BMG\n");
 
 	if (t->pipes == PIPE_DUAL)
 		enable_both_screens_and_wait(t);
@@ -2658,8 +2661,8 @@ static void prepare_subtest(const struct test_mode *t,
 static void rte_subtest(const struct test_mode *t)
 {
 	/* FBC disabled: Wa_16023588340 */
-	igt_skip_on_f((IS_BATTLEMAGE(drm.devid) && t->feature == FEATURE_FBC),
-		      "FBC isn't supported on BMG\n");
+	igt_skip_on_f(t->feature == FEATURE_FBC && intel_is_fbc_disabled_by_wa(drm.fd),
+		      "WA has disabled FBC on BMG\n");
 
 	prepare_subtest_data(t, NULL);
 
@@ -2858,6 +2861,7 @@ static void multidraw_subtest(const struct test_mode *t)
 	struct fb_region *target;
 	enum igt_draw_method m1, m2, used_method;
 	bool wc_used = false;
+	int draw_count, pattern_rects;
 
 	switch (t->plane) {
 	case PLANE_PRI:
@@ -2874,8 +2878,11 @@ static void multidraw_subtest(const struct test_mode *t)
 	prepare_subtest(t, pattern);
 	target = pick_target(t, params);
 
-	for (m1 = 0; m1 < IGT_DRAW_METHOD_COUNT; m1++) {
-		for (m2 = m1 + 1; m2 < IGT_DRAW_METHOD_COUNT; m2++) {
+	draw_count = in_simulation ? 1 : IGT_DRAW_METHOD_COUNT;
+	pattern_rects = in_simulation ? 1 : pattern->n_rects;
+
+	for (m1 = 0; m1 < draw_count; m1++) {
+		for (m2 = m1 + 1; m2 < draw_count; m2++) {
 
 			igt_debug("Methods %s and %s\n",
 				  igt_draw_get_method_name(m1),
@@ -2885,7 +2892,7 @@ static void multidraw_subtest(const struct test_mode *t)
 			    !igt_draw_supports_method(drm.fd, m2))
 				continue;
 
-			for (r = 0; r < pattern->n_rects; r++) {
+			for (r = 0; r < pattern_rects; r++) {
 				used_method = (r % 2 == 0) ? m1 : m2;
 
 				igt_debug("Used method %s\n",
@@ -3248,12 +3255,12 @@ static void fliptrack_subtest(const struct test_mode *t, enum flip_type type)
  */
 static void move_subtest(const struct test_mode *t)
 {
-	int r;
 	int assertions = ASSERT_NO_ACTION_CHANGE;
 	struct modeset_params *params = pick_params(t);
 	struct draw_pattern_info *pattern = &pattern3;
 	struct fb_region *reg = pick_target(t, params);
 	bool repeat = false;
+	r_max = in_simulation ? 2 : pattern->n_rects;
 
 	prepare_subtest(t, pattern);
 
@@ -3263,7 +3270,7 @@ static void move_subtest(const struct test_mode *t)
 
 	do_assertions(assertions);
 
-	for (r = 1; r < pattern->n_rects; r++) {
+	for (int r = 1; r < r_max; r++) {
 		struct rect rect = pattern->get_rect(&params->primary, r);
 
 		igt_plane_set_fb(reg->plane, reg->fb);
@@ -3301,10 +3308,11 @@ static void move_subtest(const struct test_mode *t)
  */
 static void onoff_subtest(const struct test_mode *t)
 {
-	int r;
 	int assertions = ASSERT_NO_ACTION_CHANGE;
 	struct modeset_params *params = pick_params(t);
 	struct draw_pattern_info *pattern = &pattern3;
+
+	r_max = in_simulation ? 1 : 4;
 
 	prepare_subtest(t, pattern);
 
@@ -3313,7 +3321,7 @@ static void onoff_subtest(const struct test_mode *t)
 	update_wanted_crc(t, &pattern->crcs[t->format][0]);
 	do_assertions(assertions);
 
-	for (r = 0; r < 4; r++) {
+	for (int r = 0; r < r_max; r++) {
 		struct fb_region *reg = pick_target(t, params);
 
 		if (r % 2 == 0) {
@@ -3488,8 +3496,8 @@ static void scaledprimary_subtest(const struct test_mode *t)
 	do_assertions(DONT_ASSERT_CRC);
 
 	/*
-	 * On gen >= 9 HW, FBC is not enabled on a plane with a Y offset
-	 * that isn't divisible by 4, because it causes FIFO underruns.
+	 * For display versions 9 through 12, FBC is not enabled on a plane with
+	 * a Y offset that isn't divisible by 4, because it causes FIFO underruns.
 	 *
 	 * Check that FBC is disabled.
 	 */
@@ -3497,7 +3505,7 @@ static void scaledprimary_subtest(const struct test_mode *t)
 			    reg->x + reg->w / 4, (reg->y + src_y_upscale) | 3);
 	igt_fb_set_size(&new_fb, reg->plane, reg->w / 2, reg->h / 2);
 	igt_display_commit2(&drm.display, COMMIT_UNIVERSAL);
-	do_assertions(DONT_ASSERT_CRC | (gen >= 9 ? ASSERT_FBC_DISABLED : 0));
+	do_assertions(DONT_ASSERT_CRC | ((gen >= 9 && gen <= 12) ? ASSERT_FBC_DISABLED : 0));
 
 	/* Back to the good and old blue fb. */
 	igt_plane_set_fb(reg->plane, old_fb);
@@ -3940,7 +3948,7 @@ static const char *screen_str(int screen)
 	case SCREEN_SCND:
 		return "scndscrn";
 	case SCREEN_OFFSCREEN:
-		return "offscren";
+		return "offscreen";
 	default:
 		igt_assert(false);
 	}
@@ -4100,6 +4108,7 @@ igt_main_args("", long_options, help_str, opt_handler, NULL)
 			opt.tiling = drm.display_ver >= 30 ? TILING_4 : TILING_X;
 
 		setup_environment();
+		in_simulation = igt_run_in_simulation();
 	}
 
 	for (t.feature = 0; t.feature < FEATURE_COUNT; t.feature++) {
@@ -4157,8 +4166,8 @@ igt_main_args("", long_options, help_str, opt_handler, NULL)
 			t.tiling = opt.tiling;
 
 			/* FBC disabled: Wa_16023588340 */
-			igt_skip_on_f((IS_BATTLEMAGE(drm.devid) && t.feature == FEATURE_FBC),
-				      "FBC isn't supported on BMG\n");
+			igt_skip_on_f(t.feature == FEATURE_FBC && intel_is_fbc_disabled_by_wa(drm.fd),
+				      "WA has disabled FBC on BMG\n");
 
 			for_each_pipe(&drm.display, pipe) {
 				if (pipe == default_pipe) {
@@ -4184,6 +4193,8 @@ igt_main_args("", long_options, help_str, opt_handler, NULL)
 
 					break; /* One output is enough. */
 				}
+				if (in_simulation)
+					break;
 			}
 		}
 

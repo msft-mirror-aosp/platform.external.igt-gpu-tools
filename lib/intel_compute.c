@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /*
  * Copyright © 2023 Intel Corporation
- *
+ * TODO: Add kernel for PVC for preemption test
  * Authors:
  *    Francois Dugast <francois.dugast@intel.com>
  */
@@ -14,6 +14,7 @@
 #include "gen8_media.h"
 #include "gen9_media.h"
 #include "intel_compute.h"
+#include "intel_mocs.h"
 #include "lib/igt_syncobj.h"
 #include "lib/intel_reg.h"
 #include "xe/xe_ioctl.h"
@@ -52,6 +53,7 @@
 #define OFFSET_STATE_SIP			0xFFFF0000
 
 #define USER_FENCE_VALUE			0xdeadbeefdeadbeefull
+#define POST_SYNC_VALUE			0xabcdabcdcdefcdefull
 #define MAGIC_LOOP_STOP			0x12341234
 
 #define THREADS_PER_GROUP		32
@@ -60,14 +62,17 @@
 #define ENQUEUED_LOCAL_SIZE_X		1024
 #define ENQUEUED_LOCAL_SIZE_Y		1
 #define ENQUEUED_LOCAL_SIZE_Z		1
+#define DP_SS_CACHE_FLUSH		(1 << 12)
+#define DP_PIPELINE_FLUSH		(1 << 2)
+#define WRITE_IMM_DATA			(1 << 0)
+#define WRITE_TIMESTAMP		(3 << 0)
 
 /*
  * TGP  - ThreadGroup Preemption
  * WMTP - Walker Mid Thread Preemption
  */
 #define TGP_long_kernel_loop_count		10
-#define WMTP_long_kernel_loop_count		1000000
-#define XE2_THREADGROUP_PREEMPT_XDIM		0x200000
+#define XE2_THREADGROUP_PREEMPT_XDIM		0x4000
 
 struct bo_dict_entry {
 	uint64_t addr;
@@ -876,17 +881,8 @@ static void compute_exec(int fd, const unsigned char *kernel,
 
 	bo_execenv_exec(&execenv, ADDR_BATCH);
 
-	for (int i = 0; i < execenv.array_size; i++) {
-		float input = input_data[i];
-		float output = output_data[i];
-		float expected_output = input * input;
-
-		if (output != expected_output)
-			igt_debug("[%4d] input:%f output:%f expected_output:%f\n",
-				  i, input, output, expected_output);
-		if (!user || (user && !user->skip_results_check))
-			igt_assert_eq_double(output, expected_output);
-	}
+	if (!user || (user && !user->skip_results_check))
+		bo_check_square(input_data, output_data, execenv.array_size);
 
 	bo_execenv_unbind(&execenv, bo_dict, entries);
 	bo_execenv_destroy(&execenv);
@@ -975,7 +971,8 @@ static void xehp_create_surface_state(uint32_t *addr_bo_buffer_batch,
 	addr_bo_buffer_batch[b++] = 0x00000000;
 }
 
-static void xehp_compute_exec_compute(uint32_t *addr_bo_buffer_batch,
+static void xehp_compute_exec_compute(int fd,
+				      uint32_t *addr_bo_buffer_batch,
 				      uint64_t addr_general_state_base,
 				      uint64_t addr_surface_state_base,
 				      uint64_t addr_dynamic_state_base,
@@ -983,6 +980,7 @@ static void xehp_compute_exec_compute(uint32_t *addr_bo_buffer_batch,
 				      uint64_t offset_indirect_data_start,
 				      uint64_t kernel_start_pointer)
 {
+	uint8_t wb_mocs = intel_get_wb_mocs_index(fd);
 	int b = 0;
 
 	igt_debug("general   state base: %"PRIx64"\n", addr_general_state_base);
@@ -1067,7 +1065,8 @@ static void xehp_compute_exec_compute(uint32_t *addr_bo_buffer_batch,
 
 	addr_bo_buffer_batch[b++] = 0x00000008;
 	addr_bo_buffer_batch[b++] = 0x00000000;
-	addr_bo_buffer_batch[b++] = 0x00001027;
+	addr_bo_buffer_batch[b++] = DP_SS_CACHE_FLUSH | wb_mocs << 4 |
+				    DP_PIPELINE_FLUSH | WRITE_TIMESTAMP;
 	addr_bo_buffer_batch[b++] = ADDR_BATCH;
 	addr_bo_buffer_batch[b++] = ADDR_BATCH >> 32;
 	addr_bo_buffer_batch[b++] = 0x00000000;
@@ -1133,8 +1132,11 @@ static void xehp_compute_exec(int fd, const unsigned char *kernel,
 
 	bo_execenv_create(fd, &execenv, eci, user);
 
-	/* Set dynamic sizes */
-	bo_dict[0].size = ALIGN(size, xe_get_default_alignment(fd));
+	/* Set dynamic sizes depending on the driver type(xe vs i915) */
+	bo_dict[0].size = ALIGN(size,
+				(execenv.driver == INTEL_DRIVER_XE) ?
+				xe_get_default_alignment(fd) :
+				gem_detect_safe_alignment(fd));
 	bo_dict[4].size = size_input(execenv.array_size);
 	bo_dict[5].size = size_output(execenv.array_size);
 
@@ -1150,7 +1152,8 @@ static void xehp_compute_exec(int fd, const unsigned char *kernel,
 	input_data = get_input_data(&execenv, user, bo_dict[4].data);
 	output_data = get_output_data(&execenv, user, bo_dict[5].data);
 
-	xehp_compute_exec_compute(bo_dict[8].data,
+	xehp_compute_exec_compute(fd,
+				  bo_dict[8].data,
 				  ADDR_GENERAL_STATE_BASE,
 				  ADDR_SURFACE_STATE_BASE,
 				  ADDR_DYNAMIC_STATE_BASE,
@@ -1160,17 +1163,8 @@ static void xehp_compute_exec(int fd, const unsigned char *kernel,
 
 	bo_execenv_exec(&execenv, ADDR_BATCH);
 
-	for (int i = 0; i < execenv.array_size; i++) {
-		float input = input_data[i];
-		float output = output_data[i];
-		float expected_output = input * input;
-
-		if (output != expected_output)
-			igt_debug("[%4d] input:%f output:%f expected_output:%f\n",
-				  i, input, output, expected_output);
-		if (!user || (user && !user->skip_results_check))
-			igt_assert_eq_double(output, expected_output);
-	}
+	if (!user || (user && !user->skip_results_check))
+		bo_check_square(input_data, output_data, execenv.array_size);
 
 	bo_execenv_unbind(&execenv, bo_dict, entries);
 	bo_execenv_destroy(&execenv);
@@ -1201,7 +1195,8 @@ static void xehpc_create_indirect_data(uint32_t *addr_bo_buffer_batch,
 	addr_bo_buffer_batch[b++] = ENQUEUED_LOCAL_SIZE_Z;
 }
 
-static void xehpc_compute_exec_compute(uint32_t *addr_bo_buffer_batch,
+static void xehpc_compute_exec_compute(int fd,
+				       uint32_t *addr_bo_buffer_batch,
 				       uint64_t addr_general_state_base,
 				       uint64_t addr_surface_state_base,
 				       uint64_t addr_dynamic_state_base,
@@ -1209,6 +1204,7 @@ static void xehpc_compute_exec_compute(uint32_t *addr_bo_buffer_batch,
 				       uint64_t offset_indirect_data_start,
 				       uint64_t kernel_start_pointer)
 {
+	uint8_t wb_mocs = intel_get_wb_mocs_index(fd);
 	int b = 0;
 
 	igt_debug("general   state base: %"PRIx64"\n", addr_general_state_base);
@@ -1293,7 +1289,8 @@ static void xehpc_compute_exec_compute(uint32_t *addr_bo_buffer_batch,
 
 	addr_bo_buffer_batch[b++] = 0x00000008;
 	addr_bo_buffer_batch[b++] = 0x00000000;
-	addr_bo_buffer_batch[b++] = 0x00001047;
+	addr_bo_buffer_batch[b++] = DP_SS_CACHE_FLUSH | wb_mocs << 4 |
+				    DP_PIPELINE_FLUSH | WRITE_TIMESTAMP;
 	addr_bo_buffer_batch[b++] = ADDR_BATCH;
 	addr_bo_buffer_batch[b++] = ADDR_BATCH >> 32;
 	addr_bo_buffer_batch[b++] = 0x00000000;
@@ -1364,7 +1361,8 @@ static void xehpc_compute_exec(int fd, const unsigned char *kernel,
 	input_data = get_input_data(&execenv, user, bo_dict[2].data);
 	output_data = get_output_data(&execenv, user, bo_dict[3].data);
 
-	xehpc_compute_exec_compute(bo_dict[5].data,
+	xehpc_compute_exec_compute(fd,
+				   bo_dict[5].data,
 				   ADDR_GENERAL_STATE_BASE,
 				   ADDR_SURFACE_STATE_BASE,
 				   ADDR_DYNAMIC_STATE_BASE,
@@ -1374,17 +1372,8 @@ static void xehpc_compute_exec(int fd, const unsigned char *kernel,
 
 	bo_execenv_exec(&execenv, ADDR_BATCH);
 
-	for (int i = 0; i < execenv.array_size; i++) {
-		float input = input_data[i];
-		float output = output_data[i];
-		float expected_output = input * input;
-
-		if (output != expected_output)
-			igt_debug("[%4d] input:%f output:%f expected_output:%f\n",
-				  i, input, output, expected_output);
-		if (!user || (user && !user->skip_results_check))
-			igt_assert_eq_double(output, expected_output);
-	}
+	if (!user || (user && !user->skip_results_check))
+		bo_check_square(input_data, output_data, execenv.array_size);
 
 	bo_execenv_unbind(&execenv, bo_dict, entries);
 	bo_execenv_destroy(&execenv);
@@ -1532,7 +1521,8 @@ static void xelpg_compute_exec_compute(uint32_t *addr_bo_buffer_batch,
 	addr_bo_buffer_batch[b++] = MI_BATCH_BUFFER_END;
 }
 
-static void xe2lpg_compute_exec_compute(uint32_t *addr_bo_buffer_batch,
+static void xe2lpg_compute_exec_compute(int fd,
+					uint32_t *addr_bo_buffer_batch,
 					uint64_t addr_general_state_base,
 					uint64_t addr_surface_state_base,
 					uint64_t addr_dynamic_state_base,
@@ -1544,6 +1534,7 @@ static void xe2lpg_compute_exec_compute(uint32_t *addr_bo_buffer_batch,
 					bool	 threadgroup_preemption,
 					uint32_t work_size)
 {
+	uint8_t uc_mocs = intel_get_uc_mocs_index(fd);
 	int b = 0;
 
 	igt_debug("general   state base: %"PRIx64"\n", addr_general_state_base);
@@ -1603,7 +1594,7 @@ static void xe2lpg_compute_exec_compute(uint32_t *addr_bo_buffer_batch,
 	addr_bo_buffer_batch[b++] = addr_surface_state_base >> 32;
 	addr_bo_buffer_batch[b++] = 0x001ff000;
 
-	if (sip_start_pointer) {
+	if (sip_start_pointer && !threadgroup_preemption) {
 		addr_bo_buffer_batch[b++] = XE2_STATE_SIP | 0x1;
 		addr_bo_buffer_batch[b++] = sip_start_pointer;
 		addr_bo_buffer_batch[b++] = 0x00000000;
@@ -1651,11 +1642,12 @@ static void xe2lpg_compute_exec_compute(uint32_t *addr_bo_buffer_batch,
 	addr_bo_buffer_batch[b++] = 0x0c000000 | THREADS_PER_GROUP;
 	addr_bo_buffer_batch[b++] = 0x00000000;
 	addr_bo_buffer_batch[b++] = 0x00000000;
-	addr_bo_buffer_batch[b++] = 0x00001047;
+	addr_bo_buffer_batch[b++] = DP_SS_CACHE_FLUSH | uc_mocs << 4 |
+				    DP_PIPELINE_FLUSH | WRITE_IMM_DATA;
 	addr_bo_buffer_batch[b++] = ADDR_BATCH;
 	addr_bo_buffer_batch[b++] = ADDR_BATCH >> 32;
-	addr_bo_buffer_batch[b++] = 0x00000000;
-	addr_bo_buffer_batch[b++] = 0x00000000;
+	addr_bo_buffer_batch[b++] = (uint32_t) POST_SYNC_VALUE;
+	addr_bo_buffer_batch[b++] = (uint32_t) (POST_SYNC_VALUE >> 32);
 	addr_bo_buffer_batch[b++] = 0x00000000;
 	addr_bo_buffer_batch[b++] = 0x00000000;
 	addr_bo_buffer_batch[b++] = 0x00000000;
@@ -1743,8 +1735,11 @@ static void xelpg_compute_exec(int fd, const unsigned char *kernel,
 
 	bo_execenv_create(fd, &execenv, eci, user);
 
-	/* Set dynamic sizes */
-	bo_dict[0].size = ALIGN(size, 0x10000);
+	/* Set dynamic sizes depending upon the driver type (xe vs i915)*/
+	bo_dict[0].size = ALIGN(size,
+				(execenv.driver == INTEL_DRIVER_XE) ?
+				xe_get_default_alignment(fd) :
+				gem_detect_safe_alignment(fd));
 	bo_dict[4].size = size_input(execenv.array_size);
 	bo_dict[5].size = size_output(execenv.array_size);
 
@@ -1772,17 +1767,8 @@ static void xelpg_compute_exec(int fd, const unsigned char *kernel,
 
 	bo_execenv_exec(&execenv, ADDR_BATCH);
 
-	for (int i = 0; i < execenv.array_size; i++) {
-		float input = input_data[i];
-		float output = output_data[i];
-		float expected_output = input * input;
-
-		if (output != expected_output)
-			igt_debug("[%4d] input:%f output:%f expected_output:%f\n",
-				  i, input, output, expected_output);
-		if (!user || (user && !user->skip_results_check))
-			igt_assert_eq_double(output, expected_output);
-	}
+	if (!user || (user && !user->skip_results_check))
+		bo_check_square(input_data, output_data, execenv.array_size);
 
 	bo_execenv_unbind(&execenv, bo_dict, entries);
 	bo_execenv_destroy(&execenv);
@@ -1857,7 +1843,8 @@ static void xe2lpg_compute_exec(int fd, const unsigned char *kernel,
 	input_data = get_input_data(&execenv, user, bo_dict[4].data);
 	output_data = get_output_data(&execenv, user, bo_dict[5].data);
 
-	xe2lpg_compute_exec_compute(bo_dict[8].data,
+	xe2lpg_compute_exec_compute(fd,
+				    bo_dict[8].data,
 				    ADDR_GENERAL_STATE_BASE,
 				    ADDR_SURFACE_STATE_BASE,
 				    ADDR_DYNAMIC_STATE_BASE,
@@ -1869,17 +1856,8 @@ static void xe2lpg_compute_exec(int fd, const unsigned char *kernel,
 
 	bo_execenv_exec(&execenv, ADDR_BATCH);
 
-	for (int i = 0; i < execenv.array_size; i++) {
-		float input = input_data[i];
-		float output = output_data[i];
-		float expected_output = input * input;
-
-		if (output != expected_output)
-			igt_debug("[%4d] input:%f output:%f expected_output:%f\n",
-				  i, input, output, expected_output);
-		if (!user || (user && !user->skip_results_check))
-			igt_assert_eq_double(output, expected_output);
-	}
+	if (!user || (user && !user->skip_results_check))
+		bo_check_square(input_data, output_data, execenv.array_size);
 
 	bo_execenv_unbind(&execenv, bo_dict, entries);
 	bo_execenv_destroy(&execenv);
@@ -1948,23 +1926,80 @@ static const struct {
 	},
 };
 
+static const struct intel_compute_kernels
+		*intel_compute_find_kernels(const struct intel_compute_kernels *kernels,
+					    unsigned int ip_ver)
+{
+	if (!kernels) {
+		igt_debug("%s: kernel_list is NULL\n", __func__);
+		return NULL;
+	}
+
+	while (kernels->kernel) {
+		if (ip_ver == kernels->ip_ver)
+			return kernels;
+		kernels++;
+	}
+
+	return NULL;
+}
+
+static bool validate_kernels(const struct intel_compute_kernels *kernels,
+			     bool check_preemption, bool threadgroup_preemption,
+			     unsigned int ip_ver)
+{
+	if (!kernels) {
+		igt_warn("No kernel entry found for IP version 0x%x\n", ip_ver);
+		return false;
+	}
+
+	if (!kernels->kernel) {
+		igt_warn("Missing compute square kernel for IP version 0x%x\n", ip_ver);
+		return false;
+	}
+
+	if (!check_preemption)
+		return true;
+
+	/* The following checks are only performed if preemption check is enabled. */
+	if (threadgroup_preemption && !kernels->long_kernel) {
+		igt_warn("Missing Long kernel for IP version 0x%x\n", ip_ver);
+		return false;
+	} else if (!threadgroup_preemption) {
+		if (!kernels->sip_kernel) {
+			igt_warn("Missing SIP kernel for IP version 0x%x\n", ip_ver);
+			return false;
+		}
+		if (!kernels->loop_kernel) {
+			igt_warn("Missing Loop kernel for IP version 0x%x\n", ip_ver);
+			return false;
+		}
+	}
+	return true;
+}
+
+static int find_compute_batch(unsigned int ip_ver)
+{
+	for (int batch_idx = 0; batch_idx < ARRAY_SIZE(intel_compute_batches); batch_idx++)
+		if (ip_ver == intel_compute_batches[batch_idx].ip_ver)
+			return batch_idx;
+	return -1;
+}
+
 static bool __run_intel_compute_kernel(int fd,
 				       struct drm_xe_engine_class_instance *eci,
 				       struct user_execenv *user,
 				       enum execenv_alloc_prefs alloc_prefs)
 {
 	unsigned int ip_ver = intel_graphics_ver(intel_get_drm_devid(fd));
-	unsigned int batch;
-	const struct intel_compute_kernels *kernels = intel_compute_square_kernels;
+	int batch;
+	const struct intel_compute_kernels *kernel_entries = intel_compute_square_kernels, *kernels;
 	enum intel_driver driver = get_intel_driver(fd);
 	const unsigned char *kernel;
 	unsigned int kernel_size;
 
-	for (batch = 0; batch < ARRAY_SIZE(intel_compute_batches); batch++) {
-		if (ip_ver == intel_compute_batches[batch].ip_ver)
-			break;
-	}
-	if (batch == ARRAY_SIZE(intel_compute_batches)) {
+	batch = find_compute_batch(ip_ver);
+	if (batch < 0) {
 		igt_debug("GPU version 0x%x not supported\n", ip_ver);
 		return false;
 	}
@@ -1981,12 +2016,8 @@ static bool __run_intel_compute_kernel(int fd,
 		kernel = user->kernel;
 		kernel_size = user->kernel_size;
 	} else {
-		while (kernels->kernel) {
-			if (ip_ver == kernels->ip_ver)
-				break;
-			kernels++;
-		}
-		if (!kernels->kernel)
+		kernels = intel_compute_find_kernels(kernel_entries, ip_ver);
+		if (!validate_kernels(kernels, false, false, ip_ver))
 			return false;
 		kernel = kernels->kernel;
 		kernel_size = kernels->size;
@@ -2101,6 +2132,7 @@ static void xe2lpg_compute_preempt_exec(int fd, const unsigned char *long_kernel
 	struct bo_dict_entry bo_dict_short[ARRAY_SIZE(bo_dict_long)];
 	struct bo_execenv execenv_short, execenv_long;
 	float *input_short, *output_short, *input_long;
+	uint64_t *post_data;
 	unsigned int long_kernel_loop_count = 0;
 	int64_t timeout_one_ns = 1;
 	bool use_loop_kernel = loop_kernel && !threadgroup_preemption;
@@ -2108,8 +2140,6 @@ static void xe2lpg_compute_preempt_exec(int fd, const unsigned char *long_kernel
 
 	if (threadgroup_preemption)
 		long_kernel_loop_count = TGP_long_kernel_loop_count;
-	else
-		long_kernel_loop_count = WMTP_long_kernel_loop_count;
 
 	for (int i = 0; i < entries; ++i)
 		bo_dict_short[i] = bo_dict_long[i];
@@ -2149,16 +2179,19 @@ static void xe2lpg_compute_preempt_exec(int fd, const unsigned char *long_kernel
 	input_long = (float *) bo_dict_long[4].data;
 	input_short = (float *) bo_dict_short[4].data;
 	output_short = (float *) bo_dict_short[5].data;
+	post_data = (uint64_t *) bo_dict_long[8].data;
 
 	bo_randomize(input_short, SIZE_DATA);
 
-	xe2lpg_compute_exec_compute(bo_dict_long[8].data, ADDR_GENERAL_STATE_BASE,
+	xe2lpg_compute_exec_compute(fd,
+				    bo_dict_long[8].data, ADDR_GENERAL_STATE_BASE,
 				    ADDR_SURFACE_STATE_BASE, ADDR_DYNAMIC_STATE_BASE,
 				    ADDR_INSTRUCTION_STATE_BASE, XE2_ADDR_STATE_CONTEXT_DATA_BASE,
 				    OFFSET_INDIRECT_DATA_START, OFFSET_KERNEL, OFFSET_STATE_SIP,
 				    threadgroup_preemption, SIZE_DATA);
 
-	xe2lpg_compute_exec_compute(bo_dict_short[8].data, ADDR_GENERAL_STATE_BASE,
+	xe2lpg_compute_exec_compute(fd,
+				    bo_dict_short[8].data, ADDR_GENERAL_STATE_BASE,
 				    ADDR_SURFACE_STATE_BASE, ADDR_DYNAMIC_STATE_BASE,
 				    ADDR_INSTRUCTION_STATE_BASE, XE2_ADDR_STATE_CONTEXT_DATA_BASE,
 				    OFFSET_INDIRECT_DATA_START, OFFSET_KERNEL, OFFSET_STATE_SIP,
@@ -2177,13 +2210,23 @@ static void xe2lpg_compute_preempt_exec(int fd, const unsigned char *long_kernel
 	bo_execenv_exec(&execenv_short, ADDR_BATCH);
 	bo_check_square(input_short, output_short, SIZE_DATA);
 
+	/*
+	 * Catch command level preemption instead TG preemption. For TG and WMTP
+	 * post sync can't be visible at this point yet.
+	 */
+	igt_assert_neq_u64(POST_SYNC_VALUE, *post_data);
+
 	/* Check that the long kernel has not completed yet */
 	igt_assert_neq(0, __xe_wait_ufence(fd, &execenv_long.bo_sync->sync, USER_FENCE_VALUE,
 					   execenv_long.exec_queue, &timeout_one_ns));
-	if (use_loop_kernel)
-		((int *)input_long)[0] = MAGIC_LOOP_STOP;
+	/*
+	 * For threadgroup preemption it breaks the loop. So rest shaders exit
+	 * immediately without reaching whole loop count.
+	 */
+	((int *)input_long)[0] = MAGIC_LOOP_STOP;
 
 	bo_execenv_sync(&execenv_long);
+	igt_assert_eq_u64(POST_SYNC_VALUE, *post_data);
 
 	bo_execenv_unbind(&execenv_short, bo_dict_short, entries);
 	bo_execenv_unbind(&execenv_long, bo_dict_long, entries);
@@ -2206,23 +2249,55 @@ static const struct {
 			     bool threadgroup_preemption,
 			     enum execenv_alloc_prefs alloc_prefs);
 	uint32_t compat;
+	enum xe_compute_preempt_type preempt_type;
 } intel_compute_preempt_batches[] = {
 	{
 		.ip_ver = IP_VER(20, 01),
 		.compute_exec = xe2lpg_compute_preempt_exec,
 		.compat = COMPAT_DRIVER_XE,
+		.preempt_type = PREEMPT_TGP | PREEMPT_WMTP,
 	},
 	{
 		.ip_ver = IP_VER(20, 04),
 		.compute_exec = xe2lpg_compute_preempt_exec,
 		.compat = COMPAT_DRIVER_XE,
+		.preempt_type = PREEMPT_TGP | PREEMPT_WMTP,
 	},
 	{
 		.ip_ver = IP_VER(30, 00),
 		.compute_exec = xe2lpg_compute_preempt_exec,
 		.compat = COMPAT_DRIVER_XE,
+		.preempt_type = PREEMPT_TGP | PREEMPT_WMTP,
 	},
 };
+
+static int find_preempt_batch(unsigned int ip_ver)
+{
+	for (int batch_idx = 0; batch_idx < ARRAY_SIZE(intel_compute_preempt_batches); batch_idx++)
+		if (ip_ver == intel_compute_preempt_batches[batch_idx].ip_ver)
+			return batch_idx;
+	return -1;
+}
+
+static bool is_preemptable(int batch, enum xe_compute_preempt_type required_preempt)
+{
+	if (required_preempt &&
+	    !(intel_compute_preempt_batches[batch].preempt_type & required_preempt))
+		return false;
+	return true;
+}
+
+static const char *xe_preempt_type_to_str(enum xe_compute_preempt_type type)
+{
+	switch (type) {
+	case PREEMPT_TGP:
+		return "PREEMPT_TGP";
+	case PREEMPT_WMTP:
+		return "PREEMPT_WMTP";
+	default:
+		return "UNKNOWN_PREEMPT_TYPE";
+	}
+}
 
 static bool __run_intel_compute_kernel_preempt(int fd,
 		struct drm_xe_engine_class_instance *eci,
@@ -2230,16 +2305,14 @@ static bool __run_intel_compute_kernel_preempt(int fd,
 		enum execenv_alloc_prefs alloc_prefs)
 {
 	unsigned int ip_ver = intel_graphics_ver(intel_get_drm_devid(fd));
-	unsigned int batch;
-	const struct intel_compute_kernels *kernels = intel_compute_square_kernels;
+	int batch;
+	const struct intel_compute_kernels *kernel_entries = intel_compute_square_kernels, *kernels;
 	enum intel_driver driver = get_intel_driver(fd);
+	enum xe_compute_preempt_type required_preempt =
+		threadgroup_preemption ? PREEMPT_TGP : PREEMPT_WMTP;
 
-	for (batch = 0; batch < ARRAY_SIZE(intel_compute_preempt_batches); batch++)
-		if (ip_ver == intel_compute_preempt_batches[batch].ip_ver)
-			break;
-
-
-	if (batch == ARRAY_SIZE(intel_compute_preempt_batches)) {
+	batch = find_preempt_batch(ip_ver);
+	if (batch < 0) {
 		igt_debug("GPU version 0x%x not supported\n", ip_ver);
 		return false;
 	}
@@ -2251,15 +2324,16 @@ static bool __run_intel_compute_kernel_preempt(int fd,
 		return false;
 	}
 
-	while (kernels->kernel) {
-		if (ip_ver == kernels->ip_ver)
-			break;
-		kernels++;
+	if (!is_preemptable(batch, required_preempt)) {
+		igt_debug("Preemption type %s not supported on GPU version 0x%x\n",
+			  xe_preempt_type_to_str(required_preempt), ip_ver);
+		return false;
 	}
 
-	if (!kernels->kernel || !kernels->sip_kernel || !kernels->long_kernel)
-		return 0;
+	kernels = intel_compute_find_kernels(kernel_entries, ip_ver);
 
+	if (!validate_kernels(kernels, true, threadgroup_preemption, ip_ver))
+		return false;
 	intel_compute_preempt_batches[batch].compute_exec(fd, kernels->long_kernel,
 							  kernels->long_kernel_size,
 							  kernels->kernel, kernels->size,
@@ -2273,6 +2347,33 @@ static bool __run_intel_compute_kernel_preempt(int fd,
 
 	return true;
 }
+
+/**
+ * xe_kernel_preempt_check - Checks IP version to confirm if provided
+ *			     preempt type is supported.
+ * @fd: file descriptor of the opened DRM Xe device
+ * @required_preempt: Preemption type (WMTP/TGP)
+ *
+ * Returns true on success, false otherwise.
+ */
+bool xe_kernel_preempt_check(int fd, enum xe_compute_preempt_type required_preempt)
+{
+	unsigned int ip_ver = intel_graphics_ver(intel_get_drm_devid(fd));
+	int batch = find_preempt_batch(ip_ver);
+
+	if (batch < 0) {
+		igt_debug("GPU version 0x%x not supported\n", ip_ver);
+		return false;
+	}
+	if (!is_preemptable(batch, required_preempt)) {
+		igt_debug("Preemption type %s not supported on GPU version 0x%x\n",
+			  xe_preempt_type_to_str(required_preempt), ip_ver);
+		return false;
+	}
+
+	return true;
+}
+
 /**
  * run_intel_compute_kernel_preempt - runs compute kernels to
  * exercise preemption scenario.

@@ -12,7 +12,6 @@
 #include "lib/amdgpu/amd_PM4.h"
 #include "lib/amdgpu/amd_ip_blocks.h"
 #include "lib/amdgpu/amd_memory.h"
-#include "lib/amdgpu/amd_userq.h"
 
 static void amdgpu_cs_sync(amdgpu_context_handle context,
 			   unsigned int ip_type,
@@ -54,12 +53,14 @@ static void nop_cs(amdgpu_device_handle device,
 	amdgpu_bo_list_handle bo_list;
 	amdgpu_va_handle va_handle;
 	struct amdgpu_ring_context *ring_context;
+	const struct amdgpu_ip_block_version *ip_block = NULL;
 
+	ip_block = get_ip_block(device, ip_type);
 	ring_context = calloc(1, sizeof(*ring_context));
 	igt_assert(ring_context);
 
 	if (user_queue)
-		amdgpu_user_queue_create(device, ring_context, ip_type);
+		ip_block->funcs->userq_create(device, ring_context, ip_type);
 
 	r = amdgpu_bo_alloc_and_map_sync(device, 4096, 4096,
 					 AMDGPU_GEM_DOMAIN_GTT, 0, AMDGPU_VM_MTYPE_UC,
@@ -107,7 +108,7 @@ static void nop_cs(amdgpu_device_handle device,
 		igt_until_timeout(timeout) {
 			if (user_queue) {
 				ring_context->pm4_dw = ib_info.size;
-				amdgpu_user_queue_submit(device, ring_context, ip_type,
+				ip_block->funcs->userq_submit(device, ring_context, ip_type,
 							 ib_info.ib_mc_address);
 				igt_assert_eq(r, 0);
 			} else {
@@ -140,7 +141,7 @@ static void nop_cs(amdgpu_device_handle device,
 	amdgpu_bo_unmap_and_free(ib_result_handle, va_handle,
 				 ib_result_mc_address, 4096);
 	if (user_queue)
-		amdgpu_user_queue_destroy(device, ring_context, ip_type);
+		ip_block->funcs->userq_destroy(device, ring_context, ip_type);
 
 	free(ring_context);
 }
@@ -171,10 +172,12 @@ igt_main
 	int fd = -1;
 	bool arr_cap[AMD_IP_MAX] = {0};
 	bool userq_arr_cap[AMD_IP_MAX] = {0};
+#ifdef AMDGPU_USERQ_ENABLED
 	bool enable_test;
-	const char *env = getenv("AMDGPU_DISABLE_USERQTEST");
+	const char *env = getenv("AMDGPU_ENABLE_USERQTEST");
 
 	enable_test = env && atoi(env);
+#endif
 
 	igt_fixture {
 		uint32_t major, minor;
@@ -205,12 +208,11 @@ igt_main
 	}
 
 #ifdef AMDGPU_USERQ_ENABLED
-if (enable_test) {
 	for (p = phase; p->name; p++) {
 		for (e = engines; e->name; e++) {
 			igt_describe("Stressful-and-multiple-cs-of-nop-operations-using-multiple-processes-with-the-same-GPU-context-UMQ");
 			igt_subtest_with_dynamic_f("cs-nops-with-%s-%s0-with-UQ-Submission", p->name, e->name) {
-				if (userq_arr_cap[e->ip_type]) {
+				if (enable_test && userq_arr_cap[e->ip_type]) {
 					igt_dynamic_f("cs-nop-with-%s-%s0-with-UQ-Submission", p->name, e->name)
 					nop_cs(device, context, e->name, e->ip_type, 0, 20,
 					       p->flags, 1);
@@ -218,7 +220,6 @@ if (enable_test) {
 			}
 		}
 	}
-}
 #endif
 
 	igt_fixture {

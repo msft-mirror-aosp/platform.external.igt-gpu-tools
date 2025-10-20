@@ -50,6 +50,7 @@ lib_sources = [
 	'igt_types.c',
 	'igt_vec.c',
 	'igt_vgem.c',
+	'igt_vkms.c',
 	'igt_x86.c',
 	'instdone.c',
 	'intel_allocator.c',
@@ -70,6 +71,7 @@ lib_sources = [
 	'intel_mocs.c',
 	'igt_multigpu.c',
 	'intel_pat.c',
+	'intel_vram.c',
 	'ioctl_wrappers.c',
 	'media_spin.c',
 	'media_fill.c',
@@ -88,9 +90,11 @@ lib_sources = [
 	'intel_aux_pgtable.c',
 	'intel_reg_map.c',
 	'intel_iosf.c',
+        'intel_wa.c',
 	'igt_kms.c',
 	'igt_fb.c',
 	'igt_core.c',
+	'igt_dir.c',
 	'igt_draw.c',
 	'igt_list.c',
 	'igt_map.c',
@@ -158,6 +162,7 @@ if libdrm_amdgpu.found()
 		'amdgpu/amd_cs_radv.c',
 		'amdgpu/amd_gfx.c',
 		'amdgpu/amd_ip_blocks.c',
+		'amdgpu/amd_ip_blocks_ex.c',
 		'amdgpu/amd_shaders.c',
 		'amdgpu/amd_gfx_v8_0.c',
 		'amdgpu/amd_gfx_v9_0.c',
@@ -170,8 +175,7 @@ if libdrm_amdgpu.found()
 		'amdgpu/amd_mem_leak.c',
 		'amdgpu/amd_mmd_shared.c',
 		'amdgpu/amd_jpeg_shared.c',
-		'amdgpu/amd_vcn_shared.c',
-		'amdgpu/amd_userq.c'
+		'amdgpu/amd_vcn_shared.c'
 	]
 	if libdrm_amdgpu.version().version_compare('> 2.4.99')
 		lib_sources +=[ 'amdgpu/amd_dispatch.c',]
@@ -241,9 +245,30 @@ lib_version = vcs_tag(input : 'version.h.in', output : 'version.h',
 		      command : vcs_command )
 
 iga64_assembly_sources = [ 'gpgpu_shader.c', 'gpgpu_fill.c' ]
+libiga64_asms = static_library('iga64_asms',
+	iga64_assembly_sources,
+	include_directories: inc,
+	dependencies : lib_deps,
+	c_args : [
+	    '-DIGT_DATADIR="@0@"'.format(join_paths(prefix, datadir)),
+	    '-DIGT_SRCDIR="@0@"'.format(srcdir),
+	    '-DIGT_LOG_DOMAIN="gpu_codes"',
+	    '-ffat-lto-objects' ]
+)
+
+iga64_codes_targets = []
+foreach f: iga64_assembly_sources
+	name = f.underscorify() + '.gen.iga64_codes.c'
+	iga64_codes_targets += custom_target(name,
+		input: [ f + '.gen.iga64_codes.c', libiga64_asms.extract_objects(f) ],
+		output: name,
+		depend_files: [ 'iga64_macros.h', generate_iga64_codes.path() ],
+		command: [ 'env', 'IGT_SRCDIR=@SOURCE_ROOT@', generate_iga64_codes, '-o', '@OUTPUT@', '-i', '@INPUT0@', '@INPUT1@' ],
+		console: true,
+	)
+endforeach
 
 lib_intermediates = []
-iga64_assembly_libs = []
 foreach f: lib_sources
     name = f.underscorify()
     lib = static_library('igt-' + name,
@@ -254,25 +279,13 @@ foreach f: lib_sources
 	    '-DIGT_DATADIR="@0@"'.format(join_paths(prefix, datadir)),
 	    '-DIGT_SRCDIR="@0@"'.format(srcdir),
 	    '-DIGT_LOG_DOMAIN="@0@"'.format(f.split('.')[0]),
-	] + (iga64_assembly_sources.contains(f) ? [ '-ffat-lto-objects' ] : []))
+            '-DIGT_IMGDIR="@0@"'.format(imgdir),
+	])
 
     lib_intermediates += lib
-    if iga64_assembly_sources.contains(f)
-	iga64_assembly_libs += lib
-    endif
 endforeach
 
-iga64_generated_codes = custom_target(
-    'iga64_generated_codes.c',
-    input : [ 'iga64_generated_codes.c' ] + iga64_assembly_libs,
-    output : 'iga64_generated_codes.c',
-    depend_files : 'iga64_macros.h',
-    command : [ 'env', 'IGT_SRCDIR=@0@'.format(source_root), generate_iga64_codes, '-o', '@OUTPUT@', '-i', '@INPUT@' ]
-)
-
-lib_intermediates += static_library('igt-iga64_generated_codes.c',
-			[ iga64_generated_codes, lib_version ]
-		     )
+lib_intermediates += static_library('iga64_gpu_codes', iga64_codes_targets)
 
 lib_igt_build = shared_library('igt',
     ['dummy.c'],
@@ -443,6 +456,7 @@ xe_oa_hardware = [
   'mtlgt2', 'mtlgt3',
   'lnl',
   'bmg',
+  'ptl',
 ]
 
 xe_xml_files = []

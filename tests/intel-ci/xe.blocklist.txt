@@ -10,6 +10,8 @@ igt@panfrost.*
 igt@v3d.*
 igt@vc4.*
 igt@vgem_.*
+igt@.*virtgpu.*
+igt@vkms.*
 igt@vmwgfx.*
 ##################################################################
 # Exclude all i915 tests
@@ -77,6 +79,7 @@ igt@kms_pm_lpsp@screens-disabled
 igt@kms_pm_rpm@(fences|fences-dpms|pm-caching|pm-tiling)
 igt@kms_pm_rpm@.*pc8-residency.*
 igt@kms_pm_rpm@cursor.*
+igt@kms_psr@.*cursor-(render|blt)
 ##################################################################
 # KMS: Yet to add/missing XE support
 ##################################################################
@@ -107,10 +110,14 @@ igt@sriov_basic@enable-vfs-autoprobe-on$
 igt@sriov_basic@enable-vfs-bind-unbind-each$
 igt@sriov_basic@bind-unbind-vf$
 ##################################################################
-# Exclude xe_evict tests that are not expected to succeed
-# due to missing TTM exhaustive eviction
+# Chamelium V1 HDMI receiver supports a maximum resolution
+# of 4K @ 30Hz. This test enforces an EDID with 4K @ 60Hz,
+# which exceeds the capabilities of V1 hardware and results
+# in failures. Temporarily blocklist this test until V3 Chamelium
+# boards (which support 4K @ 60Hz) are available in the test environment.
 ##################################################################
-igt@xe_evict@.*-multi-vm-cm.*
-igt@xe_evict@.*-threads-.*
-# igt@xe_evict@.*-cm.* # Rebind and VM_BIND may race.
+igt@kms_chamelium_edid@hdmi-edid-stress-resolution-4k
 ##################################################################
+# Exclude one compute mode test
+##################################################################
+igt@xe_exec_compute_mode@non-blocking

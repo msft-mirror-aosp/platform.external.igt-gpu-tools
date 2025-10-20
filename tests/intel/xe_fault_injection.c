@@ -27,7 +27,8 @@
 #define INJECT_ERRNO	-ENOMEM
 #define BO_ADDR		0x1a0000
 #define BO_SIZE		(1024*1024)
-#define INJECT_ITERATIONS	100
+#define MAX_INJECT_ITERATIONS	100
+#define MAX_INJECTIONS_PER_ITER	100
 
 int32_t inject_iters_raw;
 struct fault_injection_params {
@@ -113,6 +114,22 @@ static void injection_list_add(const char function_name[])
 	close(dir);
 }
 
+static void injection_list_append(const char function_name[])
+{
+	int dir, fd, ret;
+
+	dir = fail_function_open();
+	igt_assert_lte(0, dir);
+
+	fd = openat(dir, "inject", O_WRONLY | O_APPEND);
+	igt_assert_lte(0, fd);
+	ret = write(fd, function_name, strlen(function_name));
+	igt_assert_lte(0, ret);
+
+	close(fd);
+	close(dir);
+}
+
 static void injection_list_remove(const char function_name[])
 {
 	int dir;
@@ -178,6 +195,19 @@ static void cleanup_injection_fault(int sig)
 	injection_list_clear();
 }
 
+static int get_remaining_injection_count(void)
+{
+	int dir, val;
+
+	dir = fail_function_open();
+	igt_assert_lte(0, dir);
+
+	val = igt_sysfs_get_s32(dir, "times");
+
+	close(dir);
+	return val;
+}
+
 static void set_retval(const char function_name[], long long retval)
 {
 	char path[96];
@@ -192,6 +222,18 @@ static void set_retval(const char function_name[], long long retval)
 	close(dir);
 }
 
+static void ignore_fail_dump_in_dmesg(const char function_name[], bool enable)
+{
+	if (strstr(function_name, "send_recv")) {
+		if (enable) {
+			injection_list_append("xe_is_injection_active");
+			set_retval("xe_is_injection_active", INJECT_ERRNO);
+		} else {
+			injection_list_remove("xe_is_injection_active");
+		}
+	}
+}
+
 /**
  * SUBTEST: inject-fault-probe-function-%s
  * Description: inject an error in the injectable function %arg[1] then
@@ -199,6 +241,7 @@ static void set_retval(const char function_name[], long long retval)
  * Functionality: fault
  *
  * arg[1]:
+ * @guc_wait_ucode:			guc_wait_ucode
  * @wait_for_lmem_ready:		wait_for_lmem_ready
  * @xe_add_hw_engine_class_defaults:	xe_add_hw_engine_class_defaults
  * @xe_device_create:			xe_device_create
@@ -214,7 +257,7 @@ static void set_retval(const char function_name[], long long retval)
  * @xe_sriov_init:			xe_sriov_init
  * @xe_tile_init_early:			xe_tile_init_early
  * @xe_uc_fw_init:			xe_uc_fw_init
- * @xe_wa_init:				xe_wa_init
+ * @xe_wa_gt_init:			xe_wa_gt_init
  * @xe_wopcm_init:			xe_wopcm_init
  */
 static int
@@ -227,11 +270,13 @@ inject_fault_probe(int fd, const char pci_slot[], const char function_name[])
 	ignore_dmesg_errors_from_dut(pci_slot);
 	injection_list_add(function_name);
 	set_retval(function_name, INJECT_ERRNO);
+	ignore_fail_dump_in_dmesg(function_name, true);
 
 	igt_kmod_bind("xe", pci_slot);
 
 	err = -errno;
 	injection_list_remove(function_name);
+	ignore_fail_dump_in_dmesg(function_name, false);
 
 	return err;
 }
@@ -258,14 +303,31 @@ static void probe_fail_guc(int fd, const char pci_slot[], const char function_na
 	*/
 	iter = inject_iters_raw;
 	iter_start = iter ? : 0;
-	iter_end = iter ? iter + 1 : INJECT_ITERATIONS;
+	iter_end = iter ? iter + 1 : MAX_INJECT_ITERATIONS;
 	igt_debug("Injecting error for %d - %d iterations\n", iter_start, iter_end);
 	for (int i = iter_start; i < iter_end; i++) {
 		fault_params->space = i;
+		fault_params->times = MAX_INJECTIONS_PER_ITER;
 		setup_injection_fault(fault_params);
 		inject_fault_probe(fd, pci_slot, function_name);
 		igt_kmod_unbind("xe", pci_slot);
+
+		/*
+		 * if no injection occurred we've tested all the injection
+		 * points for this function and can therefore stop iterating.
+		 */
+		if (get_remaining_injection_count() == MAX_INJECTIONS_PER_ITER)
+			break;
 	}
+
+	/*
+	 * In the unlikely case where we haven't covered all the injection
+	 * points for the function (because there are more of them than
+	 * MAX_INJECT_ITERATIONS) fail the test so that we know we need to do an
+	 * update and/or split it in two parts.
+	 */
+	igt_assert_f(inject_iters_raw || iter != MAX_INJECT_ITERATIONS,
+		     "Loop exited without covering all injection points!\n");
 }
 
 /**
@@ -278,25 +340,43 @@ static void probe_fail_guc(int fd, const char pci_slot[], const char function_na
  * @xe_hw_engine_group_add_exec_queue:    xe_hw_engine_group_add_exec_queue
  * @xe_vm_add_compute_exec_queue:         xe_vm_add_compute_exec_queue
  * @xe_exec_queue_create_bind:            xe_exec_queue_create_bind
+ * @xe_pxp_exec_queue_add:                xe_pxp_exec_queue_add
  */
+
+#define EXEC_QUEUE_LR	BIT(0)
+#define EXEC_QUEUE_PXP	BIT(1)
 static void
 exec_queue_create_fail(int fd, struct drm_xe_engine_class_instance *instance,
 		       const char pci_slot[], const char function_name[],
 		       unsigned int flags)
 {
 	uint32_t exec_queue_id;
-	uint32_t vm = xe_vm_create(fd, flags, 0);
+	struct drm_xe_ext_set_property ext = { 0 };
+	uint64_t ext_ptr = 0;
+	uint32_t vm;
+
+	if (flags & EXEC_QUEUE_PXP) {
+		igt_require(xe_wait_for_pxp_init(fd) == 0);
+
+		ext.base.name = DRM_XE_EXEC_QUEUE_EXTENSION_SET_PROPERTY,
+		ext.property = DRM_XE_EXEC_QUEUE_SET_PROPERTY_PXP_TYPE,
+		ext.value = DRM_XE_PXP_TYPE_HWDRM;
+		ext_ptr = to_user_pointer(&ext);
+	}
+
+	vm = xe_vm_create(fd, flags & EXEC_QUEUE_LR ? DRM_XE_VM_CREATE_FLAG_LR_MODE : 0, 0);
+
 	/* sanity check */
-	igt_assert_eq(__xe_exec_queue_create(fd, vm, 1, 1, instance, 0, &exec_queue_id), 0);
+	igt_assert_eq(__xe_exec_queue_create(fd, vm, 1, 1, instance, ext_ptr, &exec_queue_id), 0);
 	xe_exec_queue_destroy(fd, exec_queue_id);
 
 	ignore_dmesg_errors_from_dut(pci_slot);
 	injection_list_add(function_name);
 	set_retval(function_name, INJECT_ERRNO);
-	igt_assert(__xe_exec_queue_create(fd, vm, 1, 1, instance, 0, &exec_queue_id) != 0);
+	igt_assert(__xe_exec_queue_create(fd, vm, 1, 1, instance, ext_ptr, &exec_queue_id) != 0);
 	injection_list_remove(function_name);
 
-	igt_assert_eq(__xe_exec_queue_create(fd, vm, 1, 1, instance, 0, &exec_queue_id), 0);
+	igt_assert_eq(__xe_exec_queue_create(fd, vm, 1, 1, instance, ext_ptr, &exec_queue_id), 0);
 	xe_exec_queue_destroy(fd, exec_queue_id);
 }
 
@@ -456,7 +536,7 @@ static int opt_handler(int opt, int opt_index, void *data)
 	case 'I':
 		/* Update to 0 if not exported / -ve value */
 		in_param = atoi(optarg);
-		if (!in_param || in_param <= 0 || in_param > INJECT_ITERATIONS)
+		if (!in_param || in_param <= 0 || in_param > MAX_INJECT_ITERATIONS)
 			inject_iters_raw = 0;
 		else
 			inject_iters_raw = in_param;
@@ -486,6 +566,7 @@ igt_main_args("I:", NULL, help_str, opt_handler, NULL)
 		unsigned int flags;
 		bool pf_only;
 	} probe_fail_functions[] = {
+		{ "guc_wait_ucode" },
 		{ "wait_for_lmem_ready" },
 		{ "xe_add_hw_engine_class_defaults" },
 		{ "xe_device_create" },
@@ -501,7 +582,7 @@ igt_main_args("I:", NULL, help_str, opt_handler, NULL)
 		{ "xe_sriov_init" },
 		{ "xe_tile_init_early" },
 		{ "xe_uc_fw_init" },
-		{ "xe_wa_init" },
+		{ "xe_wa_gt_init" },
 		{ "xe_wopcm_init", 0, true },
 		{ }
 	};
@@ -524,7 +605,8 @@ igt_main_args("I:", NULL, help_str, opt_handler, NULL)
 	const struct section exec_queue_create_fail_functions[] = {
 		{ "xe_exec_queue_create", 0 },
 		{ "xe_hw_engine_group_add_exec_queue", 0 },
-		{ "xe_vm_add_compute_exec_queue", DRM_XE_VM_CREATE_FLAG_LR_MODE },
+		{ "xe_vm_add_compute_exec_queue", EXEC_QUEUE_LR },
+		{ "xe_pxp_exec_queue_add", EXEC_QUEUE_PXP },
 		{ }
 	};
 
