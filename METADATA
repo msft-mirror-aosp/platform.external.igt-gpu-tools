@@ -9,13 +9,13 @@ third_party {
   last_upgrade_date {
     year: 2025
     month: 10
-    day: 14
+    day: 24
   }
   homepage: "https://gitlab.freedesktop.org/drm/igt-gpu-tools"
   identifier {
     type: "Git"
     value: "https://gitlab.freedesktop.org/drm/igt-gpu-tools"
-    version: "ec6fde8fbe795da5b9246f7c32dac84c708fe25a"
+    version: "75d513bd5e6ee4736ecfbc2f2768aa799c2e529b"
     primary_source: true
   }
 }
