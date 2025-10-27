@@ -154,6 +154,7 @@ typedef struct data {
 	vtest_ns_t vtest_ns;
 	uint64_t duration_ns;
 	bool static_image;
+	uint32_t flag;
 } data_t;
 
 typedef void (*test_t)(data_t*, enum pipe, igt_output_t*, uint32_t);
@@ -512,10 +513,11 @@ flip_and_measure(data_t *data, igt_output_t *output, enum pipe pipe,
 
 		calculate_tolerance(&threshold_hi[i], &threshold_lo[i], exp_rate_ns);
 
-		igt_info("Requested rate[%d]: %" PRIu64 " ns (%.2f Hz), Expected rate between: %" PRIu64 " ns (%.2f Hz) to %" PRIu64 " ns (%.2f Hz)\n",
-			 i, rates_ns[i], (float)NSECS_PER_SEC / rates_ns[i], threshold_hi[i],
-			 (float)NSECS_PER_SEC / threshold_hi[i], threshold_lo[i],
-			 (float)NSECS_PER_SEC / threshold_lo[i]);
+		if (data->flag != TEST_LINK_OFF)
+			igt_info("Requested rate[%d]: %" PRIu64 " ns (%.2f Hz), Expected rate between: %" PRIu64 " ns (%.2f Hz) to %" PRIu64 " ns (%.2f Hz)\n",
+				 i, rates_ns[i], (float)NSECS_PER_SEC / rates_ns[i],
+				 threshold_hi[i], (float)NSECS_PER_SEC / threshold_hi[i],
+				 threshold_lo[i], (float)NSECS_PER_SEC / threshold_lo[i]);
 	}
 
 	/* Align with the flip completion event to speed up convergence. */
@@ -581,14 +583,18 @@ flip_and_measure(data_t *data, igt_output_t *output, enum pipe pipe,
 		while (get_time_ns() < target_ns - 10);
 	}
 
-	igt_info("Completed %u flips, %u were in threshold for [", total_flip, total_pass);
-	for (int i = 0; i < num_rates; ++i) {
-		igt_info("(%llu Hz) %"PRIu64"ns%s", (NSECS_PER_SEC/rates_ns[i]), rates_ns[i],
-			 i < num_rates - 1 ? "," : "");
-	}
-	igt_info("]\n");
+	if (data->flag != TEST_LINK_OFF) {
+		igt_info("Completed %u flips, %u were in threshold for [", total_flip, total_pass);
 
-	return total_flip ? ((total_pass * 100) / total_flip) : 0;
+		for (int i = 0; i < num_rates; ++i) {
+			igt_info("(%llu Hz) %" PRIu64 "ns%s", (NSECS_PER_SEC / rates_ns[i]),
+				 rates_ns[i], i < num_rates - 1 ? "," : "");
+		}
+		igt_info("]\n");
+
+		return total_flip ? ((total_pass * 100) / total_flip) : 0;
+	}
+	return 0;
 }
 
 static uint32_t
@@ -870,20 +876,39 @@ static void
 test_lobf(data_t *data, enum pipe pipe, igt_output_t *output, uint32_t flags)
 {
 	uint64_t rate[] = {0};
+	uint32_t step_size, vrefresh;
+	bool lobf_enabled = false;
 
 	rate[0] = igt_kms_frame_time_from_vrefresh(data->switch_modes[HIGH_RR_MODE].vrefresh);
 	prepare_test(data, output, pipe);
+	data->flag = flags;
 
 	igt_info("LOBF test execution on %s, PIPE %s with VRR range: (%u-%u) Hz\n",
 		 output->name, kmstest_pipe_name(pipe), data->range.min, data->range.max);
 
 	igt_output_override_mode(output, &data->switch_modes[HIGH_RR_MODE]);
 	flip_and_measure(data, output, pipe, rate, 1, TEST_DURATION_NS);
-	igt_output_override_mode(output, &data->switch_modes[LOW_RR_MODE]);
-	rate[0] = igt_kms_frame_time_from_vrefresh(data->switch_modes[LOW_RR_MODE].vrefresh);
-	flip_and_measure(data, output, pipe, rate, 1, NSECS_PER_SEC);
-	igt_assert_f(igt_get_i915_edp_lobf_status(data->drm_fd, output->name),
-		     "LOBF not enabled\n");
+
+	step_size = (data->range.max - data->range.min) / 5;
+
+	for (vrefresh = data->range.max - step_size;
+	     vrefresh >= data->range.min; vrefresh -= step_size) {
+		igt_info("Testing LOBF with a %u hz flip rate on %u hz panel refresh rate\n",
+			 vrefresh, data->switch_modes[HIGH_RR_MODE].vrefresh);
+
+		rate[0] = igt_kms_frame_time_from_vrefresh(vrefresh);
+		flip_and_measure(data, output, pipe, rate, 1, NSECS_PER_SEC);
+
+		if (igt_get_i915_edp_lobf_status(data->drm_fd, output->name)) {
+			lobf_enabled = true;
+			break;
+		}
+
+		if (vrefresh == data->range.min)
+			break;
+	}
+
+	igt_assert_f(lobf_enabled, "LOBF not enabled\n");
 }
 
 static void
@@ -948,7 +973,7 @@ static bool output_constraint(data_t *data, igt_output_t *output, uint32_t flags
 {
 	data->debugfs_fd = igt_debugfs_dir(data->drm_fd);
 
-	if ((flags & (TEST_SEAMLESS_VRR | TEST_SEAMLESS_DRRS | TEST_CMRR | TEST_LINK_OFF)) &&
+	if ((flags & (TEST_SEAMLESS_VRR | TEST_SEAMLESS_DRRS | TEST_CMRR)) &&
 	    output->config.connector->connector_type != DRM_MODE_CONNECTOR_eDP) {
 		igt_info("%s: Connected panel is not eDP.\n", igt_output_name(output));
 		return false;
@@ -961,9 +986,9 @@ static bool output_constraint(data_t *data, igt_output_t *output, uint32_t flags
 	}
 
 	if (flags & TEST_LINK_OFF) {
-		if (!psr_sink_support(data->drm_fd,
-				      data->debugfs_fd, PR_MODE, NULL)) {
-			igt_info("LOBF not supported\n");
+		if (!igt_has_lobf_debugfs(data->drm_fd, output)) {
+			igt_info("i915_edp_lobf_status not present for %s\n",
+				 igt_output_name(output));
 			return false;
 		}
 

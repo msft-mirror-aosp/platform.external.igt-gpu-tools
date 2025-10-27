@@ -566,7 +566,7 @@ igt_main_args("I:", NULL, help_str, opt_handler, NULL)
 		unsigned int flags;
 		bool pf_only;
 	} probe_fail_functions[] = {
-		{ "guc_wait_ucode" },
+		{ "guc_wait_ucode", 0, true },
 		{ "wait_for_lmem_ready" },
 		{ "xe_add_hw_engine_class_defaults" },
 		{ "xe_device_create" },
@@ -688,6 +688,7 @@ igt_main_args("I:", NULL, help_str, opt_handler, NULL)
 	igt_fixture {
 		close(sysfs);
 		drm_close_driver(fd);
+		injection_list_clear();
 		igt_kmod_bind("xe", pci_slot);
 	}
 }

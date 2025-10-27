@@ -6283,6 +6283,8 @@ unsigned int igt_get_pipe_current_bpc(int drmfd, enum pipe pipe)
 		strcpy(debugfs_name, "i915_current_bpc");
 	else if (is_amdgpu_device(drmfd))
 		strcpy(debugfs_name, "amdgpu_current_bpc");
+	else if (is_mtk_device(drmfd))
+		strcpy(debugfs_name, "mtk_current_bpc");
 
 	res = igt_debugfs_simple_read(fd, debugfs_name, buf, sizeof(buf));
 	igt_require(res > 0);
@@ -7539,4 +7541,24 @@ uint32_t igt_get_connected_output_count(igt_display_t *display)
 			conn_outputs++;
 	}
 	return conn_outputs;
+}
+
+/**
+ * Checks if the lobf debugfs
+ * is available for a specific output.
+ *
+ * @drmfd: file descriptor of the DRM device.
+ * @output: output to check.
+ * Returns:
+ *  true if the debugfs is available, false otherwise.
+ */
+bool igt_has_lobf_debugfs(int drmfd, igt_output_t *output)
+{
+        char buf[512];
+        int res;
+
+        res = igt_debugfs_read_connector_file(drmfd, output->name,
+                                              "i915_edp_lobf_info",
+                                              buf, sizeof(buf));
+        return res == 0;
 }
