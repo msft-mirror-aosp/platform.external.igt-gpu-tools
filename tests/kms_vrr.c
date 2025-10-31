@@ -106,6 +106,7 @@ enum {
 	TEST_CMRR = 1 << 9,
 	TEST_LINK_OFF = 1 << 10,
 	TEST_NEGATIVE = 1 << 11,
+	TEST_FORCE_RR = 1 << 12,
 };
 
 enum {
@@ -349,7 +350,7 @@ static void prepare_test(data_t *data, igt_output_t *output, enum pipe pipe)
 	data->vtest_ns.max = igt_kms_frame_time_from_vrefresh(data->range.max);
 
 	/* If unspecified on the command line, default rate to the midpoint */
-	if (data->vtest_ns.rate_ns == 0) {
+	if (!(data->flag & TEST_FORCE_RR)) {
 		range_t *range = &data->range;
 		data->vtest_ns.rate_ns = igt_kms_frame_time_from_vrefresh(
 						(range->min + range->max) / 2);
@@ -513,7 +514,7 @@ flip_and_measure(data_t *data, igt_output_t *output, enum pipe pipe,
 
 		calculate_tolerance(&threshold_hi[i], &threshold_lo[i], exp_rate_ns);
 
-		if (data->flag != TEST_LINK_OFF)
+		if (!(data->flag & TEST_LINK_OFF))
 			igt_info("Requested rate[%d]: %" PRIu64 " ns (%.2f Hz), Expected rate between: %" PRIu64 " ns (%.2f Hz) to %" PRIu64 " ns (%.2f Hz)\n",
 				 i, rates_ns[i], (float)NSECS_PER_SEC / rates_ns[i],
 				 threshold_hi[i], (float)NSECS_PER_SEC / threshold_hi[i],
@@ -583,7 +584,7 @@ flip_and_measure(data_t *data, igt_output_t *output, enum pipe pipe,
 		while (get_time_ns() < target_ns - 10);
 	}
 
-	if (data->flag != TEST_LINK_OFF) {
+	if (!(data->flag & TEST_LINK_OFF)) {
 		igt_info("Completed %u flips, %u were in threshold for [", total_flip, total_pass);
 
 		for (int i = 0; i < num_rates; ++i) {
@@ -881,7 +882,7 @@ test_lobf(data_t *data, enum pipe pipe, igt_output_t *output, uint32_t flags)
 
 	rate[0] = igt_kms_frame_time_from_vrefresh(data->switch_modes[HIGH_RR_MODE].vrefresh);
 	prepare_test(data, output, pipe);
-	data->flag = flags;
+	data->flag |= flags;
 
 	igt_info("LOBF test execution on %s, PIPE %s with VRR range: (%u-%u) Hz\n",
 		 output->name, kmstest_pipe_name(pipe), data->range.min, data->range.max);
@@ -1109,6 +1110,7 @@ static int opt_handler(int opt, int opt_index, void *_data)
 		break;
 	case 'r':
 		data->vtest_ns.rate_ns = igt_kms_frame_time_from_vrefresh(atoi(optarg));
+		data->flag |= TEST_FORCE_RR;
 		break;
 	case 's':
 		data->static_image = true;
