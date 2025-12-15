@@ -211,13 +211,13 @@ hdmi_inject_audio(int drm_fd, drmModeConnector *connector)
 	kmstest_force_edid(drm_fd, connector, NULL);
 }
 
-igt_main
+int igt_main()
 {
 	int drm_fd;
 	drmModeRes *res;
 	drmModeConnector *connector;
 
-	igt_fixture {
+	igt_fixture() {
 		drm_fd = drm_open_driver_master(DRIVER_ANY);
 
 		res = drmModeGetResources(drm_fd);
@@ -239,7 +239,7 @@ igt_main
 	igt_subtest("inject-audio")
 		hdmi_inject_audio(drm_fd, connector);
 
-	igt_fixture {
+	igt_fixture() {
 		drmModeFreeConnector(connector);
 		drmModeFreeResources(res);
 		drm_close_driver(drm_fd);

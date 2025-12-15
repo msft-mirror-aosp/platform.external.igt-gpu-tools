@@ -309,12 +309,12 @@ static void test_sip(enum shader_type shader_type, enum sip_type sip_type,
 				igt_dynamic_f("%s%d", xe_engine_class_string(__eci->engine_class), \
 					      __eci->engine_instance)
 
-igt_main
+int igt_main()
 {
 	struct drm_xe_engine_class_instance *eci;
 	int fd;
 
-	igt_fixture
+	igt_fixture()
 		fd = drm_open_driver(DRIVER_XE);
 
 	test_render_and_compute("sanity", fd, eci)
@@ -338,6 +338,6 @@ igt_main
 	test_render_and_compute("invalidinstr-walker-enabled", fd, eci)
 		test_sip(SHADER_INV_INSTR_WALKER_ENABLED, SIP_INV_INSTR, eci, 0);
 
-	igt_fixture
+	igt_fixture()
 		drm_close_driver(fd);
 }

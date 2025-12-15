@@ -227,13 +227,13 @@ static void run_extendedmode_test(data_t *data) {
 	}
 }
 
-igt_main
+int igt_main()
 {
 	int dp_mst_outputs = 0, count = 0;
 	igt_output_t *output;
 	data_t data;
 
-	igt_fixture {
+	igt_fixture() {
 		data.drm_fd = drm_open_driver_master(DRIVER_ANY);
 		kmstest_set_vt_graphics_mode();
 		igt_display_require(&data.display, data.drm_fd);
@@ -252,7 +252,7 @@ igt_main
 		run_extendedmode_test(&data);
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		igt_display_fini(&data.display);
 	}
 }

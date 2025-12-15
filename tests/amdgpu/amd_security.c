@@ -308,7 +308,7 @@ is_security_tests_enable(amdgpu_device_handle device_handle,
 	return enable;
 }
 
-igt_main
+int igt_main()
 {
 	amdgpu_device_handle device;
 	struct amdgpu_gpu_info gpu_info = {};
@@ -324,7 +324,7 @@ igt_main
 	enable_test = env && atoi(env);
 #endif
 
-	igt_fixture {
+	igt_fixture() {
 		uint32_t major, minor;
 		int err;
 
@@ -379,7 +379,7 @@ igt_main
 							is_secure, true);
 #endif
 
-	igt_fixture {
+	igt_fixture() {
 		amdgpu_device_deinitialize(device);
 		drm_close_driver(fd);
 	}

@@ -256,7 +256,7 @@ test_exec(int fd, struct drm_xe_engine_class_instance *hwe,
 	run_job(fd, hwe, engine_execution_mode, job_type, true, NULL);
 }
 
-igt_main
+int igt_main()
 {
 	struct drm_xe_engine_class_instance *hwe;
 	const struct section {
@@ -271,7 +271,7 @@ igt_main
 	};
 	int fd;
 
-	igt_fixture {
+	igt_fixture() {
 		bool supports_faults;
 		int ret = 0;
 
@@ -288,7 +288,7 @@ igt_main
 					test_exec(fd, hwe, s->flags);
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		drm_close_driver(fd);
 	}
 }

@@ -24,7 +24,7 @@
 #include "lib/amdgpu/amd_memory.h"
 #include "lib/amdgpu/amd_command_submission.h"
 #include "lib/amdgpu/amd_deadlock_helpers.h"
-#include "lib/amdgpu/amd_dispatch.h"
+#include "lib/amdgpu/compute_utils/amd_dispatch.h"
 #include "lib/amdgpu/amdgpu_asic_addr.h"
 
 
@@ -1100,7 +1100,7 @@ get_num_of_tests(struct dynamic_test *arr_err, enum amd_ip_block_type *ip_tests,
 	return cnt;
 }
 
-igt_main
+int igt_main()
 {
 	char cmdline[2048];
 	int argc = 0;
@@ -1162,7 +1162,7 @@ igt_main
 
 	int const_num_of_tests;
 
-	igt_fixture {
+	igt_fixture() {
 		uint32_t major, minor;
 		int err;
 
@@ -1255,7 +1255,7 @@ igt_main
 	if (sh_mem && (!sh_mem->sub_test_is_existed))
 		set_next_test_to_skip(sh_mem);
 
-	igt_fixture {
+	igt_fixture() {
 		if (process == PROCESS_TEST)
 			waitpid(test_child, &testExitMethod, 0);
 		waitpid(pid_background, &backgrounExitMethod, 0);

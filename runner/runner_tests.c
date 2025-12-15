@@ -15,8 +15,8 @@
 #include "resultgen.h"
 
 /*
- * NOTE: this test is using a lot of variables that are changed in igt_fixture,
- * igt_subtest_group and igt_subtests blocks but defined outside of them.
+ * NOTE: this test is using a lot of variables that are changed in igt_fixture(),
+ * igt_subtest_group() and igt_subtests blocks but defined outside of them.
  *
  * Such variables have to be either non-local or volatile, otherwise their
  * contents is undefined due to longjmps the framework performs.
@@ -106,7 +106,7 @@ static void job_list_filter_test(const char *name, const char *filterarg1, const
 	int multiple;
 	struct settings *settings = malloc(sizeof(*settings));
 
-	igt_fixture
+	igt_fixture()
 		init_settings(settings);
 
 	for (multiple = 0; multiple < 2; multiple++) {
@@ -139,7 +139,7 @@ static void job_list_filter_test(const char *name, const char *filterarg1, const
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		clear_settings(settings);
 		free(settings);
 	}
@@ -261,11 +261,11 @@ static void write_packet_with_canary(int fd, struct runnerpacket *packet)
 	free(packet);
 }
 
-igt_main
+int igt_main()
 {
 	struct settings *settings = malloc(sizeof(*settings));
 
-	igt_fixture {
+	igt_fixture() {
 		int i;
 
 		/*
@@ -323,11 +323,11 @@ igt_main
 		igt_assert_eq(settings->dmesg_warn_level, 4);
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		char *cwd;
 		char *path;
 
-		igt_fixture {
+		igt_fixture() {
 			igt_require((cwd = realpath(".", NULL)) != NULL);
 			path = NULL;
 		}
@@ -349,19 +349,19 @@ igt_main
 			}
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			free(cwd);
 			free(path);
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		const char tmptestlist[] = "tmp.testlist";
 		char dirname[] = "tmpdirXXXXXX";
 		char pathtotestlist[64];
 		volatile char *path;
 
-		igt_fixture {
+		igt_fixture() {
 			int dirfd, fd;
 
 			path = NULL;
@@ -400,7 +400,7 @@ igt_main
 			igt_assert_eqstr(settings->test_list, (char*)path);
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			int dirfd;
 
 			igt_require((dirfd = open(dirname, O_DIRECTORY | O_RDONLY)) >= 0);
@@ -443,7 +443,7 @@ igt_main
 		igt_assert(!settings->piglit_style_dmesg);
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		unsetenv("IGT_TEST_ROOT");
 	}
 
@@ -757,10 +757,10 @@ igt_main
 		igt_assert(settings->sync);
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		char filename[] = "tmplistXXXXXX";
 
-		igt_fixture {
+		igt_fixture() {
 			int fd;
 			igt_require((fd = mkstemp(filename)) >= 0);
 			close(fd);
@@ -779,7 +779,7 @@ igt_main
 			igt_assert(validate_settings(settings));
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			unlink(filename);
 		}
 	}
@@ -798,11 +798,11 @@ igt_main
 		igt_assert(!validate_settings(settings));
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		char dirname[] = "tmpdirXXXXXX";
 		struct job_list *list = malloc(sizeof(*list));
 
-		igt_fixture {
+		igt_fixture() {
 			igt_require(mkdtemp(dirname) != NULL);
 			init_job_list(list);
 		}
@@ -818,7 +818,7 @@ igt_main
 			igt_assert(!create_job_list(list, settings));
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			rmdir(dirname);
 			free_job_list(list);
 			free(list);
@@ -833,7 +833,7 @@ igt_main
 	job_list_filter_test("piglit-names", "-t", "igt@successtest", 2, 1);
 	job_list_filter_test("piglit-names-subtest", "-t", "igt@successtest@first", 1, 1);
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		char filename[] = "tmplistXXXXXX";
 		const char testlisttext[] = "igt@successtest@first-subtest\n"
 			"igt@successtest@second-subtest\n"
@@ -841,7 +841,7 @@ igt_main
 		int multiple;
 		struct job_list *list = malloc(sizeof(*list));
 
-		igt_fixture {
+		igt_fixture() {
 			int fd;
 			igt_require((fd = mkstemp(filename)) >= 0);
 			igt_require(write(fd, testlisttext, strlen(testlisttext)) == strlen(testlisttext));
@@ -896,14 +896,14 @@ igt_main
 			}
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			unlink(filename);
 			free_job_list(list);
 			free(list);
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		char filename[] = "tmplistXXXXXX";
 		const char testlisttext[] = "igt@dynamic@dynamic-subtest@passing\n"
 			"igt@dynamic@dynamic-subtest@failing\n"
@@ -911,7 +911,7 @@ igt_main
 		int multiple;
 		struct job_list *list = malloc(sizeof(*list));
 
-		igt_fixture {
+		igt_fixture() {
 			int fd;
 			igt_require((fd = mkstemp(filename)) >= 0);
 			igt_require(write(fd, testlisttext, strlen(testlisttext)) == strlen(testlisttext));
@@ -956,19 +956,19 @@ igt_main
 			}
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			unlink(filename);
 			free_job_list(list);
 			free(list);
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		char dirname[] = "tmpdirXXXXXX";
 		volatile int dirfd = -1, fd = -1;
 		struct settings *cmp_settings = malloc(sizeof(*cmp_settings));
 
-		igt_fixture {
+		igt_fixture() {
 			igt_require(mkdtemp(dirname) != NULL);
 			rmdir(dirname);
 			init_settings(cmp_settings);
@@ -1019,7 +1019,7 @@ igt_main
 			assert_settings_equal(settings, cmp_settings);
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			close(fd);
 			close(dirfd);
 			clear_directory(dirname);
@@ -1028,7 +1028,7 @@ igt_main
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		char dirname[] = "tmpdirXXXXXX";
 		volatile int dirfd = -1, fd = -1;
 		struct job_list *list, *cmp_list;
@@ -1037,7 +1037,7 @@ igt_main
 		list = malloc(sizeof(*list));
 		cmp_list = malloc(sizeof(*cmp_list));
 
-		igt_fixture {
+		igt_fixture() {
 			init_job_list(list);
 			init_job_list(cmp_list);
 			igt_require(mkdtemp(dirname) != NULL);
@@ -1071,7 +1071,7 @@ igt_main
 				assert_job_list_equal(list, cmp_list);
 			}
 
-			igt_fixture {
+			igt_fixture() {
 				close(fd);
 				close(dirfd);
 				clear_directory(dirname);
@@ -1080,18 +1080,18 @@ igt_main
 			}
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			free(cmp_list);
 			free(list);
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		char dirname[] = "tmpdirXXXXXX";
 		struct job_list *list = malloc(sizeof(*list));
 		volatile int dirfd = -1, subdirfd = -1, fd = -1;
 
-		igt_fixture {
+		igt_fixture() {
 			init_job_list(list);
 			igt_require(mkdtemp(dirname) != NULL);
 			rmdir(dirname);
@@ -1160,7 +1160,7 @@ igt_main
 			igt_assert_eqstr(env_var->value, "ENV_VARS");
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			close(fd);
 			close(dirfd);
 			close(subdirfd);
@@ -1170,12 +1170,12 @@ igt_main
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		char dirname[] = "tmpdirXXXXXX";
 		struct job_list *list = malloc(sizeof(*list));
 		volatile int dirfd = -1, fd = -1;
 
-		igt_fixture {
+		igt_fixture() {
 			init_job_list(list);
 			igt_require(mkdtemp(dirname) != NULL);
 			rmdir(dirname);
@@ -1210,7 +1210,7 @@ igt_main
 				     "Execute state initialization created uname.txt.\n");
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			close(fd);
 			close(dirfd);
 			clear_directory(dirname);
@@ -1219,12 +1219,12 @@ igt_main
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		char dirname[] = "tmpdirXXXXXX";
 		struct job_list *list = malloc(sizeof(*list));
 		volatile int dirfd = -1, subdirfd = -1, fd = -1;
 
-		igt_fixture {
+		igt_fixture() {
 			init_job_list(list);
 			igt_require(mkdtemp(dirname) != NULL);
 		}
@@ -1266,7 +1266,7 @@ igt_main
 			igt_assert_eqstr(list->entries[0].subtests[1], excludestring);
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			close(fd);
 			close(subdirfd);
 			close(dirfd);
@@ -1276,12 +1276,12 @@ igt_main
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		char dirname[] = "tmpdirXXXXXX";
 		struct job_list *list = malloc(sizeof(*list));
 		volatile int dirfd = -1, subdirfd = -1, fd = -1;
 
-		igt_fixture {
+		igt_fixture() {
 			init_job_list(list);
 			igt_require(mkdtemp(dirname) != NULL);
 		}
@@ -1322,7 +1322,7 @@ igt_main
 			igt_assert_eqstr(list->entries[0].subtests[1], excludestring);
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			close(fd);
 			close(subdirfd);
 			close(dirfd);
@@ -1332,12 +1332,12 @@ igt_main
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		char dirname[] = "tmpdirXXXXXX";
 		struct job_list *list = malloc(sizeof(*list));
 		volatile int dirfd = -1, subdirfd = -1, fd = -1;
 
-		igt_fixture {
+		igt_fixture() {
 			init_job_list(list);
 			igt_require(mkdtemp(dirname) != NULL);
 		}
@@ -1378,7 +1378,7 @@ igt_main
 			igt_assert_eq(list->entries[0].subtest_count, 4);
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			close(fd);
 			close(subdirfd);
 			close(dirfd);
@@ -1388,12 +1388,12 @@ igt_main
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		char dirname[] = "tmpdirXXXXXX";
 		struct job_list *list = malloc(sizeof(*list));
 		volatile int dirfd = -1, subdirfd = -1, fd = -1;
 
-		igt_fixture {
+		igt_fixture() {
 			init_job_list(list);
 			igt_require(mkdtemp(dirname) != NULL);
 		}
@@ -1434,7 +1434,7 @@ igt_main
 			igt_assert_eq(list->entries[0].subtest_count, 4);
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			close(fd);
 			close(subdirfd);
 			close(dirfd);
@@ -1444,12 +1444,12 @@ igt_main
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		char dirname[] = "tmpdirXXXXXX";
 		struct job_list *list = malloc(sizeof(*list));
 		volatile int dirfd = -1, subdirfd = -1, fd = -1;
 
-		igt_fixture {
+		igt_fixture() {
 			init_job_list(list);
 			igt_require(mkdtemp(dirname) != NULL);
 		}
@@ -1493,7 +1493,7 @@ igt_main
 			igt_assert_eq(list->size, NUM_TESTDATA_BINARIES);
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			close(fd);
 			close(subdirfd);
 			close(dirfd);
@@ -1503,12 +1503,12 @@ igt_main
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		char dirname[] = "tmpdirXXXXXX";
 		struct job_list *list = malloc(sizeof(*list));
 		volatile int dirfd = -1, subdirfd = -1, fd = -1;
 
-		igt_fixture {
+		igt_fixture() {
 			init_job_list(list);
 			igt_require(mkdtemp(dirname) != NULL);
 		}
@@ -1553,7 +1553,7 @@ igt_main
 			igt_assert_eq(list->size, NUM_TESTDATA_BINARIES);
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			close(fd);
 			close(subdirfd);
 			close(dirfd);
@@ -1563,19 +1563,19 @@ igt_main
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		struct job_list *list = malloc(sizeof(*list));
 		volatile int dirfd = -1, subdirfd = -1, fd = -1;
 		int multiple;
 
-		igt_fixture {
+		igt_fixture() {
 			init_job_list(list);
 		}
 
 		for (multiple = 0; multiple < 2; multiple++) {
 			char dirname[] = "tmpdirXXXXXX";
 
-			igt_fixture {
+			igt_fixture() {
 				igt_require(mkdtemp(dirname) != NULL);
 				rmdir(dirname);
 			}
@@ -1620,7 +1620,7 @@ igt_main
 					     "Execute created too many directories\n");
 			}
 
-			igt_fixture {
+			igt_fixture() {
 				close(fd);
 				close(subdirfd);
 				close(dirfd);
@@ -1629,11 +1629,11 @@ igt_main
 			}
 		}
 
-		igt_fixture
+		igt_fixture()
 			free(list);
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_subtest("metadata-read-old-style-infer-dmesg-warn-piglit-style") {
 			char metadata[] = "piglit_style_dmesg : 1\n";
 			FILE *f = fmemopen(metadata, strlen(metadata), "r");
@@ -1699,19 +1699,19 @@ igt_main
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		struct job_list *list = malloc(sizeof(*list));
 		volatile int dirfd = -1, subdirfd = -1, fd = -1;
 		int multiple;
 
-		igt_fixture {
+		igt_fixture() {
 			init_job_list(list);
 		}
 
 		for (multiple = 0; multiple < 2; multiple++) {
 			char dirname[] = "tmpdirXXXXXX";
 
-			igt_fixture {
+			igt_fixture() {
 				/* This test checks that the stdout parsing for result without time data works, so use that */
 				setenv("IGT_RUNNER_DISABLE_SOCKET_COMMUNICATION", "1", 1);
 				igt_require(mkdtemp(dirname) != NULL);
@@ -1772,7 +1772,7 @@ igt_main
 				}
 			}
 
-			igt_fixture {
+			igt_fixture() {
 				close(fd);
 				close(subdirfd);
 				close(dirfd);
@@ -1782,11 +1782,11 @@ igt_main
 			}
 		}
 
-		igt_fixture
+		igt_fixture()
 			free(list);
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		const char testlisttext[] = "igt@dynamic@dynamic-subtest@passing\n";
 		struct job_list *list = malloc(sizeof(*list));
 		volatile int dirfd = -1;
@@ -1794,7 +1794,7 @@ igt_main
 		volatile int fd;
 		char filename[] = "tmplistXXXXXX";
 
-		igt_fixture {
+		igt_fixture() {
 			igt_require(mkdtemp(dirname) != NULL);
 			rmdir(dirname);
 
@@ -1840,7 +1840,7 @@ igt_main
 			igt_assert_eq(json_object_put(results), 1);
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			unlink(filename);
 			close(dirfd);
 			clear_directory(dirname);
@@ -1849,7 +1849,7 @@ igt_main
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		const char testlisttext[] = "igt@successtest";
 		const char blocktext[] = "igt@successtest@first";
 		const char blocktext_upper[] = "igt@successTEST@first";
@@ -1863,7 +1863,7 @@ igt_main
 		char blockfilename[] = "tmpblockXXXXXX";
 		char blockfilename_upper[] = "tmpBLOCKXXXXXX";
 
-		igt_fixture {
+		igt_fixture() {
 			igt_require(mkdtemp(dirname) != NULL);
 			rmdir(dirname);
 
@@ -1933,7 +1933,7 @@ igt_main
 			igt_assert_eqstr(list->entries[0].subtests[0], "second-subtest");
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			unlink(listfilename);
 			unlink(blockfilename);
 			unlink(blockfilename_upper);
@@ -1944,12 +1944,12 @@ igt_main
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		struct job_list *list = malloc(sizeof(*list));
 		volatile int dirfd = -1;
 		char dirname[] = "tmpdirXXXXXX";
 
-		igt_fixture {
+		igt_fixture() {
 			igt_require(mkdtemp(dirname) != NULL);
 			rmdir(dirname);
 
@@ -1983,19 +1983,19 @@ igt_main
 			igt_assert_eq(json_object_put(results), 1);
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			close(dirfd);
 			clear_directory(dirname);
 			free_job_list(list);
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		struct job_list *list = malloc(sizeof(*list));
 		volatile int dirfd = -1;
 		char dirname[] = "tmpdirXXXXXX";
 
-		igt_fixture {
+		igt_fixture() {
 			igt_require(mkdtemp(dirname) != NULL);
 			rmdir(dirname);
 
@@ -2029,21 +2029,21 @@ igt_main
 			igt_assert_eq(json_object_put(results), 1);
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			close(dirfd);
 			clear_directory(dirname);
 			free_job_list(list);
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		struct job_list *list = malloc(sizeof(*list));
 		volatile int dirfd = -1;
 
 		for (int multiple = 0; multiple <= 1; ++multiple) {
 			char dirname[] = "tmpdirXXXXXX";
 
-			igt_fixture {
+			igt_fixture() {
 				igt_require(mkdtemp(dirname) != NULL);
 				rmdir(dirname);
 
@@ -2084,7 +2084,7 @@ igt_main
 				igt_assert_eq(json_object_put(results), 1);
 			}
 
-			igt_fixture {
+			igt_fixture() {
 				close(dirfd);
 				clear_directory(dirname);
 				free_job_list(list);
@@ -2092,14 +2092,14 @@ igt_main
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		struct job_list *list = malloc(sizeof(*list));
 		volatile int dirfd = -1;
 
 		for (int multiple = 0; multiple <= 1; ++multiple) {
 			char dirname[] = "tmpdirXXXXXX";
 
-			igt_fixture {
+			igt_fixture() {
 				igt_require(mkdtemp(dirname) != NULL);
 				rmdir(dirname);
 
@@ -2144,7 +2144,7 @@ igt_main
 				igt_assert_eq(json_object_put(results), 1);
 			}
 
-			igt_fixture {
+			igt_fixture() {
 				close(dirfd);
 				clear_directory(dirname);
 				free_job_list(list);
@@ -2152,7 +2152,7 @@ igt_main
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		struct job_list *list = malloc(sizeof(*list));
 		volatile int dirfd = -1;
 
@@ -2162,7 +2162,7 @@ igt_main
 			const char testlisttext[] = "igt@abort-fixture@b-subtest\n"
 				"igt@abort-fixture@a-subtest\n";
 
-			igt_fixture {
+			igt_fixture() {
 				int fd;
 				igt_require((fd = mkstemp(filename)) >= 0);
 				igt_require(write(fd, testlisttext, strlen(testlisttext)) == strlen(testlisttext));
@@ -2206,7 +2206,7 @@ igt_main
 				igt_assert_eq(json_object_put(results), 1);
 			}
 
-			igt_fixture {
+			igt_fixture() {
 				unlink(filename);
 				close(dirfd);
 				clear_directory(dirname);
@@ -2215,14 +2215,14 @@ igt_main
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		struct job_list *list = malloc(sizeof(*list));
 		volatile int dirfd = -1;
 
 		for (int multiple = 0; multiple <= 1; ++multiple) {
 			char dirname[] = "tmpdirXXXXXX";
 
-			igt_fixture {
+			igt_fixture() {
 				igt_require(mkdtemp(dirname) != NULL);
 				rmdir(dirname);
 
@@ -2265,7 +2265,7 @@ igt_main
 				igt_assert_eq(json_object_put(results), 1);
 			}
 
-			igt_fixture {
+			igt_fixture() {
 				close(dirfd);
 				clear_directory(dirname);
 				free_job_list(list);
@@ -2291,7 +2291,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		clear_settings(settings);
 		free(settings);
 	}

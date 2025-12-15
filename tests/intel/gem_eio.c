@@ -410,10 +410,10 @@ static void check_wait_elapsed(const char *prefix, int fd, igt_stats_t *st)
 		 igt_stats_get_median(st)*1e-6,
 		 igt_stats_get_max(st)*1e-6);
 
-#define NUMER_OF_MEASURED_CYCLES_NEEDED 9
-	igt_require_f(st->n_values >= NUMER_OF_MEASURED_CYCLES_NEEDED,
+#define NUMBER_OF_MEASURED_CYCLES_NEEDED 9
+	igt_require_f(st->n_values >= NUMBER_OF_MEASURED_CYCLES_NEEDED,
 		      "at least %d completed resets are needed for stable median calculation, %d is too few\n",
-		      NUMER_OF_MEASURED_CYCLES_NEEDED, st->n_values);
+		      NUMBER_OF_MEASURED_CYCLES_NEEDED, st->n_values);
 
 	/*
 	 * Older platforms need to reset the display (incl. modeset to off,
@@ -931,7 +931,7 @@ static void reset_stress(int fd, uint64_t ahnd, const intel_ctx_t *ctx0,
 	gem_write(fd, obj.handle, 0, &bbe, sizeof(bbe));
 
 	igt_stats_init(&stats);
-	igt_until_timeout(20) {
+	igt_until_timeout(30) {
 		const intel_ctx_t *ctx = context_create_safe(fd);
 		igt_spin_t *hang;
 		unsigned int i;
@@ -981,7 +981,7 @@ static void reset_stress(int fd, uint64_t ahnd, const intel_ctx_t *ctx0,
 		igt_spin_free(fd, hang);
 		intel_ctx_destroy(fd, ctx);
 
-		if (stats.n_values >= NUMER_OF_MEASURED_CYCLES_NEEDED)
+		if (stats.n_values >= NUMBER_OF_MEASURED_CYCLES_NEEDED)
 			break;
 	}
 	check_wait_elapsed(name, fd, &stats);
@@ -995,22 +995,25 @@ static void reset_stress(int fd, uint64_t ahnd, const intel_ctx_t *ctx0,
  */
 static void test_reset_stress(int fd, unsigned int flags)
 {
-	const intel_ctx_t *ctx0 = context_create_safe(fd);
-	uint64_t ahnd = get_reloc_ahnd(fd, ctx0->id);
-
 	for_each_physical_ring(e, fd) {
-		struct intel_execution_engine2 engine;
+		const intel_ctx_t *ctx0 = NULL;
+		uint64_t ahnd = 0;
 
-		engine = gem_eb_flags_to_engine(eb_ring(e));
+		igt_dynamic(e->name) {
+			struct intel_execution_engine2 engine;
 
-		if (gem_engine_can_block_ggtt_binder(fd, &engine))
-			continue;
+			engine = gem_eb_flags_to_engine(eb_ring(e));
+			igt_skip_on(gem_engine_can_block_ggtt_binder(fd, &engine));
 
-		reset_stress(fd, ahnd, ctx0, e->name, eb_ring(e), flags);
+			ctx0 = context_create_safe(fd);
+			ahnd = get_reloc_ahnd(fd, ctx0->id);
+
+			reset_stress(fd, ahnd, ctx0, e->name, eb_ring(e), flags);
+		}
+
+		put_ahnd(ahnd);
+		intel_ctx_destroy(fd, ctx0);
 	}
-
-	intel_ctx_destroy(fd, ctx0);
-	put_ahnd(ahnd);
 }
 
 /*
@@ -1032,7 +1035,7 @@ static void display_helper(igt_display_t *dpy, int *done)
 		int pipe;
 
 		pipe = rand() % dpy->n_pipes;
-		if (!dpy->pipes[pipe].enabled)
+		if (!dpy->pipes[pipe].valid)
 			continue;
 		output = igt_get_single_output_for_pipe(dpy, pipe);
 		if (!output)
@@ -1099,9 +1102,9 @@ exit_handler(int sig)
 	igt_force_gpu_reset(fd);
 }
 
-igt_main
+int igt_main()
 {
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_INTEL);
 		igt_device_drop_master(fd);
 
@@ -1149,19 +1152,19 @@ igt_main
 	igt_subtest("in-flight-suspend")
 		test_inflight_suspend(fd);
 
-	igt_subtest_group {
-		igt_fixture {
+	igt_subtest_group() {
+		igt_fixture() {
 			igt_require(gem_has_contexts(fd));
 		}
 
-		igt_subtest("reset-stress")
+		igt_subtest_with_dynamic("reset-stress")
 			test_reset_stress(fd, 0);
 
-		igt_subtest("unwedge-stress")
+		igt_subtest_with_dynamic("unwedge-stress")
 			test_reset_stress(fd, TEST_WEDGE);
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		const struct {
 			unsigned int wait;
 			const char *name;
@@ -1190,12 +1193,12 @@ igt_main
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_display_t display = {
 			.drm_fd = -1, .n_pipes = IGT_MAX_PIPES
 		};
 
-		igt_fixture {
+		igt_fixture() {
 			igt_device_set_master(fd);
 
 			igt_display_require(&display, fd);
@@ -1206,11 +1209,11 @@ igt_main
 		igt_subtest("kms")
 			test_kms(fd, &display);
 
-		igt_fixture {
+		igt_fixture() {
 			intel_allocator_multiprocess_stop();
 		}
 	}
 
-	igt_fixture
+	igt_fixture()
 		drm_close_driver(fd);
 }

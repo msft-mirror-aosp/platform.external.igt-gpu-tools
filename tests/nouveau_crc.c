@@ -318,11 +318,11 @@ static void test_source_outp_inactive(data_t *data)
 data_t data = {0};
 
 #define pipe_test(name) igt_subtest_f("pipe-%s-" name, kmstest_pipe_name(pipe))
-igt_main
+int igt_main()
 {
 	int pipe;
 
-	igt_fixture {
+	igt_fixture() {
 		data.drm_fd = drm_open_driver_master(DRIVER_ANY);
 		igt_require_nouveau(data.drm_fd);
 
@@ -334,7 +334,7 @@ igt_main
 	}
 
 	for_each_pipe_static(pipe) {
-		igt_fixture {
+		igt_fixture() {
 			int dir;
 
 			data.pipe = pipe;
@@ -407,13 +407,13 @@ igt_main
 		pipe_test("source-outp-inactive")
 			test_source_outp_inactive(&data);
 
-		igt_fixture {
+		igt_fixture() {
 			igt_remove_fb(data.drm_fd, &data.default_fb);
 			close(data.nv_crc_dir);
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		igt_display_fini(&data.display);
 		drm_close_driver(data.drm_fd);
 	}

@@ -25,81 +25,47 @@
 #include "xe_query.h"
 #include "xe_ioctl.h"
 
-static struct drm_xe_query_config *xe_query_config_new(int fd)
+/**
+ * xe_query_device_may_fail:
+ * @fd: xe device fd
+ * @type: query type, one of DRM_XE_DEVICE_QUERY_* values
+ * @size: pointer to get size of returned data, can be NULL
+ *
+ * Calls DRM_IOCTL_XE_DEVICE_QUERY ioctl to query device information
+ * about specified @type. Returns pointer to malloc'ed data, which
+ * should be freed later by the user. If @query is not supported
+ * function returns NULL. On any other error it asserts.
+ */
+void *xe_query_device_may_fail(int fd, uint32_t type, uint32_t *size)
 {
-	struct drm_xe_query_config *config;
 	struct drm_xe_device_query query = {
 		.extensions = 0,
-		.query = DRM_XE_DEVICE_QUERY_CONFIG,
+		.query = type,
 		.size = 0,
 		.data = 0,
 	};
+	void *data = NULL;
 
+	/* In case of unsupported query xe driver usually returns error,
+	 * but in case of HWCONFIG it can also return query.size == 0
+	 * on older platforms.
+	 */
+	if (igt_ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, &query) || !query.size)
+		goto skip_query;
+
+	data = malloc(query.size);
+	igt_assert(data);
+
+	query.data = to_user_pointer(data);
 	igt_assert_eq(igt_ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, &query), 0);
 
-	config = malloc(query.size);
-	igt_assert(config);
+	VG(VALGRIND_MAKE_MEM_DEFINED(data, query.size));
 
-	query.data = to_user_pointer(config);
-	igt_assert_eq(igt_ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, &query), 0);
+skip_query:
+	if (size)
+		*size = query.size;
 
-	VG(VALGRIND_MAKE_MEM_DEFINED(config, query.size));
-
-	igt_assert(config->num_params > 0);
-
-	return config;
-}
-
-static uint32_t *xe_query_hwconfig_new(int fd, uint32_t *hwconfig_size)
-{
-	uint32_t *hwconfig;
-	struct drm_xe_device_query query = {
-		.extensions = 0,
-		.query = DRM_XE_DEVICE_QUERY_HWCONFIG,
-		.size = 0,
-		.data = 0,
-	};
-
-	/* Perform the initial query to get the size */
-	igt_assert_eq(igt_ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, &query), 0);
-	if (!query.size)
-		return NULL;
-
-	hwconfig = malloc(query.size);
-	igt_assert(hwconfig);
-
-	query.data = to_user_pointer(hwconfig);
-
-	/* Perform the query to get the actual data */
-	igt_assert_eq(igt_ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, &query), 0);
-
-	VG(VALGRIND_MAKE_MEM_DEFINED(hwconfig, query.size));
-
-	*hwconfig_size = query.size;
-	return hwconfig;
-}
-
-static struct drm_xe_query_gt_list *xe_query_gt_list_new(int fd)
-{
-	struct drm_xe_query_gt_list *gt_list;
-	struct drm_xe_device_query query = {
-		.extensions = 0,
-		.query = DRM_XE_DEVICE_QUERY_GT_LIST,
-		.size = 0,
-		.data = 0,
-	};
-
-	igt_assert_eq(igt_ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, &query), 0);
-
-	gt_list = malloc(query.size);
-	igt_assert(gt_list);
-
-	query.data = to_user_pointer(gt_list);
-	igt_assert_eq(igt_ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, &query), 0);
-
-	VG(VALGRIND_MAKE_MEM_DEFINED(gt_list, query.size));
-
-	return gt_list;
+	return data;
 }
 
 static uint64_t __memory_regions(const struct drm_xe_query_gt_list *gt_list)
@@ -112,103 +78,6 @@ static uint64_t __memory_regions(const struct drm_xe_query_gt_list *gt_list)
 			   gt_list->gt_list[i].far_mem_regions;
 
 	return regions;
-}
-
-static struct drm_xe_query_engines *xe_query_engines(int fd)
-{
-	struct drm_xe_query_engines *engines;
-	struct drm_xe_device_query query = {
-		.extensions = 0,
-		.query = DRM_XE_DEVICE_QUERY_ENGINES,
-		.size = 0,
-		.data = 0,
-	};
-
-	igt_assert_eq(igt_ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, &query), 0);
-
-	engines = malloc(query.size);
-	igt_assert(engines);
-
-	query.data = to_user_pointer(engines);
-	igt_assert_eq(igt_ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, &query), 0);
-
-	VG(VALGRIND_MAKE_MEM_DEFINED(engines, query.size));
-
-	return engines;
-}
-
-static struct drm_xe_query_mem_regions *xe_query_mem_regions_new(int fd)
-{
-	struct drm_xe_query_mem_regions *mem_regions;
-	struct drm_xe_device_query query = {
-		.extensions = 0,
-		.query = DRM_XE_DEVICE_QUERY_MEM_REGIONS,
-		.size = 0,
-		.data = 0,
-	};
-
-	igt_assert_eq(igt_ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, &query), 0);
-
-	mem_regions = malloc(query.size);
-	igt_assert(mem_regions);
-
-	query.data = to_user_pointer(mem_regions);
-	igt_assert_eq(igt_ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, &query), 0);
-
-	VG(VALGRIND_MAKE_MEM_DEFINED(mem_regions, query.size));
-
-	return mem_regions;
-}
-
-static struct drm_xe_query_eu_stall *xe_query_eu_stall_new(int fd)
-{
-	struct drm_xe_query_eu_stall *query_eu_stall;
-	struct drm_xe_device_query query = {
-		.extensions = 0,
-		.query = DRM_XE_DEVICE_QUERY_EU_STALL,
-		.size = 0,
-		.data = 0,
-	};
-
-	/* Support older kernels where this uapi is not yet available */
-	if (igt_ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, &query))
-		return NULL;
-	igt_assert_neq(query.size, 0);
-
-	query_eu_stall = malloc(query.size);
-	igt_assert(query_eu_stall);
-
-	query.data = to_user_pointer(query_eu_stall);
-	igt_assert_eq(igt_ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, &query), 0);
-
-	VG(VALGRIND_MAKE_MEM_DEFINED(query_eu_stall, query.size));
-
-	return query_eu_stall;
-}
-
-static struct drm_xe_query_oa_units *xe_query_oa_units_new(int fd)
-{
-	struct drm_xe_query_oa_units *oa_units;
-	struct drm_xe_device_query query = {
-		.extensions = 0,
-		.query = DRM_XE_DEVICE_QUERY_OA_UNITS,
-		.size = 0,
-		.data = 0,
-	};
-
-	/* Support older kernels where this uapi is not yet available */
-	if (igt_ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, &query))
-		return NULL;
-
-	oa_units = malloc(query.size);
-	igt_assert(oa_units);
-
-	query.data = to_user_pointer(oa_units);
-	igt_assert_eq(igt_ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, &query), 0);
-
-	VG(VALGRIND_MAKE_MEM_DEFINED(oa_units, query.size));
-
-	return oa_units;
 }
 
 static uint64_t native_region_for_gt(const struct drm_xe_gt *gt)
@@ -262,6 +131,28 @@ static uint32_t __mem_default_alignment(struct drm_xe_query_mem_regions *mem_reg
 			alignment = mem_regions->mem_regions[i].min_page_size;
 
 	return alignment;
+}
+
+/**
+ * xe_engine_class_supports_multi_queue:
+ * @engine_class: engine class
+ *
+ * Returns true if multi queue supported by engine class or false.
+ */
+bool xe_engine_class_supports_multi_queue(uint32_t engine_class)
+{
+	switch (engine_class) {
+		case DRM_XE_ENGINE_CLASS_COPY:
+		case DRM_XE_ENGINE_CLASS_COMPUTE:
+			return true;
+		case DRM_XE_ENGINE_CLASS_RENDER:
+		case DRM_XE_ENGINE_CLASS_VIDEO_DECODE:
+		case DRM_XE_ENGINE_CLASS_VIDEO_ENHANCE:
+			return false;
+		default:
+			igt_warn("Engine class 0x%x unknown\n", engine_class);
+			return false;
+	}
 }
 
 /**
@@ -369,11 +260,11 @@ struct xe_device *xe_device_get(int fd)
 	igt_assert(xe_dev);
 
 	xe_dev->fd = fd;
-	xe_dev->config = xe_query_config_new(fd);
-	xe_dev->hwconfig = xe_query_hwconfig_new(fd, &xe_dev->hwconfig_size);
+	xe_dev->config = xe_query_device(fd, DRM_XE_DEVICE_QUERY_CONFIG, NULL);
+	xe_dev->hwconfig = xe_query_device_may_fail(fd, DRM_XE_DEVICE_QUERY_HWCONFIG, &xe_dev->hwconfig_size);
 	xe_dev->va_bits = xe_dev->config->info[DRM_XE_QUERY_CONFIG_VA_BITS];
 	xe_dev->dev_id = xe_dev->config->info[DRM_XE_QUERY_CONFIG_REV_AND_DEVICE_ID] & 0xffff;
-	xe_dev->gt_list = xe_query_gt_list_new(fd);
+	xe_dev->gt_list = xe_query_device(fd, DRM_XE_DEVICE_QUERY_GT_LIST, NULL);
 
 	/* GT IDs may be non-consecutive; keep a mask of valid IDs */
 	for (int gt = 0; gt < xe_dev->gt_list->num_gt; gt++)
@@ -384,10 +275,10 @@ struct xe_device *xe_device_get(int fd)
 		xe_dev->tile_mask |= (1ull << xe_dev->gt_list->gt_list[gt].tile_id);
 
 	xe_dev->memory_regions = __memory_regions(xe_dev->gt_list);
-	xe_dev->engines = xe_query_engines(fd);
-	xe_dev->mem_regions = xe_query_mem_regions_new(fd);
-	xe_dev->eu_stall = xe_query_eu_stall_new(fd);
-	xe_dev->oa_units = xe_query_oa_units_new(fd);
+	xe_dev->engines = xe_query_device(fd, DRM_XE_DEVICE_QUERY_ENGINES, NULL);
+	xe_dev->mem_regions = xe_query_device(fd, DRM_XE_DEVICE_QUERY_MEM_REGIONS, NULL);
+	xe_dev->eu_stall = xe_query_device_may_fail(fd, DRM_XE_DEVICE_QUERY_EU_STALL, NULL);
+	xe_dev->oa_units = xe_query_device_may_fail(fd, DRM_XE_DEVICE_QUERY_OA_UNITS, NULL);
 
 	/*
 	 * vram_size[] and visible_vram_size[] are indexed by uapi ID; ensure
@@ -513,6 +404,22 @@ unsigned int xe_dev_max_gt(int fd)
 
 	igt_assert(xe_dev);
 	return igt_fls(xe_dev->gt_mask) - 1;
+}
+
+/**
+ * xe_tiles_count:
+ * @fd: xe device fd
+ *
+ * Return number of tiles for xe device fd.
+ */
+uint8_t xe_tiles_count(int fd)
+{
+	struct xe_device *xe_dev;
+
+	xe_dev = find_in_cache(fd);
+	igt_assert(xe_dev);
+
+	return igt_hweight(xe_dev->tile_mask);
 }
 
 /**
@@ -801,7 +708,7 @@ static void __available_vram_size_snapshot(int fd, int gt, struct __available_vr
 	mem_region = &xe_dev->mem_regions->mem_regions[region_idx];
 
 	if (XE_IS_CLASS_VRAM(mem_region)) {
-		mem_regions = xe_query_mem_regions_new(fd);
+		mem_regions = xe_query_device(fd, DRM_XE_DEVICE_QUERY_MEM_REGIONS, NULL);
 		pthread_mutex_lock(&cache.cache_mutex);
 		mem_region->used = mem_regions->mem_regions[region_idx].used;
 		mem_region->cpu_visible_used =
@@ -996,6 +903,35 @@ uint16_t xe_gt_get_tile_id(int fd, int gt)
 }
 
 /**
+ * xe_tile_get_main_gt_id:
+ * @fd: xe device fd
+ * @tile: tile id
+ *
+ * Returns main GT ID for given @tile.
+ */
+uint16_t xe_tile_get_main_gt_id(int fd, uint8_t tile)
+{
+	struct xe_device *xe_dev;
+	int gt_id = -1;
+
+	xe_dev = find_in_cache(fd);
+	igt_assert(xe_dev);
+
+	for (int i = 0; i < xe_dev->gt_list->num_gt; i++) {
+		const struct drm_xe_gt *gt_data = &xe_dev->gt_list->gt_list[i];
+
+		if (gt_data->tile_id == tile && gt_data->type == DRM_XE_QUERY_GT_TYPE_MAIN) {
+			gt_id = gt_data->gt_id;
+			break;
+		}
+	}
+
+	igt_assert_f(gt_id >= 0, "No main GT found for tile %d\n", tile);
+
+	return gt_id;
+}
+
+/**
  * xe_hwconfig_lookup_value:
  * @fd: xe device fd
  * @attribute: hwconfig attribute id
@@ -1033,6 +969,23 @@ uint32_t *xe_hwconfig_lookup_value(int fd, enum intel_hwconfig attribute, uint32
 	}
 
 	return NULL;
+}
+
+/**
+ * xe_hwconfig_lookup_value_u32:
+ * @fd: xe device fd
+ * @attribute: hwconfig attribute id
+ *
+ * Returns the u32 value of the hwconfig attribute @attribute. Asserts if the
+ * attribute is not found or if its length is not 1.
+ */
+uint32_t xe_hwconfig_lookup_value_u32(int fd, enum intel_hwconfig attribute)
+{
+	uint32_t len, *val;
+
+	val = xe_hwconfig_lookup_value(fd, attribute, &len);
+	igt_assert(val && len == 1);
+	return *val;
 }
 
 /**
@@ -1114,6 +1067,63 @@ int xe_wait_for_pxp_init(int fd)
 
 	igt_assert_f(0, "PXP failed to initialize within the timeout\n");
 	return -ETIMEDOUT;
+}
+
+/**
+ * xe_query_eu_count:
+ * @fd: xe device fd
+ * @gt: GT id
+ *
+ * Return count of EUs for given GT.
+ */
+int xe_query_eu_count(int fd, int gt)
+{
+	struct drm_xe_query_topology_mask *c_dss = NULL, *g_dss = NULL, *eu_per_dss = NULL;
+	struct drm_xe_query_topology_mask *topology, *topo;
+	uint32_t size;
+	int eu_count;
+
+	topology = xe_query_device(fd, DRM_XE_DEVICE_QUERY_GT_TOPOLOGY, &size);
+	xe_for_each_topology_mask(topology, size, topo) {
+		if (topo->gt_id != gt)
+			continue;
+
+		if (topo->type == DRM_XE_TOPO_DSS_GEOMETRY) {
+			g_dss = topo;
+		} else if (topo->type == DRM_XE_TOPO_DSS_COMPUTE) {
+			c_dss = topo;
+		} else if (topo->type == DRM_XE_TOPO_EU_PER_DSS ||
+			 topo->type == DRM_XE_TOPO_SIMD16_EU_PER_DSS) {
+			eu_per_dss = topo;
+			break;
+		}
+	}
+
+	igt_assert(g_dss && c_dss && eu_per_dss);
+	igt_assert_eq_u32(c_dss->num_bytes, g_dss->num_bytes);
+
+	for (int i = 0; i < c_dss->num_bytes; i++)
+		c_dss->mask[i] |= g_dss->mask[i];
+
+	eu_count = igt_bitmap_hweight(c_dss->mask, c_dss->num_bytes * 8);
+	eu_count *= igt_bitmap_hweight(eu_per_dss->mask, eu_per_dss->num_bytes * 8);
+
+	free(topology);
+
+	return eu_count;
+}
+
+/**
+ * xe_query_eu_thread_count:
+ * @fd: xe device fd
+ * @gt: GT id
+ *
+ * Return count of EU threads for given GT.
+ */
+int xe_query_eu_thread_count(int fd, int gt)
+{
+	return xe_query_eu_count(fd, gt) *
+		xe_hwconfig_lookup_value_u32(fd, INTEL_HWCONFIG_NUM_THREADS_PER_EU);
 }
 
 igt_constructor

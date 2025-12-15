@@ -76,7 +76,7 @@ err_handle:
 	return ret;
 }
 
-igt_main
+int igt_main()
 {
 	amdgpu_device_handle device;
 	struct mmd_shared_context shared_context = {};
@@ -85,7 +85,7 @@ igt_main
 	int err;
 	struct pci_addr pci;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_AMDGPU);
 		err = amdgpu_device_initialize(fd, &major, &minor, &device);
 		igt_require(err == 0);
@@ -107,7 +107,7 @@ igt_main
 		mm_queue_test_helper(device, &shared_context, jpeg_queue_decode, err, &pci);
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		amdgpu_device_deinitialize(device);
 		drm_close_driver(fd);
 	}

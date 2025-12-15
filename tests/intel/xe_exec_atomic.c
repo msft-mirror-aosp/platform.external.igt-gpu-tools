@@ -123,12 +123,12 @@ static bool has_atomics(int fd, uint32_t region)
 	return true;
 }
 
-igt_main
+int igt_main()
 {
 	struct drm_xe_engine_class_instance *hwe;
 	int fd;
 
-	igt_fixture
+	igt_fixture()
 		fd = drm_open_driver(DRIVER_XE);
 
 	igt_subtest_with_dynamic("basic-dec-all") {
@@ -167,6 +167,6 @@ igt_main
 		}
 	}
 
-	igt_fixture
+	igt_fixture()
 		drm_close_driver(fd);
 }

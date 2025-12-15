@@ -39,14 +39,14 @@
 
 IGT_TEST_DESCRIPTION("Check tv load detection works correctly.");
 
-igt_main
+int igt_main()
 {
 	/* force the VGA output and test that it worked */
 	int drm_fd = 0;
 	drmModeRes *res;
 	drmModeConnector *tv_connector = NULL, *temp;
 
-	igt_fixture {
+	igt_fixture() {
 		drm_fd = drm_open_driver_master(DRIVER_ANY);
 
 		res = drmModeGetResources(drm_fd);
@@ -95,7 +95,7 @@ igt_main
 		drmModeFreeConnector(temp);
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		drmModeFreeConnector(tv_connector);
 		drmModeFreeResources(res);
 		drm_close_driver(drm_fd);

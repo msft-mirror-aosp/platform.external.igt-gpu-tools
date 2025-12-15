@@ -214,7 +214,7 @@ static void test_basic_auth(int master)
 	drm_close_driver(slave);
 }
 
-igt_main
+int igt_main()
 {
 	/* root (which we run igt as) should always be authenticated */
 	igt_describe("Check drm client is always authenticated.");
@@ -241,10 +241,10 @@ igt_main
 	}
 
 	/* above tests require that no drm fd is open */
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_fd_t(master);
 
-		igt_fixture
+		igt_fixture()
 			master = drm_open_driver_master(DRIVER_ANY);
 	
 		igt_describe("Test magic numbers for master and slave.");

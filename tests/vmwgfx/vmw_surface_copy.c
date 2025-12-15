@@ -306,12 +306,12 @@ static void test_invalid_copies_3d(int fd, int32 cid)
 	vmw_ioctl_surface_unref(fd, s2);
 }
 
-igt_main
+int igt_main()
 {
 	int fd;
 	int32 cid;
 
-	igt_fixture
+	igt_fixture()
 	{
 		fd = drm_open_driver_render(DRIVER_VMWGFX);
 		igt_require(fd != -1);
@@ -333,7 +333,7 @@ igt_main
 		test_invalid_copies_3d(fd, cid);
 	}
 
-	igt_fixture
+	igt_fixture()
 	{
 		vmw_ioctl_context_destroy(fd, cid);
 		drm_close_driver(fd);

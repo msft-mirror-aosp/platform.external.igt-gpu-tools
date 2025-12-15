@@ -820,11 +820,11 @@ static bool blit_supports_tiling(int fd, enum blt_tiling_type tiling)
 	}
 }
 
-igt_main
+int igt_main()
 {
 	struct device device;
 
-	igt_fixture {
+	igt_fixture() {
 		device.fd = drm_open_driver_render(DRIVER_INTEL);
 		igt_require_gem(device.fd);
 		gem_require_blitter(device.fd);
@@ -900,7 +900,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		put_ahnd(device.ahnd);
 		drm_close_driver(device.fd);
 	}

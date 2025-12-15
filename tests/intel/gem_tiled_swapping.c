@@ -176,13 +176,13 @@ static void check_memory_layout(int fd)
 	igt_debug("normal memory configuration detected, continuing\n");
 }
 
-igt_main
+int igt_main()
 {
 	unsigned long n, count;
 	struct thread *threads;
 	int fd, num_threads;
 
-	igt_fixture {
+	igt_fixture() {
 		size_t lock_size;
 
 		current_tiling_mode = I915_TILING_X;
@@ -258,6 +258,6 @@ igt_main
 			thread_fini(&threads[n]);
 	}
 
-	igt_fixture
+	igt_fixture()
 		drm_close_driver(fd);
 }

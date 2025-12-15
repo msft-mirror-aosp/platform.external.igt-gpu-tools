@@ -770,7 +770,7 @@ static void threads(int fd, int n_exec_queues, int n_execs, unsigned int flags)
 	free(threads_data);
 }
 
-igt_main
+int igt_main()
 {
 	struct drm_xe_engine_class_instance *hwe;
 	const struct section {
@@ -785,7 +785,7 @@ igt_main
 	int class;
 	int fd;
 
-	igt_fixture
+	igt_fixture()
 		fd = drm_open_driver(DRIVER_XE);
 
 	igt_subtest("spin")
@@ -979,6 +979,6 @@ igt_main
 		xe_for_each_gt(fd, gt)
 			gt_mocs_reset(fd, gt);
 
-	igt_fixture
+	igt_fixture()
 		drm_close_driver(fd);
 }

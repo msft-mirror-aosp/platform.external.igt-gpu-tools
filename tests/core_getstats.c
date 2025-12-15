@@ -55,12 +55,12 @@
 
 IGT_TEST_DESCRIPTION("Tests the DRM_IOCTL_GET_STATS ioctl.");
 
-igt_main
+int igt_main()
 {
 	int fd, ret;
 	drm_stats_t stats;
 
-	igt_fixture
+	igt_fixture()
 		fd = drm_open_driver(DRIVER_ANY);
 
 	igt_describe("Check DRM_IOCTL_GET_STATS ioctl of the first drm device.");
@@ -69,6 +69,6 @@ igt_main
 		igt_assert(ret == 0);
 	}
 
-	igt_fixture
+	igt_fixture()
 		drm_close_driver(fd);
 }

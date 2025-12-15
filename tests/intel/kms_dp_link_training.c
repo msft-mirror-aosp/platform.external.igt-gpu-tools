@@ -298,11 +298,11 @@ static bool test_link_rate(data_t *data, bool mst, bool uhbr)
 IGT_TEST_DESCRIPTION("Test to validate link training on SST/MST with "
 		     "UHBR/NON_UHBR rates");
 
-igt_main
+int igt_main()
 {
 	data_t data = {};
 
-	igt_fixture {
+	igt_fixture() {
 		data.drm_fd = drm_open_driver_master(DRIVER_INTEL | DRIVER_XE);
 		data.devid = intel_get_drm_devid(data.drm_fd);
 		kmstest_set_vt_graphics_mode();
@@ -344,7 +344,7 @@ igt_main
 			      "Didn't find any MST output with NON-UHBR rates.\n");
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		igt_reset_connectors();
 		igt_display_fini(&data.display);
 		close(data.drm_fd);

@@ -7,7 +7,7 @@
  * TEST: xe sysfs defaults
  * Description: check if the sysfs engine .defaults node has all values.
  * Category: Core
- * Mega feature: SysMan
+ * Mega feature: General Core features
  * Sub-category: SysMan tests
  * Functionality: sysman defaults
  * Test category: functionality test
@@ -58,12 +58,12 @@ static void test_defaults(int xe, int engine, const char **property,
 	closedir(dir);
 }
 
-igt_main
+int igt_main()
 {
 	int xe, sys_fd;
 	int gt;
 
-	igt_fixture {
+	igt_fixture() {
 		xe = drm_open_driver(DRIVER_XE);
 		xe_device_get(xe);
 
@@ -89,7 +89,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		xe_device_put(xe);
 		close(xe);
 	}

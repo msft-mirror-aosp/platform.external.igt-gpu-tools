@@ -35,11 +35,11 @@
 #include <sys/ioctl.h>
 #include "panfrost_drm.h"
 
-igt_main
+int igt_main()
 {
 	int fd;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_PANFROST);
 	}
 
@@ -85,6 +85,6 @@ igt_main
 		drm_close_driver(fd2);
 	}
 
-	igt_fixture
+	igt_fixture()
 		drm_close_driver(fd);
 }

@@ -120,7 +120,7 @@ static void test_init(data_t *data, enum pipe pipe, int n_planes)
 static void test_fini(data_t *data, igt_output_t *output, int n_planes)
 {
 	/* reset the constraint on the pipe */
-	igt_output_set_pipe(output, PIPE_ANY);
+	igt_output_set_pipe(output, PIPE_NONE);
 
 	igt_pipe_crc_free(data->pipe_crc1);
 	data->pipe_crc1 = NULL;
@@ -629,9 +629,9 @@ struct option long_options[] = {
 	{ 0, 0, 0, 0 }
 };
 
-igt_main_args("", long_options, help_str, opt_handler, NULL)
+int igt_main_args("", long_options, help_str, opt_handler, NULL)
 {
-	igt_fixture {
+	igt_fixture() {
 		data.drm_fd = drm_open_driver_master(DRIVER_ANY);
 		kmstest_set_vt_graphics_mode();
 		igt_require_pipe_crc(data.drm_fd);
@@ -664,7 +664,7 @@ igt_main_args("", long_options, help_str, opt_handler, NULL)
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		igt_display_fini(&data.display);
 		drm_close_driver(data.drm_fd);
 	}

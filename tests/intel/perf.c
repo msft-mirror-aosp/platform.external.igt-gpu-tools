@@ -5857,12 +5857,12 @@ test_group_concurrent_oa_buffer_read(void)
 	igt_waitchildren();
 }
 
-igt_main
+int igt_main()
 {
 	const intel_ctx_t *ctx;
 	const struct intel_execution_engine2 *e;
 
-	igt_fixture {
+	igt_fixture() {
 		struct stat sb;
 
 		/*
@@ -5884,7 +5884,7 @@ igt_main
 	igt_subtest("sysctl-defaults")
 		test_sysctl_defaults();
 
-	igt_fixture {
+	igt_fixture() {
 		/* We expect that the ref count test before these fixtures
 		 * should have closed drm_fd...
 		 */
@@ -6053,7 +6053,7 @@ igt_main
 		gen8_test_single_ctx_render_target_writes_a_counter();
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_describe("Test MI REPORT PERF COUNT for Gen 12");
 		igt_subtest_with_dynamic("gen12-mi-rpc") {
 			igt_require(intel_gen(devid) >= 12);
@@ -6079,7 +6079,7 @@ igt_main
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_describe("Verify invalid class instance");
 		igt_subtest("gen12-invalid-class-instance") {
 			igt_require(i915_perf_revision(drm_fd) >= 6);
@@ -6117,7 +6117,7 @@ igt_main
 		__for_random_engine_in_each_group(perf_oa_groups, ctx, e)
 			test_stress_open_close(e);
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_describe("Verify invalid SSEU opening parameters");
 		igt_subtest_with_dynamic("global-sseu-config-invalid") {
 			igt_require(i915_perf_revision(drm_fd) >= 4);
@@ -6149,7 +6149,7 @@ igt_main
 	igt_subtest("whitelisted-registers-userspace-config")
 		test_whitelisted_registers_userspace_config();
 
-	igt_fixture {
+	igt_fixture() {
 		/* leave sysctl options in their default state... */
 		write_u64_file("/proc/sys/dev/i915/oa_max_sample_rate", 100000);
 		write_u64_file("/proc/sys/dev/i915/perf_stream_paranoid", 1);

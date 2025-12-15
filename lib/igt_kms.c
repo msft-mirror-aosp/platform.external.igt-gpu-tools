@@ -92,6 +92,7 @@
 #define MAX_CONNECTORS 32
 #define MAX_EDID 2
 #define DISPLAY_TILE_BLOCK 0x12
+#define MAX_NUM_COLOROPS 128
 
 typedef bool (*igt_connector_attr_set)(int dir, const char *attr, const char *value);
 
@@ -702,6 +703,18 @@ const char * const igt_plane_prop_names[IGT_NUM_PLANE_PROPS] = {
 	[IGT_PLANE_SCALING_FILTER] = "SCALING_FILTER",
 	[IGT_PLANE_SIZE_HINTS] = "SIZE_HINTS",
 	[IGT_PLANE_IN_FORMATS_ASYNC] = "IN_FORMATS_ASYNC",
+	[IGT_PLANE_COLOR_PIPELINE] = "COLOR_PIPELINE",
+};
+
+const char * const igt_colorop_prop_names[IGT_NUM_COLOROP_PROPS] = {
+	[IGT_COLOROP_TYPE] = "TYPE",
+	[IGT_COLOROP_BYPASS] = "BYPASS",
+	[IGT_COLOROP_CURVE_1D_TYPE] = "CURVE_1D_TYPE",
+	[IGT_COLOROP_SIZE] = "SIZE",
+	[IGT_COLOROP_DATA] = "DATA",
+	[IGT_COLOROP_MULTIPLIER] = "MULTIPLIER",
+	[IGT_COLOROP_LUT3D_INTERPOLATION] = "LUT3D_INTERPOLATION",
+	[IGT_COLOROP_NEXT] = "NEXT",
 };
 
 const char * const igt_crtc_prop_names[IGT_NUM_CRTC_PROPS] = {
@@ -715,6 +728,7 @@ const char * const igt_crtc_prop_names[IGT_NUM_CRTC_PROPS] = {
 	[IGT_CRTC_OUT_FENCE_PTR] = "OUT_FENCE_PTR",
 	[IGT_CRTC_VRR_ENABLED] = "VRR_ENABLED",
 	[IGT_CRTC_SCALING_FILTER] = "SCALING_FILTER",
+	[IGT_CRTC_SHARPNESS_STRENGTH] = "SHARPNESS_STRENGTH",
 };
 
 const char * const igt_connector_prop_names[IGT_NUM_CONNECTOR_PROPS] = {
@@ -769,6 +783,109 @@ igt_plane_rotations(igt_display_t *display, igt_plane_t *plane,
 	return rotations;
 }
 
+/**
+ * igt_find_colorop:
+ * @display: display on which to look for colorop.
+ * @id: DRM object id of the colorop.
+ *
+ * Returns: An igt_colorop_t if found, or NULL otherwise.
+ */
+igt_colorop_t *igt_find_colorop(igt_display_t *display, uint32_t id)
+{
+	int i;
+
+	/* find corresponding igt_colorop */
+	for (i = 0; i < display->n_colorops; ++i) {
+		igt_colorop_t *colorop = &display->colorops[i];
+
+		if (colorop->id == id)
+			return colorop;
+	}
+
+	return NULL;
+}
+
+/*
+ * Retrieve all the properies specified in props_name and store them into
+ * colorop->props.
+ */
+static void
+igt_fill_colorop_props(igt_display_t *display, igt_colorop_t *colorop,
+		       int num_props, const char * const prop_names[])
+{
+	drmModeObjectPropertiesPtr props;
+	int i, j, fd;
+
+	fd = display->drm_fd;
+
+	props = drmModeObjectGetProperties(fd, colorop->id, DRM_MODE_OBJECT_COLOROP);
+	igt_assert(props);
+
+	for (i = 0; i < props->count_props; i++) {
+		drmModePropertyPtr prop =
+			drmModeGetProperty(fd, props->props[i]);
+
+		for (j = 0; j < num_props; j++) {
+			if (strcmp(prop->name, prop_names[j]) != 0)
+				continue;
+
+			colorop->props[j] = props->props[i];
+			break;
+		}
+
+		drmModeFreeProperty(prop);
+	}
+	drmModeFreeObjectProperties(props);
+}
+
+static void igt_fill_colorop(igt_display_t *display, igt_plane_t *plane,
+			     igt_colorop_t *colorop, uint32_t id,
+			     char *name)
+{
+	colorop->id = id;
+	colorop->plane = plane;
+
+	if (name)
+		snprintf(colorop->name, sizeof(colorop->name), "%s", name);
+
+	igt_fill_colorop_props(display, colorop, IGT_NUM_COLOROP_PROPS, igt_colorop_prop_names);
+}
+
+static void
+igt_fill_plane_color_pipelines(igt_display_t *display, igt_plane_t *plane,
+			       drmModePropertyPtr prop)
+{
+	int i;
+	uint32_t colorop_id;
+
+	plane->num_color_pipelines = 0;
+
+	for (i = 0; i < prop->count_enums; i++) {
+		if (prop->enums[i].value) {
+			igt_colorop_t *colorop = &display->colorops[display->n_colorops++];
+
+			igt_assert(display->n_colorops < MAX_NUM_COLOROPS);
+
+			igt_fill_colorop(display, plane, colorop, prop->enums[i].value, prop->enums[i].name);
+			plane->color_pipelines[plane->num_color_pipelines++] = colorop;
+
+			/* get all NEXT colorops */
+			colorop_id = igt_colorop_get_prop(display, colorop,
+							IGT_COLOROP_NEXT);
+			while (colorop_id) {
+				colorop = &display->colorops[display->n_colorops++];
+				igt_assert(display->n_colorops < MAX_NUM_COLOROPS);
+				igt_fill_colorop(display, plane, colorop, colorop_id, NULL);
+				colorop_id = igt_colorop_get_prop(display, colorop,
+								IGT_COLOROP_NEXT);
+			}
+		}
+	}
+
+	igt_assert(plane->num_color_pipelines < IGT_NUM_PLANE_COLOR_PIPELINES);
+
+}
+
 /*
  * Retrieve all the properties specified in props_name and store them into
  * plane->props.
@@ -799,6 +916,9 @@ igt_fill_plane_props(igt_display_t *display, igt_plane_t *plane,
 
 		if (strcmp(prop->name, "rotation") == 0)
 			plane->rotations = igt_plane_rotations(display, plane, prop);
+
+		if (strcmp(prop->name, "COLOR_PIPELINE") == 0)
+			igt_fill_plane_color_pipelines(display, plane, prop);
 
 		drmModeFreeProperty(prop);
 	}
@@ -1054,6 +1174,25 @@ const char *kmstest_scaling_filter_str(int filter)
 	return find_type_name(scaling_filter_names, filter);
 }
 
+static const struct type_name scaling_modes_names[] = {
+	{ DRM_MODE_SCALE_FULLSCREEN, "fullscreen" },
+	{ DRM_MODE_SCALE_CENTER, "center" },
+	{ DRM_MODE_SCALE_ASPECT, "aspect" },
+	{ DRM_MODE_SCALE_NONE, "none" },
+	{}
+};
+
+/**
+ * kmstest_scaling_mode_str:
+ * @mode: SCALING_MODE_* mode value
+ *
+ * Returns: A string representing the scaling mode @mode.
+ */
+const char *kmstest_scaling_mode_str(int mode)
+{
+	return find_type_name(scaling_modes_names, mode);
+}
+
 static const struct type_name dsc_output_format_names[] = {
 	{ DSC_FORMAT_RGB, "RGB" },
 	{ DSC_FORMAT_YCBCR420, "YCBCR420" },
@@ -1233,17 +1372,17 @@ static int __intel_get_pipe_from_crtc_id(int fd, int crtc_id, int crtc_idx)
 int kmstest_get_pipe_from_crtc_id(int fd, int crtc_id)
 {
 	drmModeRes *res;
-	drmModeCrtc *crtc;
+	drmModeCrtc *drm_crtc;
 	int i, cur_id;
 
 	res = drmModeGetResources(fd);
 	igt_assert(res);
 
 	for (i = 0; i < res->count_crtcs; i++) {
-		crtc = drmModeGetCrtc(fd, res->crtcs[i]);
-		igt_assert(crtc);
-		cur_id = crtc->crtc_id;
-		drmModeFreeCrtc(crtc);
+		drm_crtc = drmModeGetCrtc(fd, res->crtcs[i]);
+		igt_assert(drm_crtc);
+		cur_id = drm_crtc->crtc_id;
+		drmModeFreeCrtc(drm_crtc);
 		if (cur_id == crtc_id)
 			break;
 	}
@@ -2545,6 +2684,8 @@ static int get_drm_plane_type(int drm_fd, uint32_t plane_id)
 
 static void igt_plane_reset(igt_plane_t *plane)
 {
+	igt_display_t *display = plane->pipe->display;
+
 	/* Reset src coordinates. */
 	igt_plane_set_prop_value(plane, IGT_PLANE_SRC_X, 0);
 	igt_plane_set_prop_value(plane, IGT_PLANE_SRC_Y, 0);
@@ -2561,13 +2702,15 @@ static void igt_plane_reset(igt_plane_t *plane)
 	igt_plane_set_prop_value(plane, IGT_PLANE_FB_ID, 0);
 	igt_plane_set_prop_value(plane, IGT_PLANE_CRTC_ID, 0);
 
-	if (igt_plane_has_prop(plane, IGT_PLANE_COLOR_ENCODING))
-		igt_plane_set_prop_enum(plane, IGT_PLANE_COLOR_ENCODING,
-			igt_color_encoding_to_str(IGT_COLOR_YCBCR_BT601));
+	if (!display->has_plane_color_pipeline) {
+		if (igt_plane_has_prop(plane, IGT_PLANE_COLOR_ENCODING))
+			igt_plane_set_prop_enum(plane, IGT_PLANE_COLOR_ENCODING,
+				igt_color_encoding_to_str(IGT_COLOR_YCBCR_BT601));
 
-	if (igt_plane_has_prop(plane, IGT_PLANE_COLOR_RANGE))
-		igt_plane_set_prop_enum(plane, IGT_PLANE_COLOR_RANGE,
-			igt_color_range_to_str(IGT_COLOR_YCBCR_LIMITED_RANGE));
+		if (igt_plane_has_prop(plane, IGT_PLANE_COLOR_RANGE))
+			igt_plane_set_prop_enum(plane, IGT_PLANE_COLOR_RANGE,
+				igt_color_range_to_str(IGT_COLOR_YCBCR_LIMITED_RANGE));
+	}
 
 	/* Use default rotation */
 	if (igt_plane_has_prop(plane, IGT_PLANE_ROTATION))
@@ -2589,6 +2732,9 @@ static void igt_plane_reset(igt_plane_t *plane)
 		igt_plane_set_prop_value(plane, IGT_PLANE_HOTSPOT_X, 0);
 	if (igt_plane_has_prop(plane, IGT_PLANE_HOTSPOT_Y))
 		igt_plane_set_prop_value(plane, IGT_PLANE_HOTSPOT_Y, 0);
+
+	if (igt_plane_has_prop(plane, IGT_PLANE_COLOR_PIPELINE))
+		igt_plane_set_prop_enum(plane, IGT_PLANE_COLOR_PIPELINE, "Bypass");
 
 	igt_plane_clear_prop_changed(plane, IGT_PLANE_IN_FENCE_FD);
 	plane->values[IGT_PLANE_IN_FENCE_FD] = ~0ULL;
@@ -2615,6 +2761,9 @@ static void igt_pipe_reset(igt_pipe_t *pipe)
 
 	if (igt_pipe_obj_has_prop(pipe, IGT_CRTC_VRR_ENABLED))
 		igt_pipe_obj_set_prop_value(pipe, IGT_CRTC_VRR_ENABLED, 0);
+
+	if (igt_pipe_obj_has_prop(pipe, IGT_CRTC_SHARPNESS_STRENGTH))
+		igt_pipe_obj_set_prop_value(pipe, IGT_CRTC_SHARPNESS_STRENGTH, 0);
 
 	pipe->out_fence_fd = -1;
 }
@@ -2714,15 +2863,15 @@ static void igt_fill_display_format_mod(igt_display_t *display);
  * @display: pointer to igt_display_t
  * @pipe: pipe which need to check
  *
- * Skip a (sub-)test if the pipe not enabled.
+ * Skip a (sub-)test if the pipe not valid.
  *
  * Should be used everywhere where a test checks pipe and skip
- * test when pipe is not enabled.
+ * test when pipe is not valid.
  */
 void igt_require_pipe(igt_display_t *display, enum pipe pipe)
 {
-	igt_skip_on_f(pipe >= display->n_pipes || !display->pipes[pipe].enabled,
-			"Pipe %s does not exist or not enabled\n",
+	igt_skip_on_f(pipe >= display->n_pipes || !display->pipes[pipe].valid,
+			"Pipe %s does not exist\n",
 			kmstest_pipe_name(pipe));
 }
 
@@ -2970,8 +3119,7 @@ void igt_display_require(igt_display_t *display, int drm_fd)
 		pipe = &display->pipes[pipe_enum];
 		pipe->pipe = pipe_enum;
 
-		/* pipe is enabled/disabled */
-		pipe->enabled = true;
+		pipe->valid = true;
 		pipe->crtc_id = resources->crtcs[i];
 		/* offset of a pipe in crtcs list */
 		pipe->crtc_offset = i;
@@ -2997,15 +3145,13 @@ void igt_display_require(igt_display_t *display, int drm_fd)
 		igt_assert(plane->drm_plane);
 
 		plane->type = get_drm_plane_type(display->drm_fd, id);
-
-		/*
-		 * TODO: Fill in the rest of the plane properties here and
-		 * move away from the plane per pipe model to align closer
-		 * to the DRM KMS model.
-		 */
 	}
 
 	drmModeFreePlaneResources(plane_resources);
+
+	/* init colorops */
+	display->colorops = calloc(MAX_NUM_COLOROPS, sizeof(igt_colorop_t));
+	display->n_colorops = 0;
 
 	for_each_pipe(display, i) {
 		igt_pipe_t *pipe = &display->pipes[i];
@@ -3317,12 +3463,15 @@ void igt_display_fini(igt_display_t *display)
 
 	for (i = 0; i < display->n_outputs; i++)
 		igt_output_fini(&display->outputs[i]);
+
 	free(display->outputs);
 	display->outputs = NULL;
 	free(display->pipes);
 	display->pipes = NULL;
 	free(display->planes);
 	display->planes = NULL;
+	free(display->colorops);
+	display->colorops = NULL;
 }
 
 static void igt_display_refresh(igt_display_t *display)
@@ -3507,7 +3656,7 @@ igt_output_t **__igt_pipe_populate_outputs(igt_display_t *display, igt_output_t 
 
 	for (i = 0; i < display->n_pipes; i++) {
 		igt_pipe_t *pipe = &display->pipes[i];
-		if (pipe->enabled)
+		if (pipe->valid)
 			full_pipe_mask |= (1 << i);
 	}
 
@@ -3609,6 +3758,22 @@ static uint32_t igt_plane_get_fb_id(igt_plane_t *plane)
 	igt_assert_eq(r, 0);	\
 }
 
+static bool
+igt_atomic_ignore_plane_prop(igt_pipe_t *pipe, uint32_t prop)
+{
+	igt_display_t *display = pipe->display;
+
+	switch (prop) {
+	case IGT_PLANE_COLOR_ENCODING:
+	case IGT_PLANE_COLOR_RANGE:
+		return display->has_plane_color_pipeline;
+	case IGT_PLANE_COLOR_PIPELINE:
+		return !display->has_plane_color_pipeline;
+	default:
+		return false;
+	}
+}
+
 /*
  * Add position and fb changes of a plane to the atomic property set
  */
@@ -3628,6 +3793,13 @@ igt_atomic_prepare_plane_commit(igt_plane_t *plane, igt_pipe_t *pipe,
 	    igt_plane_get_fb_id(plane));
 
 	for (i = 0; i < IGT_NUM_PLANE_PROPS; i++) {
+		if (igt_atomic_ignore_plane_prop(pipe, i)) {
+			igt_debug("plane %s.%d: Ignoring property \"%s\" to 0x%"PRIx64"/%"PRIi64"\n",
+				   kmstest_pipe_name(pipe->pipe), plane->index, igt_plane_prop_names[i],
+				   plane->values[i], plane->values[i]);
+			continue;
+		}
+
 		if (!igt_plane_is_prop_changed(plane, i))
 			continue;
 
@@ -3641,6 +3813,45 @@ igt_atomic_prepare_plane_commit(igt_plane_t *plane, igt_pipe_t *pipe,
 		igt_assert_lt(0, drmModeAtomicAddProperty(req, plane->drm_plane->plane_id,
 						  plane->props[i],
 						  plane->values[i]));
+	}
+}
+
+/*
+ * Add colorop properties
+ */
+static void
+igt_atomic_prepare_colorop_commit(igt_colorop_t *colorop, igt_pipe_t *pipe,
+	drmModeAtomicReq *req)
+{
+	igt_display_t *display = pipe->display;
+	int i, next_val;
+
+	while (colorop) {
+		LOG(display,
+		    "populating colorop data: %s.%d\n",
+		    kmstest_pipe_name(pipe->pipe),
+		    colorop->id);
+
+		for (i = 0; i < IGT_NUM_COLOROP_PROPS; i++) {
+			if (!igt_colorop_is_prop_changed(colorop, i))
+				continue;
+
+			/* it's an error to try an unsupported feature */
+			igt_assert(colorop->props[i]);
+
+			igt_debug("colorop %s.%d: Setting property \"%s\" to 0x%"PRIx64"/%"PRIi64"\n",
+				kmstest_pipe_name(pipe->pipe), colorop->id, igt_colorop_prop_names[i],
+				colorop->values[i], colorop->values[i]);
+
+			igt_assert_lt(0, drmModeAtomicAddProperty(req, colorop->id,
+							colorop->props[i],
+							colorop->values[i]));
+		}
+
+		/* get next colorop */
+		next_val = igt_colorop_get_prop(display, colorop,
+						IGT_COLOROP_NEXT);
+		colorop = igt_find_colorop(display, next_val);
 	}
 }
 
@@ -4091,6 +4302,25 @@ uint64_t igt_plane_get_prop(igt_plane_t *plane, enum igt_atomic_plane_properties
 					plane->drm_plane->plane_id, plane->props[prop]);
 }
 
+/**
+ * igt_colorop_get_prop:
+ * @colorop: Target colorop.
+ * @prop: Property to check.
+ *
+ * Return current value on a colorop for a given property.
+ *
+ * Returns: The value the property is set to, if this
+ * is a blob, the blob id is returned. This can be passed
+ * to drmModeGetPropertyBlob() to get the contents of the blob.
+ */
+uint64_t igt_colorop_get_prop(igt_display_t *display, igt_colorop_t *colorop, enum igt_atomic_colorop_properties prop)
+{
+	igt_assert(igt_colorop_has_prop(colorop, prop));
+
+	return igt_mode_object_get_prop(display, DRM_MODE_OBJECT_COLOROP,
+					colorop->id, colorop->props[prop]);
+}
+
 static bool igt_mode_object_get_prop_enum_value(int drm_fd, uint32_t id, const char *str, uint64_t *val)
 {
 	drmModePropertyPtr prop = drmModeGetProperty(drm_fd, id);
@@ -4180,6 +4410,44 @@ bool igt_plane_check_prop_is_mutable(igt_plane_t *plane,
 }
 
 /**
+ * igt_plane_is_valid_colorop:
+ * @plane: Target plane.
+ * @colorop: Colorop to check.
+ *
+ * Returns: True if the given @colorop is a valid color pipeline on
+ * the given @plane
+ */
+bool igt_plane_is_valid_colorop(igt_plane_t *plane, igt_colorop_t *colorop)
+{
+	int i;
+	bool found = false;
+
+	for (i = 0; i < plane->num_color_pipelines; i++) {
+		if (plane->color_pipelines[i] == colorop) {
+			found = true;
+			break;
+		}
+	}
+
+	return found;
+}
+/**
+ * igt_plane_set_color_pipeline:
+ * @plane: Target plane.
+ * @colorop: Colorop to set as color pipeline.
+ *
+ * This function sets the given @colorop as color pipeline on @plane, or fails
+ * the test if it's an invalid color pipeline for the plane.
+ */
+void igt_plane_set_color_pipeline(igt_plane_t *plane, igt_colorop_t *colorop)
+{
+	igt_assert(igt_plane_is_valid_colorop(plane, colorop));
+
+	plane->assigned_color_pipeline = colorop;
+	igt_plane_set_prop_enum(plane, IGT_PLANE_COLOR_PIPELINE, colorop->name);
+}
+
+/**
  * igt_plane_replace_prop_blob:
  * @plane: plane to set property on.
  * @prop: property for which the blob will be replaced.
@@ -4209,6 +4477,83 @@ igt_plane_replace_prop_blob(igt_plane_t *plane, enum igt_atomic_plane_properties
 
 	*blob = blob_id;
 	igt_plane_set_prop_changed(plane, prop);
+}
+
+/**
+ * igt_colorop_replace_prop_blob:
+ * @plane: colorop to set property on.
+ * @prop: property for which the blob will be replaced.
+ * @ptr: Pointer to contents for the property.
+ * @length: Length of contents.
+ *
+ * This function will destroy the old property blob for the given property,
+ * and will create a new property blob with the values passed to this function.
+ *
+ * The new property blob will be committed when you call igt_display_commit(),
+ * igt_display_commit2() or igt_display_commit_atomic().
+ */
+void
+igt_colorop_replace_prop_blob(igt_colorop_t *colorop, enum igt_atomic_colorop_properties prop, const void *ptr, size_t length)
+{
+	igt_display_t *display = colorop->plane->pipe->display;
+	uint64_t *blob = &colorop->values[prop];
+	uint32_t blob_id = 0;
+
+	if (*blob != 0)
+		igt_assert(drmModeDestroyPropertyBlob(display->drm_fd,
+						      *blob) == 0);
+
+	if (length > 0)
+		igt_assert(drmModeCreatePropertyBlob(display->drm_fd,
+						     ptr, length, &blob_id) == 0);
+
+	*blob = blob_id;
+	igt_colorop_set_prop_changed(colorop, prop);
+}
+
+/**
+ * igt_colorop_try_prop_enum:
+ * @colorop: Target colorop.
+ * @prop: Property to check.
+ * @val: Value to set.
+ *
+ * Returns: False if the given @colorop doesn't have the enum @prop or
+ * failed to set the enum property @val else True.
+ */
+bool igt_colorop_try_prop_enum(igt_colorop_t *colorop,
+			       enum igt_atomic_colorop_properties prop,
+			       const char *val)
+{
+	igt_display_t *display = colorop->plane->pipe->display;
+	uint64_t uval;
+
+	igt_assert(colorop->props[prop]);
+
+	if (!igt_mode_object_get_prop_enum_value(display->drm_fd,
+						 colorop->props[prop], val, &uval))
+		return false;
+
+	igt_colorop_set_prop_value(colorop, prop, uval);
+	return true;
+}
+
+/**
+ * igt_colorop_set_prop_enum:
+ * @plane: Target plane.
+ * @prop: Property to check.
+ * @val: Value to set.
+ *
+ * This function tries to set given enum property @prop value @val to
+ * the given @colorop, and terminate the execution if its failed.
+ */
+void igt_colorop_set_prop_enum(igt_colorop_t *colorop,
+			       enum igt_atomic_colorop_properties prop,
+			       const char *val)
+{
+	bool result = false;
+
+	result = igt_colorop_try_prop_enum(colorop, prop, val);
+	igt_assert(result);
 }
 
 /**
@@ -4483,6 +4828,10 @@ static int igt_atomic_commit(igt_display_t *display, uint32_t flags, void *user_
 
 			if (plane->changed)
 				igt_atomic_prepare_plane_commit(plane, pipe_obj, req);
+
+			if (plane->assigned_color_pipeline)
+				igt_atomic_prepare_colorop_commit(plane->assigned_color_pipeline,
+								  pipe_obj, req);
 		}
 
 	}
@@ -5222,12 +5571,15 @@ void igt_plane_set_fb(igt_plane_t *plane, struct igt_fb *fb)
 		igt_fb_set_position(fb, plane, 0, 0);
 		igt_fb_set_size(fb, plane, fb->width, fb->height);
 
-		if (igt_plane_has_prop(plane, IGT_PLANE_COLOR_ENCODING))
-			igt_plane_set_prop_enum(plane, IGT_PLANE_COLOR_ENCODING,
-				igt_color_encoding_to_str(fb->color_encoding));
-		if (igt_plane_has_prop(plane, IGT_PLANE_COLOR_RANGE))
-			igt_plane_set_prop_enum(plane, IGT_PLANE_COLOR_RANGE,
-				igt_color_range_to_str(fb->color_range));
+		if (!display->has_plane_color_pipeline) {
+			if (igt_plane_has_prop(plane, IGT_PLANE_COLOR_ENCODING))
+				igt_plane_set_prop_enum(plane, IGT_PLANE_COLOR_ENCODING,
+					igt_color_encoding_to_str(fb->color_encoding));
+
+			if (igt_plane_has_prop(plane, IGT_PLANE_COLOR_RANGE))
+				igt_plane_set_prop_enum(plane, IGT_PLANE_COLOR_RANGE,
+					igt_color_range_to_str(fb->color_range));
+		}
 
 		/* Hack to prioritize the plane on the pipe that last set fb */
 		igt_plane_set_pipe(plane, pipe);
@@ -6841,7 +7193,7 @@ bool igt_check_bigjoiner_support(igt_display_t *display)
 				}
 			}
 
-			if (!display->pipes[pipes[i].idx + 1].enabled) {
+			if (!display->pipes[pipes[i].idx + 1].valid) {
 				igt_info("Consecutive pipe-%s: Fused-off, couldn't be used as a Bigjoiner Secondary.\n",
 					 kmstest_pipe_name(display->pipes[pipes[i].idx + 1].pipe));
 				return false;
@@ -6863,7 +7215,7 @@ bool igt_check_bigjoiner_support(igt_display_t *display)
 				 max_dotclock, pipes[i - 1].force_joiner ? "Yes" : "No");
 			kmstest_dump_mode(pipes[i - 1].mode);
 
-			if (!display->pipes[pipes[i - 1].idx + 1].enabled) {
+			if (!display->pipes[pipes[i - 1].idx + 1].valid) {
 				igt_info("Consecutive pipe-%s: Fused-off, couldn't be used as a Bigjoiner Secondary.\n",
 					 kmstest_pipe_name(display->pipes[pipes[i - 1].idx + 1].pipe));
 				return false;
@@ -7522,6 +7874,51 @@ drmModePropertyBlobRes *igt_get_writeback_formats_blob(igt_output_t *output)
 		blob = drmModeGetPropertyBlob(output->display->drm_fd, blob_id);
 
 	return blob;
+}
+
+/**
+ * igt_get_writeback_fb_id - Get writeback framebuffer ID
+ * @display: display structure
+ *
+ * Returns the framebuffer ID for writeback capture, or 0 if none configured.
+ */
+uint64_t igt_get_writeback_fb_id(igt_output_t *output)
+{
+	return igt_output_get_prop(output, IGT_CONNECTOR_WRITEBACK_FB_ID);
+}
+
+/**
+ * igt_detach_crtc - Detach the crtc from the output
+ * @display: display structure
+ * @output: output structure
+ *
+ * Detach the crtc from the output.
+ */
+void igt_detach_crtc(igt_display_t *display, igt_output_t *output)
+{
+	if (igt_get_writeback_fb_id(output) == 0)
+		return;
+
+	igt_output_set_pipe(output, PIPE_NONE);
+	igt_display_commit2(display, COMMIT_ATOMIC);
+}
+
+/**
+ * igt_get_and_wait_out_fence - Get and wait for the out fence
+ * @output: output structure
+ *
+ * wait for fence from the writeback.
+ */
+void igt_get_and_wait_out_fence(igt_output_t *output)
+{
+	int ret;
+
+	igt_assert(output->writeback_out_fence_fd >= 0);
+
+	ret = sync_fence_wait(output->writeback_out_fence_fd, 1000);
+	igt_assert_f(ret == 0, "sync_fence_wait failed: %s\n", strerror(-ret));
+	close(output->writeback_out_fence_fd);
+	output->writeback_out_fence_fd = -1;
 }
 
 /**

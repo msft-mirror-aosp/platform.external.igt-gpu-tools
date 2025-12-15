@@ -58,9 +58,9 @@ IGT_TEST_DESCRIPTION("Negative test cases for destroy contexts.");
 uint32_t ctx_id;
 int fd;
 
-igt_main
+int igt_main()
 {
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver_render(DRIVER_INTEL);
 
 		gem_require_contexts(fd);
@@ -97,6 +97,6 @@ igt_main
 		gem_context_destroy(fd, ctx_id);
 	}
 
-	igt_fixture
+	igt_fixture()
 		drm_close_driver(fd);
 }

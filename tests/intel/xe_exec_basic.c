@@ -58,16 +58,16 @@
  *
  * SUBTEST: multigpu-once-%s
  * Description: Run %arg[1] test only once on multiGPU
- * Sub-category: MultiGPU
+ * Mega feature: MultiGPU
  * Test category: functionality test
  *
  * SUBTEST: multigpu-many-execqueues-many-vm-%s
- * Sub-category: MultiGPU
+ * Mega feature: MultiGPU
  * Description: Run %arg[1] test on many exec_queues and many VMs on multiGPU
  * Test category: stress test
  *
  * SUBTEST: multigpu-no-exec-%s
- * Sub-category: MultiGPU
+ * Mega feature: MultiGPU
  * Description: Run no-exec %arg[1] test on multiGPU
  * Test category: functionality test
  *
@@ -314,7 +314,7 @@ test_exec(int fd, struct drm_xe_engine_class_instance *eci,
 	}
 }
 
-igt_main
+int igt_main()
 {
 	struct drm_xe_engine_class_instance *hwe;
 	const struct section {
@@ -345,7 +345,7 @@ igt_main
 	};
 	int fd;
 
-	igt_fixture
+	igt_fixture()
 		fd = drm_open_driver(DRIVER_XE);
 
 	for (const struct section *s = sections; s->name; s++) {
@@ -383,7 +383,7 @@ igt_main
 				test_exec(fd, hwe, 1, 0, 1, s->flags);
 	}
 
-	igt_fixture
+	igt_fixture()
 		drm_close_driver(fd);
 
 	for (const struct section *s = sections; s->name; s++) {

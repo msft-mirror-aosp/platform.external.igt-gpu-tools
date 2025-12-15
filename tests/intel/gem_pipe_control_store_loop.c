@@ -175,9 +175,9 @@ store_pipe_control_loop(bool preuse_buffer, int timeout)
 int fd;
 uint32_t devid;
 
-igt_main
+int igt_main()
 {
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_INTEL);
 		igt_require_gem(fd);
 		gem_require_blitter(fd);
@@ -197,7 +197,7 @@ igt_main
 	igt_subtest("reused-buffer")
 		store_pipe_control_loop(true, 2);
 
-	igt_fixture {
+	igt_fixture() {
 		buf_ops_destroy(bops);
 		drm_close_driver(fd);
 	}

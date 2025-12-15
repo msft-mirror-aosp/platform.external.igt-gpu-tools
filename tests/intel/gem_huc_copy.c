@@ -98,14 +98,14 @@ static void test_huc_load(int fd)
 	igt_fail_on_f(status == 0, "HuC firmware is not running!\n");
 }
 
-igt_main
+int igt_main()
 {
 	int drm_fd = -1;
 	uint32_t devid;
 	igt_huc_copyfunc_t huc_copy;
 	uint64_t ahnd;
 
-	igt_fixture {
+	igt_fixture() {
 		drm_fd = drm_open_driver(DRIVER_INTEL);
 		igt_require_gem(drm_fd);
 		devid = intel_get_drm_devid(drm_fd);
@@ -151,7 +151,7 @@ igt_main
 		gem_close(drm_fd, obj[2].handle);
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		put_ahnd(ahnd);
 		drm_close_driver(drm_fd);
 	}

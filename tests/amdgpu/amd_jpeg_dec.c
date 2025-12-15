@@ -217,13 +217,13 @@ amdgpu_cs_jpeg_decode(amdgpu_device_handle device_handle,
 	mmd_context_clean(device_handle, context);
 }
 
-igt_main
+int igt_main()
 {
 	amdgpu_device_handle device;
 	struct mmd_shared_context shared_context = {};
 	int fd = -1;
 
-	igt_fixture {
+	igt_fixture() {
 		uint32_t major, minor;
 		int err;
 
@@ -240,7 +240,7 @@ igt_main
 	igt_subtest("amdgpu_cs_jpeg_decode")
 	amdgpu_cs_jpeg_decode(device, &shared_context);
 
-	igt_fixture {
+	igt_fixture() {
 		amdgpu_device_deinitialize(device);
 		drm_close_driver(fd);
 	}

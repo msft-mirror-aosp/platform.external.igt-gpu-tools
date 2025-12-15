@@ -955,7 +955,7 @@ static size_t safer_strlen(const char *s)
 	igt_subtest_with_dynamic(T) for_each_ctx_engine(i915, ctx, e) \
 		for_each_if(gem_class_can_store_dword(i915, (e)->class)) \
 
-igt_main
+int igt_main()
 {
 	const struct intel_execution_engine2 *e;
 	const intel_ctx_t *ctx;
@@ -967,7 +967,7 @@ igt_main
 	char *sub_name;
 	uint32_t region;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_INTEL);
 
 		if (gem_store_dword_needs_secure(fd))
@@ -1060,7 +1060,7 @@ igt_main
 		igt_dynamic_f("%s", (e)->name)
 			prioinv(fd, dir, ctx, e);
 
-	igt_fixture {
+	igt_fixture() {
 		close(dir);
 		igt_disallow_hang(fd, hang);
 		intel_ctx_destroy(fd, ctx);

@@ -408,11 +408,11 @@ static bool has_contexts(void)
 	return result;
 }
 
-igt_main
+int igt_main()
 {
 	const int ncpus = sysconf(_SC_NPROCESSORS_ONLN);
 
-	igt_fixture {
+	igt_fixture() {
 		int fd = drm_open_driver(DRIVER_INTEL);
 		igt_require_gem(fd);
 		gem_require_blitter(fd);
@@ -474,7 +474,7 @@ igt_main
 		flink_and_close();
 
 	igt_describe("Regression test to verify GTT eviction can't randomly fail due to object lock contention");
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_subtest("shrink-vs-evict-any")
 			shrink_vs_evict(IGT_USE_ANY);
 		igt_subtest("shrink-vs-evict-pinned")

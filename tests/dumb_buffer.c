@@ -389,11 +389,11 @@ static void always_clear(int fd, int timeout)
 	igt_info("Checked %'lu page allocations\n", checked);
 }
 
-igt_main
+int igt_main()
 {
 	int fd = -1;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_ANY);
 	}
 
@@ -415,7 +415,7 @@ igt_main
 	igt_subtest("create-clear")
 		always_clear(fd, 30);
 
-	igt_fixture {
+	igt_fixture() {
 		drm_close_driver(fd);
 	}
 }

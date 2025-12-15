@@ -55,11 +55,11 @@ poll_write_bo_test(int fd, int poll_flag)
 	gem_close(fd, handle);
 }
 
-igt_main
+int igt_main()
 {
 	int fd;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_VC4);
 		igt_require(igt_vc4_is_v3d(fd));
 	}
@@ -72,6 +72,6 @@ igt_main
 		poll_write_bo_test(fd, POLLIN);
 	}
 
-	igt_fixture
+	igt_fixture()
 		drm_close_driver(fd);
 }

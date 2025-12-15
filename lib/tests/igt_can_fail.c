@@ -26,11 +26,11 @@
 
 #include "igt_tests_common.h"
 
-igt_main
+int igt_main()
 {
 	internal_assert(igt_can_fail() == false);
 
-	igt_fixture {
+	igt_fixture() {
 		internal_assert(igt_can_fail());
 	}
 

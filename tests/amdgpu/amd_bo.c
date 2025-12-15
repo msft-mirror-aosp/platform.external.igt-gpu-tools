@@ -248,13 +248,13 @@ amdgpu_bo_find_by_cpu_mapping(amdgpu_device_handle device_handle)
 				     bo_mc_address, 4096);
 }
 
-igt_main
+int igt_main()
 {
 	amdgpu_device_handle device;
 	struct bo_data bo;
 	int fd = -1;
 
-	igt_fixture {
+	igt_fixture() {
 		uint32_t major, minor;
 		int err;
 
@@ -285,7 +285,7 @@ igt_main
 	igt_subtest("amdgpu_bo_find_by_cpu_mapping")
 	amdgpu_bo_find_by_cpu_mapping(device);
 
-	igt_fixture {
+	igt_fixture() {
 		amdgpu_bo_clean(device, &bo);
 		amdgpu_device_deinitialize(device);
 		close(fd);

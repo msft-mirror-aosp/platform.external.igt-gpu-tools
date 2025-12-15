@@ -401,7 +401,7 @@ static void lr_mode_workload(int fd)
 	put_ahnd(ahnd);
 }
 
-igt_main
+int igt_main()
 {
 	struct drm_xe_engine_class_instance *hwe;
 	const struct section {
@@ -430,7 +430,7 @@ igt_main
 	};
 	int fd;
 
-	igt_fixture
+	igt_fixture()
 		fd = drm_open_driver(DRIVER_XE);
 
 	for (const struct section *s = sections; s->name; s++) {
@@ -464,6 +464,6 @@ igt_main
 		lr_mode_workload(fd);
 
 
-	igt_fixture
+	igt_fixture()
 		drm_close_driver(fd);
 }

@@ -567,14 +567,14 @@ static void do_tests(const char *name, const char *prefix,
 	}
 }
 
-igt_main
+int igt_main()
 {
 	const intel_ctx_t *ctx;
 	igt_hang_t hang = {};
 	struct gem_engine_properties saved_params[GEM_MAX_ENGINES];
 	int num_engines = 0;
 
-	igt_fixture {
+	igt_fixture() {
 		const struct intel_execution_engine2 *e;
 
 		device = drm_open_driver(DRIVER_INTEL);
@@ -619,7 +619,7 @@ igt_main
 
 	do_tests("GT", "gt", ctx);
 
-	igt_fixture {
+	igt_fixture() {
 		igt_disallow_hang(device, hang);
 
 		hang = igt_allow_hang(device, ctx->id, HANG_ALLOW_CAPTURE | HANG_WANT_ENGINE_RESET);
@@ -627,7 +627,7 @@ igt_main
 
 	do_tests("engine", "engine", ctx);
 
-	igt_fixture {
+	igt_fixture() {
 		int i;
 
 		for (i = 0; i < num_engines; i++)

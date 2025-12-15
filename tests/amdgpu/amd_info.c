@@ -117,14 +117,14 @@ time_stamp_test_enable(struct amdgpu_gpu_info *gpu_info)
 	return true;
 }
 
-igt_main
+int igt_main()
 {
 	amdgpu_device_handle device;
 	struct amdgpu_gpu_info gpu_info = {};
 	int fd = -1;
 	int r = -1;
 
-	igt_fixture {
+	igt_fixture() {
 		uint32_t major, minor;
 		int err;
 
@@ -155,7 +155,7 @@ igt_main
 		query_timestamp_test(device, 7000000, 1);
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		amdgpu_device_deinitialize(device);
 		drm_close_driver(fd);
 	}

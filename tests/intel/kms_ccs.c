@@ -1127,7 +1127,7 @@ static void test_output(data_t *data, const int testnum)
 {
 	uint16_t dev_id;
 
-	igt_fixture
+	igt_fixture()
 		dev_id = intel_get_drm_devid(data->drm_fd);
 
 	data->flags = tests[testnum].flags;
@@ -1191,7 +1191,7 @@ static void test_output(data_t *data, const int testnum)
 		}
 	}
 
-	igt_fixture
+	igt_fixture()
 		data->plane = NULL;
 }
 
@@ -1225,9 +1225,9 @@ static const char *help_str =
 "  -r\t\tOn suspend test do full hibernate with reboot\n"
 ;
 
-igt_main_args("csr:", NULL, help_str, opt_handler, &data)
+int igt_main_args("csr:", NULL, help_str, opt_handler, &data)
 {
-	igt_fixture {
+	igt_fixture() {
 		data.drm_fd = drm_open_driver_master(DRIVER_INTEL | DRIVER_XE);
 
 		igt_require(intel_display_ver(intel_get_drm_devid(data.drm_fd)) >= 9);
@@ -1249,7 +1249,7 @@ igt_main_args("csr:", NULL, help_str, opt_handler, &data)
 	for (int c = 0; c < ARRAY_SIZE(tests); c++)
 		test_output(&data, c);
 
-	igt_fixture {
+	igt_fixture() {
 		igt_display_commit2(&data.display, data.commit);
 		for (int i = 0; i < data.fb_list_length; i++)
 			igt_remove_fb(data.drm_fd, &data.fb_list[i].fb);

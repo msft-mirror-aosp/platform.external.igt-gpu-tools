@@ -553,13 +553,13 @@ far_fence(int i915, int timeout, const intel_ctx_t *ctx,
 	close(fence);
 }
 
-igt_main
+int igt_main()
 {
 	const struct intel_execution_engine2 *e;
 	const intel_ctx_t *ctx;
 	int i915 = -1;
 
-	igt_fixture {
+	igt_fixture() {
 		const unsigned int timeout = 1;
 		char *tmp;
 
@@ -592,7 +592,7 @@ igt_main
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_subtest("default-physical")
 			physical(i915, ctx);
 
@@ -608,7 +608,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		intel_ctx_destroy(i915, ctx);
 		drm_close_driver(i915);
 	}

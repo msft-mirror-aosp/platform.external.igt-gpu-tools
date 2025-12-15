@@ -1231,7 +1231,7 @@ amdgpu_cs_vcn_enc_destroy(amdgpu_device_handle device_handle,
 	free_resource(&v_context->enc_buf);
 }
 
-igt_main
+int igt_main()
 {
 	amdgpu_device_handle device;
 	struct mmd_context context = {};
@@ -1239,7 +1239,7 @@ igt_main
 	struct mmd_shared_context shared_context = {};
 	int fd = -1;
 
-	igt_fixture {
+	igt_fixture() {
 		uint32_t major, minor;
 		int err;
 
@@ -1280,7 +1280,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		mmd_context_clean(device, &context);
 		amdgpu_device_deinitialize(device);
 		drm_close_driver(fd);

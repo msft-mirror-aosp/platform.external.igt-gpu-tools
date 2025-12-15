@@ -59,7 +59,7 @@ static void sanity_check(void)
 	igt_assert_eq(err, 0);
 }
 
-igt_main
+int igt_main()
 {
 	igt_describe("Make sure reloading amdgpu drivers works");
 	igt_subtest("reload") {
@@ -75,7 +75,7 @@ igt_main
 		igt_amdgpu_driver_unload();
 	}
 
-	igt_fixture
+	igt_fixture()
 	{
 		/* load the module back in */
 		igt_amdgpu_driver_load(NULL);

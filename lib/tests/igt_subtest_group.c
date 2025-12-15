@@ -26,7 +26,7 @@
 
 #include "igt_tests_common.h"
 
-igt_main
+int igt_main()
 {
 	/*
 	 * local variables have to be volatile here otherwise they end up being
@@ -36,13 +36,13 @@ igt_main
 	volatile bool t1 = false;
 	volatile int t2 = 0;
 
-	igt_subtest_group {
-		igt_fixture {
+	igt_subtest_group() {
+		igt_fixture() {
 			igt_require(true);
 		}
 
-		igt_subtest_group {
-			igt_fixture {
+		igt_subtest_group() {
+			igt_fixture() {
 				igt_require(false);
 			}
 
@@ -50,7 +50,7 @@ igt_main
 				internal_assert(0);
 			}
 
-			igt_subtest_group {
+			igt_subtest_group() {
 				/* need to make sure we don't accidentally
 				 * restore to "run testcases" when an outer
 				 * group is already in SKIP state. */
@@ -66,8 +66,8 @@ igt_main
 		}
 	}
 
-	igt_subtest_group {
-		igt_fixture {
+	igt_subtest_group() {
+		igt_fixture() {
 			internal_assert(t2 == 0);
 			t2 = 1;
 		}
@@ -77,7 +77,7 @@ igt_main
 			t2 = 2;
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			internal_assert(t2 == 2);
 			t2 = 3;
 

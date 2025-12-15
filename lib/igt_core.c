@@ -118,11 +118,11 @@
  * never run any code which might fail (like trying to do privileged operations
  * or opening device driver nodes).
  *
- * To allow this i-g-t provides #igt_fixture code blocks for setup code outside
+ * To allow this i-g-t provides #igt_fixture() code blocks for setup code outside
  * of subtests and automatically skips the subtest code blocks themselves. For
  * special cases igt_only_list_subtests() is also provided. For setup code only
- * shared by a group of subtest encapsulate the #igt_fixture block and all the
- * subtestest in a #igt_subtest_group block.
+ * shared by a group of subtest encapsulate the #igt_fixture() block and all the
+ * subtestest in a #igt_subtest_group() block.
  *
  * # Magic Control Blocks
  *
@@ -141,7 +141,7 @@
  *   issues.
  *
  * - Code blocks with magic control flow are implemented with setjmp()
- *   and longjmp(). This applies to #igt_fixture, #igt_subtest,
+ *   and longjmp(). This applies to #igt_fixture(), #igt_subtest,
  *   #igt_subtest_with_dynamic and #igt_dynamic
  *   blocks and all the three variants to finish test: igt_success(),
  *   igt_skip() and igt_fail(). Mostly this is of no concern, except
@@ -768,11 +768,11 @@ void __igt_assert_in_outer_scope(void)
 bool __igt_fixture(void)
 {
 	internal_assert(!in_fixture,
-			"nesting multiple igt_fixtures is invalid\n");
+			"nesting multiple igt_fixture()s is invalid\n");
 	internal_assert(!in_subtest,
-			"nesting igt_fixture in igt_subtest is invalid\n");
+			"nesting igt_fixture() in igt_subtest is invalid\n");
 	internal_assert(test_with_subtests,
-			"igt_fixture in igt_simple_main is invalid\n");
+			"igt_fixture() in igt_simple_main() is invalid\n");
 
 	if (igt_only_list_subtests())
 		return false;
@@ -1499,8 +1499,8 @@ static bool valid_name_for_subtest(const char *subtest_name)
 bool __igt_run_subtest(const char *subtest_name, const char *file, const int line)
 {
 	internal_assert(!igt_can_fail(),
-			"igt_subtest can be nested only in igt_main"
-			" or igt_subtest_group\n");
+			"igt_subtest can be nested only in igt_main()"
+			" or igt_subtest_group()\n");
 
 	if (!valid_name_for_subtest(subtest_name)) {
 		igt_critical("Invalid subtest name \"%s\".\n",
@@ -1627,7 +1627,7 @@ bool igt_only_list_subtests(void)
 void __igt_subtest_group_save(int *save, int *desc)
 {
 	internal_assert(test_with_subtests,
-			"igt_subtest_group is not allowed in igt_simple_main\n");
+			"igt_subtest_group() is not allowed in igt_simple_main()\n");
 
 	if (__current_description[0] != '\0') {
 		struct description_node *new = calloc(1, sizeof(*new));
@@ -1805,7 +1805,7 @@ void igt_skip(const char *f, ...)
 		skip_subtests_henceforth = SKIP;
 		internal_assert(in_fixture,
 			"skipping is allowed only in fixtures, subtests"
-			" or igt_simple_main\n");
+			" or igt_simple_main()\n");
 		__igt_fixture_end();
 	} else {
 		igt_exitcode = IGT_EXIT_SKIP;
@@ -1938,7 +1938,7 @@ void igt_fail(int exitcode)
 		exit_subtest("FAIL");
 	} else {
 		internal_assert(igt_can_fail(), "failing test is only allowed"
-				" in fixtures, subtests and igt_simple_main\n");
+				" in fixtures, subtests and igt_simple_main()\n");
 
 		if (in_fixture) {
 			skip_subtests_henceforth = FAIL;
@@ -1974,8 +1974,8 @@ void igt_fatal_error(void)
 /**
  * igt_can_fail:
  *
- * Returns true if called from either an #igt_fixture, #igt_subtest or a
- * testcase without subtests, i.e. #igt_simple_main. Returns false otherwise. In
+ * Returns true if called from either an #igt_fixture(), #igt_subtest or a
+ * testcase without subtests, i.e. #igt_simple_main(). Returns false otherwise. In
  * other words, it checks whether it's legal to call igt_fail(), igt_skip_on()
  * and all the convenience macros build around those.
  *
@@ -1992,7 +1992,7 @@ bool igt_can_fail(void)
  * @fmt: format string containing description
  * @...: argument used by the format string
  *
- * Attach a description to the following #igt_subtest or #igt_subtest_group
+ * Attach a description to the following #igt_subtest or #igt_subtest_group()
  * block.
  *
  * Check #igt_describe for more details.
@@ -2362,7 +2362,7 @@ void __igt_abort(const char *domain, const char *file, const int line,
  *
  * It is an error to normally exit a test calling igt_exit() - without it the
  * result reporting will be wrong. To avoid such issues it is highly recommended
- * to use #igt_main or #igt_simple_main instead of a hand-rolled main() function.
+ * to use #igt_main() or #igt_simple_main() instead of a hand-rolled main() function.
  */
 void igt_exit(void)
 {
@@ -2598,7 +2598,7 @@ static pthread_mutex_t print_mutex = PTHREAD_MUTEX_INITIALIZER;
 bool __igt_fork(void)
 {
 	internal_assert(!test_with_subtests || in_subtest,
-			"forking is only allowed in subtests or igt_simple_main\n");
+			"forking is only allowed in subtests or igt_simple_main()\n");
 	internal_assert(!test_child,
 			"forking is not allowed from already forked children\n");
 
@@ -2654,7 +2654,7 @@ static void dyn_children_exit_handler(int sig)
 bool __igt_multi_fork(void)
 {
 	internal_assert(!test_with_subtests || in_subtest,
-			"multi-forking is only allowed in subtests or igt_simple_main\n");
+			"multi-forking is only allowed in subtests or igt_simple_main()\n");
 	internal_assert(!test_child,
 			"multi-forking is not allowed from already forked children\n");
 	internal_assert(!test_multi_fork_child,
@@ -3119,10 +3119,10 @@ bool igt_run_in_simulation(void)
  * igt_skip() internally and hence is fully subtest aware.
  *
  * Note that in contrast to all other functions which use igt_skip() internally
- * it is allowed to use this outside of an #igt_fixture block in a test with
+ * it is allowed to use this outside of an #igt_fixture() block in a test with
  * subtests. This is because in contrast to most other test requirements,
  * checking for simulation mode doesn't depend upon the present hardware and it
- * so makes a lot of sense to have this check in the outermost #igt_main block.
+ * so makes a lot of sense to have this check in the outermost #igt_main() block.
  */
 void igt_skip_on_simulation(void)
 {
@@ -3130,7 +3130,7 @@ void igt_skip_on_simulation(void)
 		return;
 
 	if (!igt_can_fail()) {
-		igt_fixture
+		igt_fixture()
 			igt_require(!igt_run_in_simulation());
 	} else
 		igt_require(!igt_run_in_simulation());

@@ -269,14 +269,14 @@ static void run_test(int fd, int count, bool do_relocs)
 
 #define MAX_32b ((1ull << 32) - 4096)
 
-igt_main
+int igt_main()
 {
 	const int ncpus = sysconf(_SC_NPROCESSORS_ONLN);
 	uint64_t count = 0;
 	bool do_relocs;
 	igt_fd_t(fd);
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_INTEL);
 		igt_require_gem(fd);
 		gem_require_blitter(fd);
@@ -300,8 +300,8 @@ igt_main
 	igt_subtest("basic")
 		run_test(fd, 2, do_relocs);
 
-	igt_subtest_group {
-		igt_fixture {
+	igt_subtest_group() {
+		igt_fixture() {
 			intel_allocator_multiprocess_start();
 		}
 
@@ -322,7 +322,7 @@ igt_main
 			igt_stop_signal_helper();
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			intel_allocator_multiprocess_stop();
 		}
 	}

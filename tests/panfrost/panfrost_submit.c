@@ -62,11 +62,11 @@ static void check_done(struct mali_job_descriptor_header *header)
         igt_assert(header->exception_status == 1 && header->fault_pointer == 0);
 }
 
-igt_main
+int igt_main()
 {
         int fd;
 
-        igt_fixture {
+        igt_fixture() {
                 fd = drm_open_driver(DRIVER_PANFROST);
         }
 
@@ -196,7 +196,7 @@ igt_main
                 igt_panfrost_free_job(fd, submit);
         }
 
-        igt_fixture {
+        igt_fixture() {
                 drm_close_driver(fd);
         }
 }

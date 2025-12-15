@@ -672,7 +672,7 @@ static void hotreplug_lateclose(struct hotunplug *priv)
 
 /* Main */
 
-igt_main
+int igt_main()
 {
 	struct hotunplug priv = {
 		.fd		= { .drm = -1, .drm_hc = -1, .sysfs_dev = -1, },
@@ -683,7 +683,7 @@ igt_main
 		.chipset	= DRIVER_ANY,
 	};
 
-	igt_fixture {
+	igt_fixture() {
 		int fd_drm;
 		char driver[32] = {};
 
@@ -715,100 +715,100 @@ igt_main
 		prepare(&priv);
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_describe("Check if the driver can be cleanly unbound from a device believed to be closed, then rebound");
 		igt_subtest("unbind-rebind")
 			unbind_rebind(&priv);
 
-		igt_fixture
+		igt_fixture()
 			recover(&priv);
 	}
 
-	igt_fixture
+	igt_fixture()
 		post_healthcheck(&priv);
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_describe("Check if a device believed to be closed can be cleanly unplugged, then restored");
 		igt_subtest("unplug-rescan")
 			unplug_rescan(&priv);
 
-		igt_fixture
+		igt_fixture()
 			recover(&priv);
 	}
 
-	igt_fixture
+	igt_fixture()
 		post_healthcheck(&priv);
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_describe("Check if the driver can be cleanly unbound from an open device, then released and rebound");
 		igt_subtest("hotunbind-rebind")
 			hotunbind_rebind(&priv);
 
-		igt_fixture
+		igt_fixture()
 			recover(&priv);
 	}
 
-	igt_fixture
+	igt_fixture()
 		post_healthcheck(&priv);
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_describe("Check if an open device can be cleanly unplugged, then released and restored");
 		igt_subtest("hotunplug-rescan")
 			hotunplug_rescan(&priv);
 
-		igt_fixture
+		igt_fixture()
 			recover(&priv);
 	}
 
-	igt_fixture
+	igt_fixture()
 		post_healthcheck(&priv);
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_describe("Check if the driver can be cleanly rebound to a device with a still open hot unbound driver instance");
 		igt_subtest("hotrebind")
 			hotrebind(&priv);
 
-		igt_fixture
+		igt_fixture()
 			recover(&priv);
 	}
 
-	igt_fixture
+	igt_fixture()
 		post_healthcheck(&priv);
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_describe("Check if a hot unplugged and still open device can be cleanly restored");
 		igt_subtest("hotreplug")
 			hotreplug(&priv);
 
-		igt_fixture
+		igt_fixture()
 			recover(&priv);
 	}
 
-	igt_fixture
+	igt_fixture()
 		post_healthcheck(&priv);
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_describe("Check if a hot unbound driver instance still open after hot rebind can be cleanly released");
 		igt_subtest("hotrebind-lateclose")
 			hotrebind_lateclose(&priv);
 
-		igt_fixture
+		igt_fixture()
 			recover(&priv);
 	}
 
-	igt_fixture
+	igt_fixture()
 		post_healthcheck(&priv);
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_describe("Check if an instance of a still open while hot replugged device can be cleanly released");
 		igt_subtest("hotreplug-lateclose")
 			hotreplug_lateclose(&priv);
 
-		igt_fixture
+		igt_fixture()
 			recover(&priv);
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		post_healthcheck(&priv);
 
 		igt_ignore_warn(close(priv.fd.sysfs_bus));

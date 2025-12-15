@@ -276,7 +276,7 @@ static void check_workarounds(int fd, enum operation op, unsigned int flags)
 		drm_close_driver(fd);
 }
 
-igt_main
+int igt_main()
 {
 	struct intel_mmio_data mmio_data;
 	const struct {
@@ -300,7 +300,7 @@ igt_main
 	}, *m;
 	igt_fd_t(device);
 
-	igt_fixture {
+	igt_fixture() {
 		FILE *file;
 		char *line = NULL;
 		char *str;
@@ -349,10 +349,10 @@ igt_main
 	}
 
 	for (op = ops; op->name; op++) {
-		igt_subtest_group {
+		igt_subtest_group() {
 			igt_hang_t hang = {};
 
-			igt_fixture {
+			igt_fixture() {
 				switch (op->op) {
 				case GPU_RESET:
 					hang = igt_allow_hang(device, 0, 0);
@@ -366,7 +366,7 @@ igt_main
 				igt_subtest_f("%s%s", op->name, m->name)
 					check_workarounds(device, op->op, m->flags);
 
-			igt_fixture {
+			igt_fixture() {
 				switch (op->op) {
 				case GPU_RESET:
 					igt_disallow_hang(device, hang);

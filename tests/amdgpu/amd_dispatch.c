@@ -10,8 +10,8 @@
 #include <sys/sysmacros.h>
 #include "lib/amdgpu/amd_memory.h"
 #include "lib/amdgpu/amd_command_submission.h"
-#include "lib/amdgpu/amd_dispatch_helpers.h"
-#include "lib/amdgpu/amd_dispatch.h"
+#include "lib/amdgpu/compute_utils/amd_dispatch_helpers.h"
+#include "lib/amdgpu/compute_utils/amd_dispatch.h"
 
 static void
 amdgpu_dispatch_hang_slow_gfx(amdgpu_device_handle device_handle,
@@ -76,7 +76,7 @@ amdgpu_gpu_reset_test(amdgpu_device_handle device_handle, int drm_amdgpu,
 	amdgpu_gfx_dispatch_test(device_handle, AMDGPU_HW_IP_COMPUTE, 0, pci, false);
 }
 
-igt_main
+int igt_main()
 {
 	amdgpu_device_handle device;
 	struct amdgpu_gpu_info gpu_info = {0};
@@ -92,7 +92,7 @@ igt_main
 	enable_test = env && atoi(env);
 #endif
 
-	igt_fixture {
+	igt_fixture() {
 		uint32_t major, minor;
 		int err;
 
@@ -215,7 +215,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		amdgpu_device_deinitialize(device);
 		drm_close_driver(fd);
 	}

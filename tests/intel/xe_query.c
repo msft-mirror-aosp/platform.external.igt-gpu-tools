@@ -184,7 +184,7 @@ const char *get_topo_name(int value)
  * Test category: functionality test
  *
  * SUBTEST: multigpu-query-engines
- * Sub-category: MultiGPU
+ * Mega feature: MultiGPU
  * Description: Display engine classes available for all Xe devices.
  * Test category: functionality test
  */
@@ -211,7 +211,7 @@ test_query_engines(int fd)
  * Test category: functionality test
  *
  * SUBTEST: multigpu-query-mem-usage
- * Sub-category: MultiGPU
+ * Mega feature: MultiGPU
  * Description: Display memory information for all Xe devices.
  * Test category: functionality test
  */
@@ -275,7 +275,7 @@ test_query_mem_regions(int fd)
  * Test category: functionality test
  *
  * SUBTEST: multigpu-query-gt-list
- * Sub-category: MultiGPU
+ * Mega feature: MultiGPU
  * Description: Display information about GT components for all Xe devices.
  * Test category: functionality test
  */
@@ -350,7 +350,7 @@ test_query_gt_list(int fd)
  * Test category: functionality test
  *
  * SUBTEST: multigpu-query-topology
- * Sub-category: MultiGPU
+ * Mega feature: MultiGPU
  * Description: Display topology information of GT for all Xe devices.
  * Test category: functionality test
  */
@@ -358,42 +358,25 @@ static void
 test_query_gt_topology(int fd)
 {
 	uint16_t dev_id = intel_get_drm_devid(fd);
-	struct drm_xe_query_topology_mask *topology;
-	int pos = 0;
-	struct drm_xe_device_query query = {
-		.extensions = 0,
-		.query = DRM_XE_DEVICE_QUERY_GT_TOPOLOGY,
-		.size = 0,
-		.data = 0,
-	};
-	uint32_t topo_types = 0;
+	struct drm_xe_query_topology_mask *topology, *topo;
+	uint32_t topo_types = 0, size;
 
-	igt_assert_eq(igt_ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, &query), 0);
-	igt_assert_neq(query.size, 0);
+	topology = xe_query_device(fd, DRM_XE_DEVICE_QUERY_GT_TOPOLOGY, &size);
 
-	topology = malloc(query.size);
-	igt_assert(topology);
+	igt_info("size: %d\n", size);
 
-	query.data = to_user_pointer(topology);
-	igt_assert_eq(igt_ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, &query), 0);
+	dump_hex_debug(topology, size);
 
-	igt_info("size: %d\n", query.size);
-	dump_hex_debug(topology, query.size);
-
-	while (query.size >= sizeof(struct drm_xe_query_topology_mask)) {
-		struct drm_xe_query_topology_mask *topo = (struct drm_xe_query_topology_mask*)((unsigned char*)topology + pos);
-		int sz = sizeof(struct drm_xe_query_topology_mask) + topo->num_bytes;
-
-		igt_info(" gt_id: %2d type: %-12s (%d) n:%d [%d] ", topo->gt_id,
-			 get_topo_name(topo->type), topo->type, topo->num_bytes, sz);
+	xe_for_each_topology_mask(topology, size, topo) {
+		igt_info(" gt_id: %2d type: %-12s (%d) n:%d [%zd] ", topo->gt_id,
+			 get_topo_name(topo->type), topo->type, topo->num_bytes,
+			 sizeof(struct drm_xe_query_topology_mask) + topo->num_bytes);
 
 		for (int j=0; j< topo->num_bytes; j++)
 			igt_info(" %02x", topo->mask[j]);
 
 		topo_types = 1 << topo->type;
 		igt_info("\n");
-		query.size -= sz;
-		pos += sz;
 	}
 
 	/* sanity check EU type */
@@ -414,7 +397,7 @@ test_query_gt_topology(int fd)
  * Test category: functionality test
  *
  * SUBTEST: multigpu-query-topology-l3-bank-mask
- * Sub-category: MultiGPU
+ * Mega feature: MultiGPU
  * Description: Check the value of the l3 bank mask for all Xe devices.
  * Test category: functionality test
  */
@@ -422,35 +405,20 @@ static void
 test_query_gt_topology_l3_bank_mask(int fd)
 {
 	uint16_t dev_id = intel_get_drm_devid(fd);
-	struct drm_xe_query_topology_mask *topology;
-	int pos = 0;
-	struct drm_xe_device_query query = {
-		.extensions = 0,
-		.query = DRM_XE_DEVICE_QUERY_GT_TOPOLOGY,
-		.size = 0,
-		.data = 0,
-	};
+	struct drm_xe_query_topology_mask *topology, *topo;
+	uint32_t size;
 
-	igt_assert_eq(igt_ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, &query), 0);
-	igt_assert_neq(query.size, 0);
+	topology = xe_query_device(fd, DRM_XE_DEVICE_QUERY_GT_TOPOLOGY, &size);
 
-	topology = malloc(query.size);
-	igt_assert(topology);
+	igt_info("size: %d\n", size);
 
-	query.data = to_user_pointer(topology);
-	igt_assert_eq(igt_ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, &query), 0);
-
-	igt_info("size: %d\n", query.size);
-
-	while (query.size >= sizeof(struct drm_xe_query_topology_mask)) {
-		struct drm_xe_query_topology_mask *topo = (struct drm_xe_query_topology_mask *)((unsigned char *)topology + pos);
-		int sz = sizeof(struct drm_xe_query_topology_mask) + topo->num_bytes;
-
+	xe_for_each_topology_mask(topology, size, topo) {
 		if (topo->type == DRM_XE_TOPO_L3_BANK) {
 			int count = 0;
 
-			igt_info(" gt_id: %2d type: %-12s (%d) n:%d [%d] ", topo->gt_id,
-				 get_topo_name(topo->type), topo->type, topo->num_bytes, sz);
+			igt_info(" gt_id: %2d type: %-12s (%d) n:%d [%zd] ", topo->gt_id,
+				 get_topo_name(topo->type), topo->type, topo->num_bytes,
+				 sizeof(struct drm_xe_query_topology_mask) + topo->num_bytes);
 			for (int j = 0; j < topo->num_bytes; j++)
 				igt_info(" %02x", topo->mask[j]);
 
@@ -471,9 +439,6 @@ test_query_gt_topology_l3_bank_mask(int fd)
 			else if (IS_DG2(dev_id))
 				igt_assert_eq((count % 8), 0);
 		}
-
-		query.size -= sz;
-		pos += sz;
 	}
 
 	free(topology);
@@ -486,7 +451,7 @@ test_query_gt_topology_l3_bank_mask(int fd)
  * Test category: functionality test
  *
  * SUBTEST: multigpu-query-config
- * Sub-category: MultiGPU
+ * Mega feature: MultiGPU
  * Description: Display config information for all Xe devices.
  * Test category: functionality test
  */
@@ -543,7 +508,7 @@ test_query_config(int fd)
  * Test category: functionality test
  *
  * SUBTEST: multigpu-query-hwconfig
- * Sub-category: MultiGPU
+ * Mega feature: MultiGPU
  * Description: Display hardware configuration for all Xe devices.
  * Test category: functionality test
  */
@@ -582,7 +547,7 @@ test_query_hwconfig(int fd)
  * Test category: negative test
  *
  * SUBTEST: multigpu-query-invalid-query
- * Sub-category: MultiGPU
+ * Mega feature: MultiGPU
  * Description: Check query with invalid arguments for all Xe devices.
  * Test category: negative test
  */
@@ -605,7 +570,7 @@ test_query_invalid_query(int fd)
  * Test category: negative test
  *
  * SUBTEST: multigpu-query-invalid-size
- * Sub-category: MultiGPU
+ * Mega feature: MultiGPU
  * Description: Check query with invalid size for all Xe devices.
  * Test category: negative test
  */
@@ -628,7 +593,7 @@ test_query_invalid_size(int fd)
  * Test category: negative test
  *
  * SUBTEST: multigpu-query-invalid-extension
- * Sub-category: MultiGPU
+ * Mega feature: MultiGPU
  * Description: Check query with invalid extension for all Xe devices.
  * Test category: negative test
  */
@@ -793,8 +758,7 @@ __engine_cycles(int fd, struct drm_xe_engine_class_instance *hwe)
  * SUBTEST: multigpu-query-cs-cycles
  * Description: Query CPU-GPU timestamp correlation for all Xe devices.
  * Category: Core
- * Mega feature: General Core features
- * Sub-category: MultiGPU
+ * Mega feature: MultiGPU
  */
 static void test_query_engine_cycles(int fd)
 {
@@ -815,8 +779,7 @@ static void test_query_engine_cycles(int fd)
  * SUBTEST: multigpu-query-invalid-cs-cycles
  * Description: Check query with invalid arguments for all Xe devices.
  * Category: Core
- * Mega feature: General Core features
- * Sub-category: MultiGPU
+ * Mega feature: MultiGPU
  */
 static void test_engine_cycles_invalid(int fd)
 {
@@ -929,8 +892,7 @@ test_query_uc_fw_version(int fd, uint32_t uc_type)
  *
  * SUBTEST: multigpu-query-uc-fw-version-guc
  * Description: Display GuC firmware submission version for all Xe devices.
- * Mega feature: General Core features
- * Sub-category: MultiGPU
+ * Mega feature: MultiGPU
  * Test category: functionality test
  */
 static void
@@ -946,8 +908,7 @@ test_query_uc_fw_version_guc(int fd)
  *
  * SUBTEST: multigpu-query-invalid-uc-fw-version-mbz
  * Description: Check query with invalid arguments for all Xe devices.
- * Mega feature: General Core features
- * Sub-category: MultiGPU
+ * Mega feature: MultiGPU
  * Test category: functionality test
  */
 static void
@@ -996,7 +957,7 @@ test_query_uc_fw_version_invalid_mbz(int fd)
  *
  * SUBTEST: multigpu-query-uc-fw-version-huc
  * Description: Display HuC firmware version for all Xe devices.
- * Sub-category: MultiGPU
+ * Mega feature: MultiGPU
  * Test category: functionality test
  */
 static void
@@ -1011,7 +972,7 @@ test_query_uc_fw_version_huc(int fd)
  *
  * SUBTEST: multigpu-query-oa-units
  * Description: Display fields for OA unit query for all GPU devices
- * Sub-category: MultiGPU
+ * Mega feature: MultiGPU
  */
 static void test_query_oa_units(int fd)
 {
@@ -1063,7 +1024,7 @@ static void test_query_oa_units(int fd)
  *
  * SUBTEST: multigpu-query-pxp-status
  * Description: Display fields for PXP unit query for all Xe devices
- * Sub-category: MultiGPU
+ * Mega feature: MultiGPU
  */
 static void test_query_pxp_status(int fd)
 {
@@ -1121,7 +1082,7 @@ static void test_query_pxp_status(int fd)
 	free(qpxp);
 }
 
-igt_main
+int igt_main()
 {
 	const struct {
 		const char *name;
@@ -1148,7 +1109,7 @@ igt_main
 	}, *f;
 	int xe, gpu_count;
 
-	igt_fixture
+	igt_fixture()
 		xe = drm_open_driver(DRIVER_XE);
 
 	for (f = funcs; f->name; f++) {
@@ -1156,7 +1117,7 @@ igt_main
 			f->func(xe);
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		drm_close_driver(xe);
 		gpu_count = drm_prepare_filtered_multigpu(DRIVER_XE);
 	}

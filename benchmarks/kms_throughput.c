@@ -397,7 +397,7 @@ void get_tuning(struct tuning *tuning,
 	igt_remove_fb(p->display->drm_fd, &fb);
 }
 
-igt_main
+int igt_main()
 {
 	igt_display_t display = {};
 	make_display(&display);

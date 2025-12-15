@@ -40,6 +40,8 @@
 #define SHADER_PAGEFAULT_READ		(1 << 14)
 #define SHADER_PAGEFAULT_WRITE		(1 << 15)
 #define FAULTABLE_VM			(1 << 16)
+#define PAGEFAULT_STRESS_TEST		(1 << 17)
+#define SHADER_PAGEFAULT_ONE_OF_MANY	(1 << 18)
 #define TRIGGER_UFENCE_SET_BREAKPOINT	(1 << 24)
 #define TRIGGER_RESUME_SINGLE_WALK	(1 << 25)
 #define TRIGGER_RESUME_PARALLEL_WALK	(1 << 26)
@@ -49,7 +51,8 @@
 #define TRIGGER_RESUME_DSS		(1 << 30)
 #define TRIGGER_RESUME_ONE		(1 << 31)
 
-#define SHADER_PAGEFAULT	(SHADER_PAGEFAULT_READ | SHADER_PAGEFAULT_WRITE)
+#define SHADER_PAGEFAULT	(SHADER_PAGEFAULT_READ | SHADER_PAGEFAULT_WRITE | \
+				 SHADER_PAGEFAULT_ONE_OF_MANY)
 #define BB_REGION_BITMASK	(BB_IN_SRAM | BB_IN_VRAM)
 #define TARGET_REGION_BITMASK	(TARGET_IN_SRAM | TARGET_IN_VRAM)
 
@@ -127,13 +130,64 @@ static struct intel_buf *create_uc_buf(int fd, int width, int height, uint64_t r
 	return buf;
 }
 
-static int get_number_of_threads(uint64_t flags)
+static int get_maximum_number_of_threads(int fd)
 {
-	if (flags & (SHADER_MIN_THREADS | SHADER_PAGEFAULT))
+	uint32_t subslices = xe_hwconfig_lookup_value_u32(fd, INTEL_HWCONFIG_MAX_SUBSLICE);
+	uint32_t eus_per_subslice =
+		xe_hwconfig_lookup_value_u32(fd, INTEL_HWCONFIG_MAX_EU_PER_SUBSLICE);
+	uint32_t threads_per_eu =
+		xe_hwconfig_lookup_value_u32(fd, INTEL_HWCONFIG_NUM_THREADS_PER_EU);
+
+	return subslices * eus_per_subslice * threads_per_eu;
+}
+
+struct online_debug_data {
+	pthread_mutex_t mutex;
+	/* client in */
+	int drm_fd;
+	struct drm_xe_engine_class_instance hwe;
+	uint64_t flags;
+	int thread_count;
+	/* client out */
+	int thread_hit_count;
+	/* debugger internals */
+	uint64_t client_handle;
+	uint64_t exec_queue_handle;
+	uint64_t lrc_handle;
+	uint64_t target_offset;
+	size_t target_size;
+	uint64_t bb_offset;
+	size_t bb_size;
+	int vm_fd;
+	uint32_t kernel_offset;
+	uint32_t first_aip;
+	uint64_t *aips_offset_table;
+	uint32_t steps_done;
+	uint8_t *single_step_bitmask;
+	int stepped_threads_count;
+	struct timespec exception_arrived;
+	int last_eu_control_seqno;
+	struct drm_xe_eudebug_event *exception_event;
+	int att_event_counter;
+	uint32_t pf_thread_number;
+	int num_threads_per_eu;
+	int max_subslices_per_slice;
+	struct dim_t w_dim;
+};
+
+static int get_number_of_threads(struct online_debug_data *data)
+{
+	if (data->flags & SHADER_PAGEFAULT_ONE_OF_MANY)
+		return xe_query_eu_thread_count(data->drm_fd, 0);
+
+	if (data->flags & (PAGEFAULT_STRESS_TEST))
+		return get_maximum_number_of_threads(data->drm_fd);
+
+	if (data->flags & (SHADER_MIN_THREADS | SHADER_PAGEFAULT))
 		return 16;
 
-	if (flags & (TRIGGER_RESUME_ONE | TRIGGER_RESUME_SINGLE_WALK |
-		     TRIGGER_RESUME_PARALLEL_WALK | SHADER_CACHING_SRAM | SHADER_CACHING_VRAM))
+	if (data->flags & (TRIGGER_RESUME_ONE | TRIGGER_RESUME_SINGLE_WALK |
+	    TRIGGER_RESUME_PARALLEL_WALK | SHADER_CACHING_SRAM | SHADER_CACHING_VRAM))
 		return 32;
 
 	return 512;
@@ -154,48 +208,71 @@ static int caching_get_instruction_count(int fd, uint32_t s_dim__x, int flags)
 	return (2 * xe_min_page_size(fd, memory)) / s_dim__x;
 }
 
-static struct gpgpu_shader *get_shader(int fd, const unsigned int flags)
+static struct gpgpu_shader *get_shader(struct online_debug_data *data)
 {
-	struct dim_t w_dim = walker_dimensions(get_number_of_threads(flags));
-	struct dim_t s_dim = surface_dimensions(get_number_of_threads(flags));
+	struct dim_t w_dim = walker_dimensions(data->thread_count);
+	struct dim_t s_dim = surface_dimensions(data->thread_count);
 	static struct gpgpu_shader *shader;
 
-	shader = gpgpu_shader_create(fd);
+	shader = gpgpu_shader_create(data->drm_fd);
 
 	if (shader->gen_ver == 3000)
 		gpgpu_shader_set_vrt(shader, VRT_96);
 
+	shader->simd_size = SIMD_SIZE;
+
+	if (data->flags & PAGEFAULT_STRESS_TEST)
+		shader->num_threads_in_tg = gpgpu_shader__get_max_threads_in_tg(shader);
+
 	gpgpu_shader__write_dword(shader, SHADER_CANARY, 0);
-	if (flags & SHADER_BREAKPOINT) {
+	if (data->flags & SHADER_BREAKPOINT) {
 		gpgpu_shader__nop(shader);
 		gpgpu_shader__breakpoint(shader);
-	} else if (flags & SHADER_LOOP) {
+	} else if (data->flags & SHADER_LOOP) {
 		gpgpu_shader__label(shader, 0);
 		gpgpu_shader__write_dword(shader, SHADER_CANARY, 0);
 		gpgpu_shader__jump_neq(shader, 0, w_dim.y, STEERING_END_LOOP);
 		gpgpu_shader__write_dword(shader, SHADER_CANARY, 0);
-	} else if (flags & SHADER_SINGLE_STEP) {
+	} else if (data->flags & SHADER_SINGLE_STEP) {
 		gpgpu_shader__nop(shader);
 		gpgpu_shader__breakpoint(shader);
 		for (int i = 0; i < SINGLE_STEP_COUNT; i++)
 			gpgpu_shader__nop(shader);
-	} else if (flags & SHADER_N_NOOP_BREAKPOINT) {
+	} else if (data->flags & SHADER_N_NOOP_BREAKPOINT) {
 		for (int i = 0; i < SHADER_LOOP_N; i++) {
 			gpgpu_shader__nop(shader);
 			gpgpu_shader__breakpoint(shader);
 		}
-	} else if ((flags & SHADER_CACHING_SRAM) || (flags & SHADER_CACHING_VRAM)) {
+	} else if ((data->flags & SHADER_CACHING_SRAM) || (data->flags & SHADER_CACHING_VRAM)) {
+		int  count = caching_get_instruction_count(data->drm_fd, s_dim.x, data->flags);
+
 		gpgpu_shader__nop(shader);
 		gpgpu_shader__breakpoint(shader);
-		for (int i = 0; i < caching_get_instruction_count(fd, s_dim.x, flags); i++)
+		for (int i = 0; i < count; i++)
 			gpgpu_shader__common_target_write_u32(shader, s_dim.y + i, CACHING_VALUE(i));
 		gpgpu_shader__nop(shader);
 		gpgpu_shader__breakpoint(shader);
-	} else if (flags & SHADER_PAGEFAULT) {
-		if (flags & SHADER_PAGEFAULT_READ)
+	} else if (data->flags & SHADER_PAGEFAULT) {
+		if (data->flags & SHADER_PAGEFAULT_READ)
 			gpgpu_shader__read_a64_d32(shader, BAD_OFFSET);
-		else
+		else if (data->flags & SHADER_PAGEFAULT_WRITE)
 			gpgpu_shader__write_a64_d32(shader, BAD_OFFSET, BAD_CANARY);
+		else if (data->flags & SHADER_PAGEFAULT_ONE_OF_MANY)
+			emit_iga64_code(shader, pagefault_one_of_many, R"(
+#if GEN_VER >= 2000
+	// prepare load descriptor for page-faulting address
+	mov (8) r30.0<1>:uq 0x0:uq
+	mov (1) r30.0<1>:uq 0x12345678000:uq // PF address
+	mov (1) r30.2<1>:ud 0x3f:ud
+	mov (1) r30.4<1>:ud 0x3f:ud
+	mov (1) r30.7<1>:ud 0x3:ud // 4 bytes
+	// calculate thread id: r20.0 = dim.x * tgid.y + tgid.x
+	mad (1) r20.0<1>:ud r0.1<0;0>:ud r0.6<0;0>:ud r1.4<0>:ud
+	// page-fault only for arbitrary thread
+	cmp (1) (eq)f0.0 null<1>:ud r20.0<0;1,0>:ud ARG(0):ud
+(f0.0)	send.ugm (1) r31 r30 null 0x0 0x2128403 // load_block2d.ugm.d32t.a64.uc.uc
+#endif
+			)", data->pf_thread_number);
 
 		gpgpu_shader__label(shader, 0);
 		gpgpu_shader__write_dword(shader, SHADER_CANARY, 0);
@@ -208,35 +285,30 @@ static struct gpgpu_shader *get_shader(int fd, const unsigned int flags)
 	return shader;
 }
 
-static struct gpgpu_shader *get_sip(int fd, const unsigned int flags)
+static struct gpgpu_shader *get_sip(struct online_debug_data *data)
 {
-	struct dim_t w_dim = walker_dimensions(get_number_of_threads(flags));
+	struct dim_t w_dim = walker_dimensions(data->thread_count);
 	static struct gpgpu_shader *sip;
 
-	sip = gpgpu_shader_create(fd);
-	gpgpu_shader__write_aip(sip, 0);
+	sip = gpgpu_shader_create(data->drm_fd);
+	if (!(data->flags & SHADER_PAGEFAULT_ONE_OF_MANY))
+		gpgpu_shader__write_aip(sip, 0);
+	else
+		emit_iga64_code(sip, store_sr0_0, R"(
+#if GEN_VER >= 2000
+	mov (1) r5.0<1>:ud sr0.0:ud
+	SET_THREAD_SPACE_ADDR(r4, 0, 0:ud, 4)
+	STORE_SPACE_DW(r4, r5)
+#endif
+			)");
 
 	gpgpu_shader__wait(sip);
-	if (flags & SIP_SINGLE_STEP)
+	if (data->flags & SIP_SINGLE_STEP)
 		gpgpu_shader__end_system_routine_step_if_eq(sip, w_dim.y, 0);
 	else
 		gpgpu_shader__end_system_routine(sip, true);
 
 	return sip;
-}
-
-static int count_set_bits(void *ptr, size_t size)
-{
-	uint32_t *p = ptr;
-	int count = 0;
-	int i;
-
-	igt_assert(size % 4 == 0);
-
-	for (i = 0; i < size/4; i++)
-		count += igt_hweight(p[i]);
-
-	return count;
 }
 
 static int eu_attentions_xor_count(const uint32_t *a, const uint32_t *b, uint32_t size)
@@ -368,35 +440,8 @@ static inline uint64_t eu_ctl_interrupt_all(int debugfd, uint64_t client,
 		      DRM_XE_EUDEBUG_EU_CONTROL_CMD_INTERRUPT_ALL);
 }
 
-struct online_debug_data {
-	pthread_mutex_t mutex;
-	/* client in */
-	struct drm_xe_engine_class_instance hwe;
-	/* client out */
-	int threads_count;
-	/* debugger internals */
-	uint64_t client_handle;
-	uint64_t exec_queue_handle;
-	uint64_t lrc_handle;
-	uint64_t target_offset;
-	size_t target_size;
-	uint64_t bb_offset;
-	size_t bb_size;
-	int vm_fd;
-	uint32_t kernel_offset;
-	uint32_t first_aip;
-	uint64_t *aips_offset_table;
-	uint32_t steps_done;
-	uint8_t *single_step_bitmask;
-	int stepped_threads_count;
-	struct timespec exception_arrived;
-	int last_eu_control_seqno;
-	struct drm_xe_eudebug_event *exception_event;
-	int att_event_counter;
-};
-
 static struct online_debug_data *
-online_debug_data_create(struct drm_xe_engine_class_instance *hwe)
+online_debug_data_create(int drm_fd, struct drm_xe_engine_class_instance *hwe, uint64_t flags)
 {
 	struct online_debug_data *data;
 
@@ -404,13 +449,17 @@ online_debug_data_create(struct drm_xe_engine_class_instance *hwe)
 		    PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
 	igt_assert(data);
 
+	data->drm_fd = drm_fd;
 	memcpy(&data->hwe, hwe, sizeof(*hwe));
+	data->flags = flags;
+	data->thread_count = get_number_of_threads(data);
 	pthread_mutex_init(&data->mutex, NULL);
 	data->client_handle = -1ULL;
 	data->exec_queue_handle = -1ULL;
 	data->lrc_handle = -1ULL;
 	data->vm_fd = -1;
 	data->stepped_threads_count = -1;
+	data->w_dim = walker_dimensions(data->thread_count);
 
 	return data;
 }
@@ -429,7 +478,7 @@ static void eu_attention_debug_trigger(struct xe_eudebug_debugger *d,
 
 	igt_debug("EVENT[%llu] eu-attenttion; threads=%d "
 		 "client[%llu], exec_queue[%llu], lrc[%llu], bitmask_size[%d]\n",
-		 att->base.seqno, count_set_bits(att->bitmask, att->bitmask_size),
+		 att->base.seqno, igt_bitmap_hweight(att->bitmask, att->bitmask_size * 8),
 				att->client_handle, att->exec_queue_handle,
 				att->lrc_handle, att->bitmask_size);
 
@@ -446,7 +495,7 @@ static void eu_attention_reset_trigger(struct xe_eudebug_debugger *d,
 
 	igt_debug("EVENT[%llu] eu-attention with reset; threads=%d "
 		 "client[%llu], exec_queue[%llu], lrc[%llu], bitmask_size[%d]\n",
-		 att->base.seqno, count_set_bits(att->bitmask, att->bitmask_size),
+		 att->base.seqno, igt_bitmap_hweight(att->bitmask, att->bitmask_size * 8),
 				att->client_handle, att->exec_queue_handle,
 				att->lrc_handle, att->bitmask_size);
 
@@ -520,7 +569,7 @@ static bool set_breakpoint_once(struct xe_eudebug_debugger *d,
 	struct gpgpu_shader *kernel;
 	uint32_t aip;
 
-	kernel = get_shader(d->master_fd, d->flags);
+	kernel = get_shader(data);
 
 	if (!data->kernel_offset) {
 		uint32_t instr_usdw;
@@ -661,7 +710,7 @@ static void eu_attention_resume_trigger(struct xe_eudebug_debugger *d,
 			uint32_t expected, aip;
 			struct gpgpu_shader *kernel;
 
-			kernel = get_shader(d->master_fd, d->flags);
+			kernel = get_shader(data);
 			expected = data->kernel_offset + kernel->size * 4 - 0x10;
 
 			igt_assert_eq(pread(data->vm_fd, &aip, sizeof(aip),
@@ -673,7 +722,7 @@ static void eu_attention_resume_trigger(struct xe_eudebug_debugger *d,
 	}
 
 	if (d->flags & (SHADER_LOOP | SHADER_PAGEFAULT)) {
-		uint32_t threads = get_number_of_threads(d->flags);
+		uint32_t threads = data->thread_count;
 		uint32_t val = STEERING_END_LOOP;
 
 		igt_assert_eq(pwrite(data->vm_fd, &val, sizeof(uint32_t),
@@ -695,7 +744,7 @@ static void eu_attention_resume_single_step_trigger(struct xe_eudebug_debugger *
 {
 	struct drm_xe_eudebug_event_eu_attention *att = (void *) e;
 	struct online_debug_data *data = d->ptr;
-	const int threads = get_number_of_threads(d->flags);
+	const int threads = data->thread_count;
 	uint32_t val;
 	size_t sz = sizeof(uint32_t);
 
@@ -920,7 +969,7 @@ static void eu_attention_resume_caching_trigger(struct xe_eudebug_debugger *d,
 {
 	struct drm_xe_eudebug_event_eu_attention *att = (void *)e;
 	struct online_debug_data *data = d->ptr;
-	struct dim_t s_dim = surface_dimensions(get_number_of_threads(d->flags));
+	struct dim_t s_dim = surface_dimensions(data->thread_count);
 	uint32_t *kernel_offset = &data->kernel_offset;
 	int *counter = &data->att_event_counter;
 	int val;
@@ -943,7 +992,7 @@ static void eu_attention_resume_caching_trigger(struct xe_eudebug_debugger *d,
 	gpgpu_shader__common_target_write_u32(shader_write_instr, 0, 0);
 
 	if (!*kernel_offset) {
-		kernel = get_shader(d->master_fd, d->flags);
+		kernel = get_shader(data);
 		*kernel_offset = find_kernel_in_bb(kernel, data);
 		gpgpu_shader_destroy(kernel);
 	}
@@ -1044,7 +1093,7 @@ static uint64_t get_memory_region(int fd, int flags, int region_bitmask)
 
 static void run_online_client(struct xe_eudebug_client *c)
 {
-	int threads = get_number_of_threads(c->flags);
+	int threads;
 	const uint64_t target_offset = 0x1a000000;
 	const uint64_t bb_offset = 0x1b000000;
 	size_t bb_size;
@@ -1061,8 +1110,8 @@ static void run_online_client(struct xe_eudebug_client *c)
 		.num_placements = 1,
 		.extensions = c->flags & DISABLE_DEBUG_MODE ? 0 : to_user_pointer(&ext)
 	};
-	struct dim_t w_dim = walker_dimensions(threads);
-	struct dim_t s_dim = surface_dimensions(threads);
+	struct dim_t w_dim;
+	struct dim_t s_dim;
 	struct timespec ts = { };
 	struct gpgpu_shader *sip, *shader;
 	uint32_t metadata_id[2];
@@ -1079,7 +1128,11 @@ static void run_online_client(struct xe_eudebug_client *c)
 
 	fd = xe_eudebug_client_open_driver(c);
 
-	shader = get_shader(fd, c->flags);
+	threads = data->thread_count;
+	w_dim = walker_dimensions(threads);
+	s_dim = surface_dimensions(threads);
+
+	shader = get_shader(data);
 	bb_size = get_bb_size(fd, shader);
 
 	/* Additional memory for steering control */
@@ -1115,7 +1168,7 @@ static void run_online_client(struct xe_eudebug_client *c)
 				     get_memory_region(fd, c->flags, BB_REGION_BITMASK));
 	intel_bb_set_lr_mode(ibb, true);
 
-	sip = get_sip(fd, c->flags);
+	sip = get_sip(data);
 
 	igt_nsec_elapsed(&ts);
 	gpgpu_shader_exec(ibb, buf, w_dim.x, w_dim.y, shader, sip, 0, 0);
@@ -1133,8 +1186,8 @@ static void run_online_client(struct xe_eudebug_client *c)
 
 	if (!(c->flags & DO_NOT_EXPECT_CANARIES)) {
 		ptr = xe_bo_mmap_ext(fd, buf->handle, buf->size, PROT_READ);
-		data->threads_count = count_canaries_neq(ptr, w_dim, 0);
-		igt_assert_f(data->threads_count, "No canaries found, nothing executed?\n");
+		data->thread_hit_count = count_canaries_neq(ptr, w_dim, 0);
+		igt_assert_f(data->thread_hit_count, "No canaries found, nothing executed?\n");
 
 		if ((c->flags & SHADER_BREAKPOINT || c->flags & TRIGGER_RESUME_SET_BP ||
 		     c->flags & SHADER_N_NOOP_BREAKPOINT) && !(c->flags & DISABLE_DEBUG_MODE)) {
@@ -1142,8 +1195,9 @@ static void run_online_client(struct xe_eudebug_client *c)
 
 			igt_assert_f(aip != SHADER_CANARY,
 				     "Workload executed but breakpoint not hit!\n");
-			igt_assert_eq(count_canaries_eq(ptr, w_dim, aip), data->threads_count);
-			igt_debug("Breakpoint hit in %d threads, AIP=0x%08x\n", data->threads_count,
+			igt_assert_eq(count_canaries_eq(ptr, w_dim, aip), data->thread_hit_count);
+			igt_debug("Breakpoint hit in %d threads, AIP=0x%08x\n",
+				  data->thread_hit_count,
 				  aip);
 		}
 
@@ -1182,47 +1236,15 @@ static bool intel_gen_has_lockstep_eus(int fd)
 
 static int query_attention_bitmask_size(int fd, int gt)
 {
-	uint32_t thread_count_len;
-	uint32_t *thread_count_ptr;
-	uint32_t threads_per_eu = 8;
+	uint32_t threads_per_eu = xe_hwconfig_lookup_value_u32(fd, INTEL_HWCONFIG_NUM_THREADS_PER_EU);
 	struct drm_xe_query_topology_mask *c_dss = NULL, *g_dss = NULL, *eu_per_dss = NULL;
-	struct drm_xe_query_topology_mask *topology;
-	struct drm_xe_device_query query = {
-		.extensions = 0,
-		.query = DRM_XE_DEVICE_QUERY_GT_TOPOLOGY,
-		.size = 0,
-		.data = 0,
-	};
-	uint8_t dss_mask, last_dss;
-	int pos = 0;
-	int i, last_dss_idx;
+	struct drm_xe_query_topology_mask *topology, *topo;
+	uint32_t size;
+	int i, max_eu_count;
 
-	thread_count_ptr = xe_hwconfig_lookup_value(fd, INTEL_HWCONFIG_NUM_THREADS_PER_EU,
-						    &thread_count_len);
-	if (thread_count_ptr) {
-		igt_assert(thread_count_len == 1);
-		threads_per_eu = *thread_count_ptr;
-	}
+	topology = xe_query_device(fd, DRM_XE_DEVICE_QUERY_GT_TOPOLOGY, &size);
 
-	igt_assert_eq(igt_ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, &query), 0);
-	igt_assert_neq(query.size, 0);
-
-	topology = malloc(query.size);
-	igt_assert(topology);
-
-	query.data = to_user_pointer(topology);
-	igt_assert_eq(igt_ioctl(fd, DRM_IOCTL_XE_DEVICE_QUERY, &query), 0);
-
-	while (query.size >= sizeof(struct drm_xe_query_topology_mask)) {
-		struct drm_xe_query_topology_mask *topo;
-		int sz;
-
-		topo = (struct drm_xe_query_topology_mask *)((unsigned char *)topology + pos);
-		sz = sizeof(struct drm_xe_query_topology_mask) + topo->num_bytes;
-
-		query.size -= sz;
-		pos += sz;
-
+	xe_for_each_topology_mask(topology, size, topo) {
 		if (topo->gt_id != gt)
 			continue;
 
@@ -1238,27 +1260,18 @@ static int query_attention_bitmask_size(int fd, int gt)
 	igt_assert(g_dss && c_dss && eu_per_dss);
 	igt_assert_eq_u32(c_dss->num_bytes, g_dss->num_bytes);
 
-	for (i = 0; i < c_dss->num_bytes; i++) {
-		dss_mask = c_dss->mask[i] | g_dss->mask[i];
-		if (dss_mask) {
-			last_dss = dss_mask;
-			last_dss_idx = i;
-		}
-	}
+	for (i = 0; i < c_dss->num_bytes; i++)
+		c_dss->mask[i] |= g_dss->mask[i];
 
-	last_dss_idx *= BITS_PER_BYTE;
-	do {
-		last_dss_idx++;
-	} while (last_dss >>= 1);
-
-	last_dss_idx *= count_set_bits(eu_per_dss->mask, eu_per_dss->num_bytes);
+	max_eu_count = igt_bitmap_fls(c_dss->mask, c_dss->num_bytes * 8) *
+		       igt_bitmap_hweight(eu_per_dss->mask, eu_per_dss->num_bytes * 8);
 
 	if (intel_gen_has_lockstep_eus(fd))
-		last_dss_idx /= 2;
+		max_eu_count /= 2;
 
 	free(topology);
 
-	return last_dss_idx * DIV_ROUND_UP(threads_per_eu, 8);
+	return max_eu_count * DIV_ROUND_UP(threads_per_eu, 8);
 }
 
 static struct drm_xe_eudebug_event_exec_queue *
@@ -1344,7 +1357,7 @@ static void online_session_check(struct xe_eudebug_session *s, int flags)
 
 			igt_assert(event->flags == DRM_XE_EUDEBUG_EVENT_STATE_CHANGE);
 			igt_assert_eq(ea->bitmask_size, bitmask_size);
-			sum += count_set_bits(ea->bitmask, bitmask_size);
+			sum += igt_bitmap_hweight(ea->bitmask, bitmask_size * 8);
 			igt_assert(match_attention_with_exec_queue(s->debugger->log, ea));
 		} else if (event->type == DRM_XE_EUDEBUG_EVENT_PAGEFAULT) {
 			uint32_t after_offset = bitmask_size / sizeof(uint32_t);
@@ -1365,7 +1378,7 @@ static void online_session_check(struct xe_eudebug_session *s, int flags)
 	 * if we have a breakpoint set and we resume all threads always.
 	 */
 	if (flags == SHADER_BREAKPOINT || flags == TRIGGER_UFENCE_SET_BREAKPOINT)
-		igt_assert_eq(sum, data->threads_count);
+		igt_assert_eq(sum, data->thread_hit_count);
 
 	if (expect_exception)
 		igt_assert(sum > 0);
@@ -1374,6 +1387,11 @@ static void online_session_check(struct xe_eudebug_session *s, int flags)
 
 	if (flags & SHADER_PAGEFAULT)
 		igt_assert(pagefault_threads > 0);
+
+	if (flags & SHADER_PAGEFAULT_ONE_OF_MANY) {
+		igt_assert_eq(pagefault_threads, 1);
+		igt_assert_eq(data->thread_hit_count, 1);
+	}
 }
 
 static void ufence_ack_trigger(struct xe_eudebug_debugger *d,
@@ -1397,19 +1415,43 @@ static void ufence_ack_set_bp_trigger(struct xe_eudebug_debugger *d,
 	}
 }
 
+static uint32_t attn_to_sr0_0(struct online_debug_data *data, int att_nr)
+{
+	uint32_t tid, eu, dss, sl, ss;
+	bool extended = data->num_threads_per_eu > 8;
+
+	/* Calculate dss/eu/tid from attention number, Bspec: 56831, 73459. */
+	/* Return sr0_0 register corresponding fields, Bspec: 56623. */
+	tid = (att_nr & 7) | (extended ? (att_nr & 64) >> 3 : 0);
+	eu = (att_nr >> 3) & 7;
+	dss = att_nr >> (extended ? 7 : 6);
+	ss = dss % data->max_subslices_per_slice;
+	sl = dss / data->max_subslices_per_slice;
+	return tid + (eu << 4) + (ss << 8) + (sl << (extended ? 14 : 11));
+}
+
+static uint32_t get_thread_space_address(struct online_debug_data *data, int thread)
+{
+	int x = thread % data->w_dim.x, y = thread / data->w_dim.x;
+
+	return data->target_offset + 4 * (y * ALIGN(data->w_dim.x, data->w_dim.alignment) + x);
+}
+
 static void pagefault_trigger(struct xe_eudebug_debugger *d,
 			      struct drm_xe_eudebug_event *e)
 {
 	struct drm_xe_eudebug_event_pagefault *pf = igt_container_of(e, pf, base);
+	struct online_debug_data *data = d->ptr;
 	uint32_t attn_size = pf->bitmask_size / 3;
 	int attn_size_as_u32 = attn_size / sizeof(uint32_t);
 	uint32_t *ptr = (uint32_t *) pf->bitmask;
 	uint32_t *ptrs[3] = {ptr, ptr + attn_size_as_u32, ptr + 2 * attn_size_as_u32};
 	const char * const name[3] = {"before", "after", "resolved"};
 	int threads[3], pagefault_threads, idx;
+	uint32_t sr0_0, offset;
 
 	for (idx = 0; idx < 3; idx++)
-		threads[idx] = count_set_bits(ptrs[idx], attn_size);
+		threads[idx] = igt_bitmap_hweight(ptrs[idx], attn_size * 8);
 
 	pagefault_threads = eu_attentions_xor_count(ptrs[1], ptrs[2], attn_size);
 
@@ -1432,6 +1474,38 @@ static void pagefault_trigger(struct xe_eudebug_debugger *d,
 
 	igt_assert(pagefault_threads > 0);
 	igt_assert_eq_u64(pf->pagefault_address, BAD_OFFSET);
+
+	if (!(data->flags & SHADER_PAGEFAULT_ONE_OF_MANY))
+		return;
+
+	offset = get_thread_space_address(data, data->pf_thread_number);
+
+	igt_for_milliseconds(500) {
+		igt_assert_eq(pread(data->vm_fd, &sr0_0, sizeof(sr0_0), offset), sizeof(sr0_0));
+		if (sr0_0)
+			break;
+		usleep(1000);
+	}
+	sr0_0 &= 0xffff; /* we need only thread coords */
+
+	for (uint32_t att_dw = 0; att_dw < attn_size_as_u32; att_dw++) {
+		uint32_t att_sr0_0, att_mask = ~ptrs[1][att_dw] & ptrs[2][att_dw];
+
+		for (int att_nr, att_bit = 0; att_bit < BITS_PER_TYPE(att_mask); ++att_bit) {
+			if (!(att_mask & (1ULL << att_bit)))
+				continue;
+			att_nr = 32 * att_dw + att_bit;
+			att_sr0_0 = attn_to_sr0_0(data, att_nr);
+			if (att_sr0_0 == sr0_0) {
+				igt_debug("Thread%d: matched pagefault, attn=%#x, sr0_0=%#x\n",
+					  data->pf_thread_number, att_nr, sr0_0);
+				++data->thread_hit_count;
+			} else {
+				igt_debug("Thread%d: unmatched pagefault, attn=%#x, th_sr0_0=%#x, attn_sr0_0=%#x\n",
+					  data->pf_thread_number, att_nr, sr0_0, att_sr0_0);
+			}
+		}
+	}
 }
 
 /**
@@ -1470,7 +1544,7 @@ static void test_basic_online(int fd, struct drm_xe_engine_class_instance *hwe, 
 	struct xe_eudebug_session *s;
 	struct online_debug_data *data;
 
-	data = online_debug_data_create(hwe);
+	data = online_debug_data_create(fd, hwe, flags);
 	s = xe_eudebug_session_create(fd, run_online_client, flags, data);
 
 	xe_eudebug_debugger_add_trigger(s->debugger, DRM_XE_EUDEBUG_EVENT_EU_ATTENTION,
@@ -1506,7 +1580,7 @@ static void test_set_breakpoint_online(int fd, struct drm_xe_engine_class_instan
 
 	igt_require(!(flags & FAULTABLE_VM) || !xe_supports_faults(fd));
 
-	data = online_debug_data_create(hwe);
+	data = online_debug_data_create(fd, hwe, flags);
 	s = xe_eudebug_session_create(fd, run_online_client, flags, data);
 	xe_eudebug_debugger_add_trigger(s->debugger, DRM_XE_EUDEBUG_EVENT_OPEN,
 					open_trigger);
@@ -1569,7 +1643,7 @@ static void test_set_breakpoint_online_sigint_debugger(int fd,
 		sleep_time = rand() % max_sleep_time;
 		igt_debug("Loop %d: SIGINT after %" PRIu64 " us\n", loop_count, sleep_time);
 
-		data = online_debug_data_create(hwe);
+		data = online_debug_data_create(fd, hwe, flags);
 		s = xe_eudebug_session_create(fd, run_online_client, flags, data);
 		s->client->allow_dead_client = true;
 		xe_eudebug_debugger_add_trigger(s->debugger, DRM_XE_EUDEBUG_EVENT_OPEN,
@@ -1632,6 +1706,12 @@ static void test_set_breakpoint_online_sigint_debugger(int fd,
 	igt_assert_lt(0, sigints_during_test);
 }
 
+static int getenv_int(const char *var, int def_val)
+{
+	char *env = getenv(var);
+
+	return env ? atoi(env) : def_val;
+}
 /**
  * SUBTEST: pagefault-read
  * Functionality: page faults
@@ -1644,6 +1724,24 @@ static void test_set_breakpoint_online_sigint_debugger(int fd,
  * Description:
  *     Check whether KMD sends pagefault event for workload in debug mode that
  *     triggers a write pagefault.
+ *
+ * SUBTEST: pagefault-read-stress
+ * Functionality: page faults
+ * Description:
+ *     Check whether KMD sends read pagefault event for workload in debug mode
+ *     with many threads.
+ *
+ * SUBTEST: pagefault-write-stress
+ * Functionality: page faults
+ * Description:
+ *     Check whether KMD sends write pagefault event for workload in debug mode
+ *     with many threads.
+ *
+ * SUBTEST: pagefault-one-of-many
+ * Description:
+ *     Check whether read (EU thread's load instruction) pagefault memory
+ *     exception handling reports correct thread, if only one thread causes exception
+ *     and other threads are spinning.
  */
 static void test_pagefault_online(int fd, struct drm_xe_engine_class_instance *hwe,
 				  int flags)
@@ -1651,8 +1749,27 @@ static void test_pagefault_online(int fd, struct drm_xe_engine_class_instance *h
 	struct xe_eudebug_session *s;
 	struct online_debug_data *data;
 
-	data = online_debug_data_create(hwe);
-	s = xe_eudebug_session_create(fd, run_online_client, flags, data);
+	data = online_debug_data_create(fd, hwe, flags);
+	if (flags & SHADER_PAGEFAULT_ONE_OF_MANY) {
+		uint32_t max_ss, max_sl;
+
+		data->flags |= DO_NOT_EXPECT_CANARIES;
+		data->pf_thread_number = getenv_int("IGT_PF_THREAD_NUMBER", 0);
+		data->num_threads_per_eu =
+			xe_hwconfig_lookup_value_u32(fd, INTEL_HWCONFIG_NUM_THREADS_PER_EU);
+
+		max_ss = xe_hwconfig_lookup_value_u32(fd, INTEL_HWCONFIG_MAX_SUBSLICE);
+		if (!max_ss)
+			max_ss = xe_hwconfig_lookup_value_u32(fd,
+				INTEL_HWCONFIG_MAX_DUAL_SUBSLICES_SUPPORTED);
+		max_sl = xe_hwconfig_lookup_value_u32(fd, INTEL_HWCONFIG_MAX_SLICES_SUPPORTED);
+		igt_debug("HWCONFIG: %d threads per EU, max %d (dual)subslices, max %d slices\n",
+			  data->num_threads_per_eu, max_ss, max_sl);
+		igt_assert(data->num_threads_per_eu && max_ss && max_sl);
+
+		data->max_subslices_per_slice = DIV_ROUND_UP(max_ss, max_sl);
+	}
+	s = xe_eudebug_session_create(fd, run_online_client, data->flags, data);
 
 	xe_eudebug_debugger_add_trigger(s->debugger, DRM_XE_EUDEBUG_EVENT_OPEN,
 					open_trigger);
@@ -1691,7 +1808,7 @@ static void test_preemption(int fd, struct drm_xe_engine_class_instance *hwe)
 	struct online_debug_data *data;
 	struct xe_eudebug_client *other;
 
-	data = online_debug_data_create(hwe);
+	data = online_debug_data_create(fd, hwe, flags);
 	s = xe_eudebug_session_create(fd, run_online_client, flags, data);
 	other = xe_eudebug_client_create(fd, run_online_client, SHADER_NOP, data);
 
@@ -1712,7 +1829,7 @@ static void test_preemption(int fd, struct drm_xe_engine_class_instance *hwe)
 	xe_eudebug_client_wait_done(s->client);
 	xe_eudebug_client_wait_done(other);
 
-	xe_eudebug_debugger_stop_worker(s->debugger, 1);
+	xe_eudebug_debugger_stop_worker(s->debugger);
 
 	xe_eudebug_session_destroy(s);
 	xe_eudebug_client_destroy(other);
@@ -1736,7 +1853,7 @@ static void test_reset_with_attention_online(int fd, struct drm_xe_engine_class_
 	struct xe_eudebug_session *s1, *s2;
 	struct online_debug_data *data;
 
-	data = online_debug_data_create(hwe);
+	data = online_debug_data_create(fd, hwe, flags);
 	s1 = xe_eudebug_session_create(fd, run_online_client, flags, data);
 
 	xe_eudebug_debugger_add_trigger(s1->debugger, DRM_XE_EUDEBUG_EVENT_EU_ATTENTION,
@@ -1790,7 +1907,7 @@ static void test_interrupt_all(int fd, struct drm_xe_engine_class_instance *hwe,
 
 	igt_require(!(flags & FAULTABLE_VM) || !xe_supports_faults(fd));
 
-	data = online_debug_data_create(hwe);
+	data = online_debug_data_create(fd, hwe, flags);
 	s = xe_eudebug_session_create(fd, run_online_client, flags, data);
 
 	xe_eudebug_debugger_add_trigger(s->debugger, DRM_XE_EUDEBUG_EVENT_OPEN,
@@ -1831,7 +1948,7 @@ static void test_interrupt_all(int fd, struct drm_xe_engine_class_instance *hwe,
 
 	xe_eudebug_client_wait_done(s->client);
 
-	xe_eudebug_debugger_stop_worker(s->debugger, 1);
+	xe_eudebug_debugger_stop_worker(s->debugger);
 
 	xe_eudebug_event_log_print(s->debugger->log, true);
 	xe_eudebug_event_log_print(s->client->log, true);
@@ -1881,7 +1998,7 @@ static void test_interrupt_other(int fd, struct drm_xe_engine_class_instance *hw
 	int debugee_flags = SHADER_LOOP | DO_NOT_EXPECT_CANARIES;
 	int val;
 
-	data = online_debug_data_create(hwe);
+	data = online_debug_data_create(fd, hwe, flags);
 	s = xe_eudebug_session_create(fd, run_online_client, flags, data);
 
 	xe_eudebug_debugger_add_trigger(s->debugger, DRM_XE_EUDEBUG_EVENT_OPEN, open_trigger);
@@ -1911,7 +2028,7 @@ static void test_interrupt_other(int fd, struct drm_xe_engine_class_instance *hw
 	xe_eudebug_debugger_detach(s->debugger);
 	reset_debugger_log(s->debugger);
 
-	debugee_data = online_debug_data_create(hwe);
+	debugee_data = online_debug_data_create(fd, hwe, flags);
 	s->debugger->ptr = debugee_data;
 	debugee = xe_eudebug_client_create(fd, run_online_client, debugee_flags, debugee_data);
 	igt_assert_eq(xe_eudebug_debugger_attach(s->debugger, debugee), 0);
@@ -1938,7 +2055,7 @@ static void test_interrupt_other(int fd, struct drm_xe_engine_class_instance *hw
 	xe_force_gt_reset_async(s->debugger->master_fd, debugee_data->hwe.gt_id);
 
 	xe_eudebug_client_wait_done(debugee);
-	xe_eudebug_debugger_stop_worker(s->debugger, 1);
+	xe_eudebug_debugger_stop_worker(s->debugger);
 
 	xe_eudebug_event_log_print(s->debugger->log, true);
 	xe_eudebug_event_log_print(debugee->log, true);
@@ -1972,7 +2089,7 @@ static void test_tdctl_parameters(int fd, struct drm_xe_engine_class_instance *h
 
 	igt_assert(attention_bitmask);
 
-	data = online_debug_data_create(hwe);
+	data = online_debug_data_create(fd, hwe, flags);
 	s = xe_eudebug_session_create(fd, run_online_client, flags, data);
 
 	xe_eudebug_debugger_add_trigger(s->debugger, DRM_XE_EUDEBUG_EVENT_OPEN,
@@ -2052,7 +2169,7 @@ static void test_tdctl_parameters(int fd, struct drm_xe_engine_class_instance *h
 
 	xe_eudebug_client_wait_done(s->client);
 
-	xe_eudebug_debugger_stop_worker(s->debugger, 1);
+	xe_eudebug_debugger_stop_worker(s->debugger);
 
 	xe_eudebug_event_log_print(s->debugger->log, true);
 	xe_eudebug_event_log_print(s->client->log, true);
@@ -2122,7 +2239,7 @@ static void test_interrupt_reconnect(int fd, struct drm_xe_engine_class_instance
 	struct xe_eudebug_session *s;
 	uint32_t val;
 
-	data = online_debug_data_create(hwe);
+	data = online_debug_data_create(fd, hwe, flags);
 	s = xe_eudebug_session_create(fd, run_online_client, flags, data);
 
 	xe_eudebug_debugger_add_trigger(s->debugger, DRM_XE_EUDEBUG_EVENT_OPEN,
@@ -2163,7 +2280,7 @@ static void test_interrupt_reconnect(int fd, struct drm_xe_engine_class_instance
 
 	xe_eudebug_client_wait_done(s->client);
 
-	xe_eudebug_debugger_stop_worker(s->debugger, 1);
+	xe_eudebug_debugger_stop_worker(s->debugger);
 
 	xe_eudebug_event_log_print(s->debugger->log, true);
 	xe_eudebug_event_log_print(s->client->log, true);
@@ -2201,7 +2318,7 @@ static void test_single_step(int fd, struct drm_xe_engine_class_instance *hwe, i
 	struct xe_eudebug_session *s;
 	struct online_debug_data *data;
 
-	data = online_debug_data_create(hwe);
+	data = online_debug_data_create(fd, hwe, flags);
 	s = xe_eudebug_session_create(fd, run_online_client, flags, data);
 
 	xe_eudebug_debugger_add_trigger(s->debugger, DRM_XE_EUDEBUG_EVENT_OPEN,
@@ -2251,7 +2368,7 @@ static void test_debugger_reopen(int fd, struct drm_xe_engine_class_instance *hw
 	struct xe_eudebug_session *s;
 	struct online_debug_data *data;
 
-	data = online_debug_data_create(hwe);
+	data = online_debug_data_create(fd, hwe, flags);
 
 	s = xe_eudebug_session_create(fd, run_online_client, flags, data);
 
@@ -2302,7 +2419,7 @@ static void test_caching(int fd, struct drm_xe_engine_class_instance *hwe, int f
 	if (flags & SHADER_CACHING_VRAM || flags & BB_IN_VRAM || flags & TARGET_IN_VRAM)
 		igt_skip_on_f(!xe_has_vram(fd), "Device does not have VRAM.\n");
 
-	data = online_debug_data_create(hwe);
+	data = online_debug_data_create(fd, hwe, flags);
 	s = xe_eudebug_session_create(fd, run_online_client, flags, data);
 
 	xe_eudebug_debugger_add_trigger(s->debugger, DRM_XE_EUDEBUG_EVENT_OPEN,
@@ -2430,7 +2547,7 @@ static void test_many_sessions_on_tiles(int fd, bool multi_tile)
 	igt_require_f(n > 1, "Test requires at least two parallel compute engines!\n");
 
 	for (i = 0; i < n; i++) {
-		data[i] = online_debug_data_create(hwe[i]);
+		data[i] = online_debug_data_create(fd, hwe[i], flags);
 		s[i] = xe_eudebug_session_create(fd, run_online_client, flags, data[i]);
 
 		xe_eudebug_debugger_add_trigger(s[i]->debugger, DRM_XE_EUDEBUG_EVENT_EU_ATTENTION,
@@ -2497,7 +2614,7 @@ static void test_many_sessions_on_tiles(int fd, bool multi_tile)
 
 	for (i = 0; i < n; i++) {
 		xe_eudebug_client_wait_done(s[i]->client);
-		xe_eudebug_debugger_stop_worker(s[i]->debugger, 1);
+		xe_eudebug_debugger_stop_worker(s[i]->debugger);
 
 		xe_eudebug_event_log_print(s[i]->debugger->log, true);
 		online_session_check(s[i], flags);
@@ -2551,7 +2668,7 @@ static bool restore_preempt_timeout(int fd, uint16_t engine_class, uint32_t pree
 			igt_dynamic_f("%s%d", xe_engine_class_string(__hwe->engine_class), \
 				      hwe->engine_instance)
 
-igt_main
+int igt_main()
 {
 	struct drm_xe_engine_class_instance *hwe;
 	bool was_enabled;
@@ -2559,7 +2676,7 @@ igt_main
 	uint16_t engine_class = 0xFFFF;
 	uint32_t preempt_timeout = 0xFFFFFFFF;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_XE);
 		intel_allocator_multiprocess_start();
 		igt_srandom();
@@ -2601,7 +2718,7 @@ igt_main
 	test_gt_render_or_compute("interrupt-other-debuggable", fd, hwe)
 		test_interrupt_other(fd, hwe, SHADER_LOOP);
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		test_gt_render_or_compute("interrupt-other", fd, hwe) {
 			engine_class = hwe->engine_class;
 
@@ -2611,7 +2728,7 @@ igt_main
 			test_interrupt_other(fd, hwe, SHADER_LOOP | DISABLE_DEBUG_MODE);
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			if ((uint16_t)~engine_class && ~preempt_timeout)
 				if (!restore_preempt_timeout(fd, engine_class, preempt_timeout))
 					igt_warn("Cleanup of preempt_timeout failed!\n");
@@ -2678,8 +2795,14 @@ igt_main
 		test_pagefault_online(fd, hwe, SHADER_PAGEFAULT_READ);
 	test_gt_render_or_compute("pagefault-write", fd, hwe)
 		test_pagefault_online(fd, hwe, SHADER_PAGEFAULT_WRITE);
+	test_gt_render_or_compute("pagefault-read-stress", fd, hwe)
+		test_pagefault_online(fd, hwe, SHADER_PAGEFAULT_READ | PAGEFAULT_STRESS_TEST);
+	test_gt_render_or_compute("pagefault-write-stress", fd, hwe)
+		test_pagefault_online(fd, hwe, SHADER_PAGEFAULT_WRITE | PAGEFAULT_STRESS_TEST);
+	test_gt_render_or_compute("pagefault-one-of-many", fd, hwe)
+		test_pagefault_online(fd, hwe, SHADER_PAGEFAULT_ONE_OF_MANY);
 
-	igt_fixture {
+	igt_fixture() {
 		xe_eudebug_enable(fd, was_enabled);
 
 		intel_allocator_multiprocess_stop();

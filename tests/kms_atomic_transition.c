@@ -899,6 +899,7 @@ static void run_modeset_tests(data_t *data, int howmany, bool nonblocking, bool 
 	unsigned iter_max;
 	igt_output_t *output;
 	uint16_t width = 0, height = 0;
+	enum pipe pipe_enum;
 
 retry:
 	unset_output_pipe(&data->display);
@@ -1033,6 +1034,18 @@ retry:
 			}
 		}
 	}
+
+	/* Cleanup */
+	unset_output_pipe(&data->display);
+	igt_display_commit2(&data->display, COMMIT_ATOMIC);
+
+	if (is_intel_device(data->drm_fd)) {
+		for_each_pipe(&data->display, pipe_enum)
+			igt_pipe_crc_free(data->pipe_crcs[pipe_enum]);
+	}
+
+	igt_remove_fb(data->drm_fd, &data->fbs[0]);
+	igt_remove_fb(data->drm_fd, &data->fbs[1]);
 }
 
 static void run_modeset_transition(data_t *data, int requested_outputs, bool nonblocking, bool fencing)
@@ -1067,18 +1080,6 @@ static void run_modeset_transition(data_t *data, int requested_outputs, bool non
 
 	igt_dynamic_f("%ix-outputs", requested_outputs)
 		run_modeset_tests(data, requested_outputs, nonblocking, fencing);
-
-	/* Cleanup */
-	unset_output_pipe(&data->display);
-	igt_display_commit2(&data->display, COMMIT_ATOMIC);
-
-	if (is_intel_device(data->drm_fd)) {
-		for_each_pipe(&data->display, pipe)
-			igt_pipe_crc_free(data->pipe_crcs[pipe]);
-	}
-
-	igt_remove_fb(data->drm_fd, &data->fbs[0]);
-	igt_remove_fb(data->drm_fd, &data->fbs[1]);
 }
 
 static bool pipe_output_combo_valid(igt_display_t *display,
@@ -1119,7 +1120,7 @@ static const char help_str[] =
 
 static data_t data;
 
-igt_main_args("", long_opts, help_str, opt_handler, &data)
+int igt_main_args("", long_opts, help_str, opt_handler, &data)
 {
 	igt_output_t *output;
 	enum pipe pipe;
@@ -1173,7 +1174,7 @@ igt_main_args("", long_opts, help_str, opt_handler, &data)
 	int i, j, count = 0;
 	int pipe_count = 0;
 
-	igt_fixture {
+	igt_fixture() {
 		unsigned int debug_mask_if_ci = DRM_UT_KMS;
 		data.drm_fd = drm_open_driver_master(DRIVER_ANY);
 
@@ -1266,7 +1267,7 @@ igt_main_args("", long_opts, help_str, opt_handler, &data)
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		igt_display_fini(&data.display);
 		drm_close_driver(data.drm_fd);
 	}

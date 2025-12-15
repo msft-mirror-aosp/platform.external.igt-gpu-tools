@@ -383,7 +383,7 @@ static void create_execqueues(int fd, enum exec_queue_destroy ed,
  *              buffer sizes.
  *
  * SUBTEST: multigpu-create-massive-size
- * Sub-category: MultiGPU
+ * Mega feature: MultiGPU
  * Functionality: ioctl
  * Test category: functionality test
  * Feature: multigpu
@@ -527,11 +527,11 @@ const char *help_str =
 	"  -p\tpercent of available resource\n"
 	;
 
-igt_main_args("Q:p:", NULL, help_str, opt_handler, NULL)
+int igt_main_args("Q:p:", NULL, help_str, opt_handler, NULL)
 {
 	int xe;
 
-	igt_fixture
+	igt_fixture()
 		xe = drm_open_driver(DRIVER_XE);
 
 	igt_subtest("valid-flag")
@@ -613,6 +613,6 @@ igt_main_args("Q:p:", NULL, help_str, opt_handler, NULL)
 		igt_waitchildren();
 	}
 
-	igt_fixture
+	igt_fixture()
 		drm_close_driver(xe);
 }

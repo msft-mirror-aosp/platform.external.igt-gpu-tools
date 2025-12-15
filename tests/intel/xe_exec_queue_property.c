@@ -172,6 +172,7 @@ static void basic_get_property(int xe)
 static void invalid_property(int xe)
 {
 	uint32_t valid_property = DRM_XE_EXEC_QUEUE_SET_PROPERTY_PRIORITY;
+	uint32_t invalid_property = 32;	/* Picking some high value */
 	struct drm_xe_engine_class_instance instance = {
 			.engine_class = DRM_XE_ENGINE_CLASS_VM_BIND,
 	};
@@ -187,13 +188,10 @@ static void invalid_property(int xe)
 	igt_assert_eq(__xe_exec_queue_create(xe, vm, 1, 1, &instance,
 					     to_user_pointer(&ext), &exec_queue_id), 0);
 
-	/* This will fail as soon as a new property is introduced. It is
-	 * expected and the test will have to be updated. */
-	for (int i = 3; i < 16; i++ ) {
-		ext.property = i;
-		igt_assert_eq(__xe_exec_queue_create(xe, vm, 1, 1, &instance,
-						     to_user_pointer(&ext), &exec_queue_id), -EINVAL);
-	}
+	/* Invalid property should fail */
+	ext.property = invalid_property;
+	igt_assert_eq(__xe_exec_queue_create(xe, vm, 1, 1, &instance,
+					     to_user_pointer(&ext), &exec_queue_id), -EINVAL);
 
 	/* Correct value should still pass */
 	ext.property = valid_property;
@@ -201,7 +199,7 @@ static void invalid_property(int xe)
 					     to_user_pointer(&ext), &exec_queue_id), 0);
 }
 
-igt_main
+int igt_main()
 {
 	static const struct {
 		const char *name;
@@ -215,7 +213,7 @@ igt_main
 	int xe;
 	int gt;
 
-	igt_fixture {
+	igt_fixture() {
 		xe = drm_open_driver(DRIVER_XE);
 	}
 
@@ -239,8 +237,8 @@ igt_main
 		igt_waitchildren();
 	}
 
-	igt_subtest_group {
-		igt_fixture {
+	igt_subtest_group() {
+		igt_fixture() {
 			int sys_fd = igt_sysfs_open(xe);
 
 			if (sys_fd != -1) {
@@ -285,7 +283,7 @@ igt_main
 	igt_subtest("invalid-property")
 		invalid_property(xe);
 
-	igt_fixture {
+	igt_fixture() {
 		xe_device_put(xe);
 		drm_close_driver(xe);
 	}

@@ -678,6 +678,7 @@ static void test_smem_oom(int i915,
 	const unsigned int num_alloc = 1 + smem_size / (alloc >> 20);
 	struct igt_helper_process smem_proc = {};
 	unsigned int n;
+	int lmem_err;
 
 	lmem_done = mmap(0, sizeof(*lmem_done), PROT_WRITE,
 			 MAP_SHARED | MAP_ANON, -1, 0);
@@ -703,8 +704,8 @@ static void test_smem_oom(int i915,
 	}
 
 	/* smem memory hog process, respawn till the lmem process completes */
-	while (!READ_ONCE(*lmem_done)) {
-		igt_fork_helper(&smem_proc) {
+	igt_fork_helper(&smem_proc) {
+		while (!READ_ONCE(*lmem_done)) {
 			igt_fork(child, 1) {
 				for (int pass = 0; pass < num_alloc; pass++) {
 					if (READ_ONCE(*lmem_done))
@@ -730,11 +731,19 @@ static void test_smem_oom(int i915,
 			for (n = 0; n < 2; n++)
 				wait(NULL);
 		}
-		igt_wait_helper(&smem_proc);
 	}
+
+	/* Reap exit status of the lmem process but don't fail before cleanup */
+	lmem_err = __igt_waitchildren();
+
+	/* Make sure SMEM helpers stop even when the LMEM process gets killed */
+	if (lmem_err)
+		(*lmem_done)++;
 	munmap(lmem_done, sizeof(*lmem_done));
-	/* Reap exit status of the lmem process */
-	igt_waitchildren();
+
+	igt_wait_helper(&smem_proc);
+
+	igt_assert_eq(lmem_err, 0);
 }
 
 #define dynamic_lmem_subtest(reg, regs, subtest_name...) \
@@ -765,7 +774,7 @@ struct option long_options[] = {
 	{ 0, 0, 0, 0 }
 };
 
-igt_main_args("", long_options, help_str, opt_handler, NULL)
+int igt_main_args("", long_options, help_str, opt_handler, NULL)
 {
 	struct drm_i915_query_memory_regions *regions;
 	struct drm_i915_memory_region_info *region;
@@ -798,7 +807,7 @@ igt_main_args("", long_options, help_str, opt_handler, NULL)
 	const intel_ctx_t *ctx;
 	int i915 = -1;
 
-	igt_fixture {
+	igt_fixture() {
 		struct intel_execution_engine2 *e;
 		char *tmp;
 
@@ -855,7 +864,7 @@ igt_main_args("", long_options, help_str, opt_handler, NULL)
 	dynamic_lmem_subtest(region, regions, "smem-oom")
 		test_smem_oom(i915, ctx, region);
 
-	igt_fixture {
+	igt_fixture() {
 		intel_allocator_multiprocess_stop();
 		intel_ctx_destroy(i915, ctx);
 		free(regions);

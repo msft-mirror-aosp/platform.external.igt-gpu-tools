@@ -117,10 +117,10 @@ static void test_panic(void)
 	system("echo c > /proc/sysrq-trigger");
 }
 
-igt_main
+int igt_main()
 {
 
-	igt_fixture {
+	igt_fixture() {
 		igt_skip_on_f(!getenv("IGT_CI_META_TEST"),
 			      "Only for meta-testing of CI systems");
 	}

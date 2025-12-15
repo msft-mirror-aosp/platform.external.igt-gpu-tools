@@ -1464,13 +1464,13 @@ static void safe_alignment(int i915)
 	igt_subtest_with_dynamic(T) for_each_ctx_engine(i915, ctx, e) \
 		igt_dynamic_f("%s", e->name)
 
-igt_main
+int igt_main()
 {
 	const struct intel_execution_engine2 *e;
 	int fd = -1;
 	const intel_ctx_t *ctx;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver_master(DRIVER_INTEL);
 		igt_require_gem(fd);
 		gem_require_blitter(fd);
@@ -1484,10 +1484,10 @@ igt_main
 	igt_subtest("invalid")
 		test_invalid(fd);
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		/* Under full-ppgtt, we have complete control of the GTT */
 
-		igt_fixture {
+		igt_fixture() {
 			igt_require(gem_uses_full_ppgtt(fd));
 		}
 
@@ -1553,8 +1553,8 @@ igt_main
 		}
 	}
 
-	igt_subtest_group {
-		igt_fixture {
+	igt_subtest_group() {
+		igt_fixture() {
 			igt_require(gem_uses_full_ppgtt(fd));
 			intel_allocator_multiprocess_start();
 		}
@@ -1567,7 +1567,7 @@ igt_main
 		test_each_engine("allocator-evict", fd, ctx, e)
 			test_allocator_evict(fd, ctx, e->flags, 20);
 
-		igt_fixture {
+		igt_fixture() {
 			intel_allocator_multiprocess_stop();
 		}
 	}
@@ -1618,7 +1618,7 @@ igt_main
 	igt_subtest("evict-hang")
 		test_evict_hang(fd);
 
-	igt_fixture {
+	igt_fixture() {
 		intel_ctx_destroy(fd, ctx);
 		drm_close_driver(fd);
 	}

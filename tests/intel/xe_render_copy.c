@@ -458,6 +458,7 @@ static void mem_copy_busy(int fd, struct drm_xe_engine_class_instance *hwe, uint
 	int32_t src_handle, dst_handle;
 	struct blt_mem_object src, dst;
 	struct xe_spin_mem_copy mem_copy = {
+		.fd = fd,
 		.src = &src,
 		.dst = &dst,
 	};
@@ -677,7 +678,7 @@ const char *help_str =
 	;
 
 
-igt_main_args("dpiW:H:", NULL, help_str, opt_handler, NULL)
+int igt_main_args("dpiW:H:", NULL, help_str, opt_handler, NULL)
 {
 	int xe;
 	struct buf_ops *bops;
@@ -695,7 +696,7 @@ igt_main_args("dpiW:H:", NULL, help_str, opt_handler, NULL)
 		{ NULL },
 	};
 
-	igt_fixture {
+	igt_fixture() {
 		xe = drm_open_driver(DRIVER_XE);
 
 		/* As some cards don't have render, we should skip these. */
@@ -729,7 +730,7 @@ igt_main_args("dpiW:H:", NULL, help_str, opt_handler, NULL)
 			render_stress_copy(xe, set, s->nparallel_copies_per_engine);
 		}
 
-	igt_fixture {
+	igt_fixture() {
 		buf_ops_destroy(bops);
 		drm_close_driver(xe);
 	}

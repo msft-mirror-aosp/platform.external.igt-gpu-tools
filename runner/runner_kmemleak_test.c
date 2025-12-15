@@ -213,14 +213,14 @@ const char *kmemleak_file_example =
 
 static const char *runner_kmemleak_unit_testing_resdir = "/tmp";
 
-igt_main
+int igt_main()
 {
 	char unit_testing_kmemleak_filepath[256] = "/tmp/runner_kmemleak_test_XXXXXX";
 	int written_bytes;
 	int resdirfd;
 	int fd;
 
-	igt_fixture {
+	igt_fixture() {
 		/* resdirfd is used by runner_kmemleak() to store results */
 		igt_assert(resdirfd = open(runner_kmemleak_unit_testing_resdir,
 					   O_DIRECTORY | O_RDONLY));
@@ -246,7 +246,7 @@ igt_main
 		igt_assert(runner_kmemleak_init(unit_testing_kmemleak_filepath));
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_subtest("test_runner_kmemleak_once")
 			igt_assert(runner_kmemleak(NULL, resdirfd, false, true));
 
@@ -258,10 +258,10 @@ igt_main
 			igt_assert(runner_kmemleak("test_name_3", resdirfd,
 						   true, false));
 		}
-		igt_fixture {
+		igt_fixture() {
 			close(resdirfd);
 		}
 	}
-	igt_fixture
+	igt_fixture()
 		unlinkat(resdirfd, KMEMLEAK_RESFILENAME, 0);
 }

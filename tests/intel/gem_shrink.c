@@ -513,7 +513,7 @@ static void reclaim(unsigned engine, int timeout)
 	drm_close_driver(fd);
 }
 
-igt_main
+int igt_main()
 {
 	const struct test {
 		const char *name;
@@ -545,7 +545,7 @@ igt_main
 	uint64_t alloc_size = 0;
 	int num_processes = 0;
 
-	igt_fixture {
+	igt_fixture() {
 		const int ncpus = sysconf(_SC_NPROCESSORS_ONLN);
 		uint64_t mem_size = igt_get_total_ram_mb();
 		int fd;

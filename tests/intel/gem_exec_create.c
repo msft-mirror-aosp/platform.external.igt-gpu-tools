@@ -176,7 +176,7 @@ static void all(int fd, unsigned flags, int timeout, int ncpus, uint32_t region)
 	intel_ctx_destroy(fd, ctx);
 }
 
-igt_main
+int igt_main()
 {
 	const int ncpus = sysconf(_SC_NPROCESSORS_ONLN);
 	struct drm_i915_query_memory_regions *query_info;
@@ -184,7 +184,7 @@ igt_main
 	uint32_t region;
 	int device = -1;
 
-	igt_fixture {
+	igt_fixture() {
 		device = drm_open_driver(DRIVER_INTEL);
 		igt_require_gem(device);
 
@@ -251,7 +251,7 @@ igt_main
 			free(sub_name);
 		}
 
-	igt_fixture {
+	igt_fixture() {
 		igt_stop_hang_detector();
 		drm_close_driver(device);
 	}

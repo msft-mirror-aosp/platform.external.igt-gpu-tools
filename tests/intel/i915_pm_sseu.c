@@ -387,9 +387,9 @@ exit_handler(int sig)
 	gem_deinit();
 }
 
-igt_main
+int igt_main()
 {
-	igt_fixture {
+	igt_fixture() {
 		igt_install_exit_handler(exit_handler);
 
 		gem_init();

@@ -700,14 +700,14 @@ static int opt_handler(int option, int option_index, void *data)
 	return IGT_OPT_HANDLER_SUCCESS;
 }
 
-igt_main_args("", long_options, help_str, opt_handler, NULL)
+int igt_main_args("", long_options, help_str, opt_handler, NULL)
 {
 	data_t data;
 
 	igt_skip_on_simulation();
 	memset(&data, 0, sizeof(data));
 
-	igt_fixture
+	igt_fixture()
 	{
 		data.fd = drm_open_driver_master(DRIVER_AMDGPU);
 		if (data.fd == -1) igt_skip("Not an amdgpu driver.\n");
@@ -757,7 +757,7 @@ igt_main_args("", long_options, help_str, opt_handler, NULL)
 		     "and to validate PSR SU disable/re-enable w/ primary scaling ratio 0.75");
 	igt_subtest("psr_su_mpo_scaling_0_75") run_check_psr_su_mpo(&data, true, .75);
 
-	igt_fixture
+	igt_fixture()
 	{
 		if (opt.visual_confirm) {
 			igt_require_f(igt_amd_set_visual_confirm(data.fd, VISUAL_CONFIRM_DISABLE),

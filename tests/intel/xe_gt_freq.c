@@ -393,7 +393,7 @@ static void test_spin(int fd, struct drm_xe_engine_class_instance *eci, bool fix
 	xe_vm_destroy(fd, vm);
 }
 
-igt_main
+int igt_main()
 {
 	int fd;
 	int gt;
@@ -401,7 +401,7 @@ igt_main
 	uint32_t *stash_min, *stash_max;
 	int max_gt;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_XE);
 
 		igt_require(xe_sysfs_gt_has_node(fd, 0, "freq0"));
@@ -487,7 +487,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		xe_for_each_gt(fd, gt) {
 			xe_gt_set_freq(fd, gt, "max", stash_max[gt]);
 			xe_gt_set_freq(fd, gt, "min", stash_min[gt]);

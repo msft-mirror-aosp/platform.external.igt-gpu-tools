@@ -514,11 +514,11 @@ out:
 	gem_context_destroy(fd, arg.ctx_id);
 }
 
-igt_main
+int igt_main()
 {
 	int fd;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_INTEL);
 		igt_require_gem(fd);
 
@@ -528,8 +528,8 @@ igt_main
 		igt_require(kernel_has_per_context_sseu_support(fd));
 	}
 
-	igt_subtest_group {
-		igt_fixture {
+	igt_subtest_group() {
+		igt_fixture() {
 			drm_i915_getparam_t gp;
 
 			gp.param = I915_PARAM_SLICE_MASK;
@@ -561,7 +561,7 @@ igt_main
 			test_engines(fd);
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		drm_close_driver(fd);
 	}
 }

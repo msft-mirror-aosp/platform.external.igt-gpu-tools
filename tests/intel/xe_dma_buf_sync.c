@@ -226,12 +226,12 @@ test_export_dma_buf(struct drm_xe_engine_class_instance *hwe0,
 		drm_close_driver(fd[i]);
 }
 
-igt_main
+int igt_main()
 {
 	struct drm_xe_engine_class_instance *hwe, *hwe0 = NULL, *hwe1;
 	int fd;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_XE);
 
 		xe_for_each_engine(fd, hwe)
@@ -267,6 +267,6 @@ igt_main
 	igt_subtest("export-dma-buf-many-write-read-sync")
 		test_export_dma_buf(hwe0, hwe1, 16, WRITE_READ_SYNC);
 
-	igt_fixture
+	igt_fixture()
 		drm_close_driver(fd);
 }

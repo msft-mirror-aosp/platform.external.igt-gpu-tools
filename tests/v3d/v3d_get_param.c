@@ -26,11 +26,11 @@
 
 IGT_TEST_DESCRIPTION("Tests for the V3D's get params IOCTL");
 
-igt_main
+int igt_main()
 {
 	int fd;
 
-	igt_fixture
+	igt_fixture()
 		fd = drm_open_driver(DRIVER_V3D);
 
 	igt_describe("Sanity check for getting existent params.");
@@ -68,6 +68,6 @@ igt_main
 		do_ioctl_err(fd, DRM_IOCTL_V3D_GET_PARAM, &get, EINVAL);
 	}
 
-	igt_fixture
+	igt_fixture()
 		drm_close_driver(fd);
 }

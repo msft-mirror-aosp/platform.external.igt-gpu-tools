@@ -161,7 +161,7 @@ static void cleanup_crtc(gpu_process_t *gpu)
 
 	igt_plane_set_fb(gpu->primary, NULL);
 
-	igt_output_set_pipe(output, PIPE_ANY);
+	igt_output_set_pipe(output, PIPE_NONE);
 	igt_display_commit(display);
 
 	igt_remove_fb(gpu->drm_fd, &gpu->fb);
@@ -257,11 +257,11 @@ check_for_dma_buf_mmap(int fd)
 	return ret;
 }
 
-igt_main
+int igt_main()
 {
 	gpu_process_t gpu;
 
-	igt_fixture {
+	igt_fixture() {
 		gpu.drm_fd = drm_open_driver_master(DRIVER_INTEL);
 		igt_skip_on((check_for_dma_buf_mmap(gpu.drm_fd) != 0));
 		kmstest_set_vt_graphics_mode();
@@ -274,7 +274,7 @@ igt_main
 	igt_subtest("buffer-sharing")
 		run_test(&gpu);
 
-	igt_fixture {
+	igt_fixture() {
 		igt_display_fini(&gpu.display);
 		drm_close_driver(gpu.drm_fd);
 	}

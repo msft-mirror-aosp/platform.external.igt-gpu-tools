@@ -988,12 +988,12 @@ ras_tests_cleanup(struct amd_ras_setup *setup)
 	}
 }
 
-igt_main
+int igt_main()
 {
 	struct amd_ras_setup setup = {};
 	bool render_mode = true;
 
-	igt_fixture {
+	igt_fixture() {
 
 		igt_skip_on(!amdgpu_open_devices(render_mode, MAX_CARDS_SUPPORTED,
 				setup.drm_amdgpu));
@@ -1035,7 +1035,7 @@ igt_main
 			amdgpu_ras_enable_test(&setup);
 		}
 	}
-	igt_fixture {
+	igt_fixture() {
 		ras_tests_cleanup(&setup);
 	}
 }

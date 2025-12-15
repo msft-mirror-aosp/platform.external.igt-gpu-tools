@@ -328,14 +328,14 @@ static const char *modifier_str(int modifier_index)
 	}
 }
 
-igt_main
+int igt_main()
 {
 	enum igt_draw_method method;
 	int format_idx, modifier_idx;
 	uint64_t modifier;
 	bool found_supported_format = false;
 
-	igt_fixture
+	igt_fixture()
 		setup_environment();
 
 	for (method = 0; method < IGT_DRAW_METHOD_COUNT; method++) {
@@ -378,6 +378,6 @@ igt_main
 	igt_subtest("fill-fb")
 		fill_fb_subtest();
 
-	igt_fixture
+	igt_fixture()
 		teardown_environment();
 }

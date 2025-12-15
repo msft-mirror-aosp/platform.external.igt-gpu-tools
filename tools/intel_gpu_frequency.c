@@ -1,5 +1,5 @@
 /*
- * Copyright © 2015,2018 Intel Corporation
+ * Copyright © 2015,2018,2025 Intel Corporation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -22,6 +22,8 @@
  */
 
 #include <assert.h>
+#include <dirent.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <stdio.h>
 #include <time.h>
@@ -49,6 +51,7 @@ struct freq_info {
 	const char *mode;
 	FILE *filp;
 	char *path;
+	bool write;
 };
 
 static struct freq_info info[] = {
@@ -75,16 +78,147 @@ get_sysfs_path(const char *which)
 	return path;
 }
 
+/* Returns:
+ * 1 if Intel card was bound by i915 driver
+ * 0 otherwise
+ * -errno on error
+ */
+static int
+is_intel_card(int card)
+{
+	static const char fmt[] = "/sys/class/drm/card%d/device/driver/module/drivers";
+	char path[PATH_MAX];
+	struct dirent *entry;
+	int dirfd;
+	DIR *dirp;
+	int found = 0;
+
+	if (card < 0)
+		return -1;
+
+	sprintf(path, fmt, card);
+
+	dirfd = open(path, O_RDONLY | O_DIRECTORY);
+	if (dirfd < 0)
+		return -errno;
+
+	dirp = fdopendir(dirfd);
+	if (!dirp) {
+		int err = errno;
+
+		close(dirfd);
+		return -err;
+	}
+
+	while ((entry = readdir(dirp))) {
+		if (strcmp(entry->d_name, ".") == 0 ||
+		    strcmp(entry->d_name, "..") == 0)
+			continue;
+
+		if (strncmp(entry->d_name, "pci:", 4))
+			continue;
+
+		if (!strcmp(entry->d_name, "pci:i915")) {
+			found = 1;
+			break;
+		}
+	}
+
+	closedir(dirp);
+
+	return found;
+}
+
+static void __attribute__((noreturn))
+exit_error(const char *msg, int err)
+{
+	if (msg)
+		fprintf(stderr, "%s\n", msg);
+
+	if (err > 0)
+		fprintf(stderr, "Error: %d %s\n", err, strerror(err));
+
+	exit(EXIT_FAILURE);
+}
+
+static int
+get_intel_card(void)
+{
+	struct dirent *entry;
+	int intel_card = -1;
+	int dirfd, err;
+	DIR *dirp;
+
+	dirfd = open("/dev/dri/", O_RDONLY | O_DIRECTORY);
+	if (dirfd < 0)
+		exit_error("Cannot open /dev/dri/", errno);
+
+	dirp = fdopendir(dirfd);
+	if (!dirp) {
+		err = errno;
+		close(dirfd);
+		exit_error("Cannot open directory /dev/dri/", err);
+	}
+
+	while ((entry = readdir(dirp))) {
+		int num;
+
+		if (strcmp(entry->d_name, ".") == 0 ||
+		    strcmp(entry->d_name, "..") == 0)
+			continue;
+
+		if (entry->d_type == DT_DIR)
+			continue;
+
+		if (strncmp(entry->d_name, "card", 4))
+			continue;
+
+		if (sscanf(entry->d_name, "card%d", &num) != 1)
+			exit_error("Cannot parse card ID as integer", 0);
+
+		if (is_intel_card(num) > 0) {
+			intel_card = num;
+			break;
+		}
+	}
+
+	closedir(dirp);
+
+	return intel_card;
+}
+
 static void
-initialize_freq_info(struct freq_info *freq_info)
+initialize_read_info(struct freq_info *freq_info)
 {
 	if (freq_info->filp)
 		return;
 
 	freq_info->path = get_sysfs_path(freq_info->name);
 	assert(freq_info->path);
-	freq_info->filp = fopen(freq_info->path, freq_info->mode);
+	freq_info->filp = fopen(freq_info->path, "r");
 	assert(freq_info->filp);
+}
+
+static void
+initialize_write_info(struct freq_info *freq_info)
+{
+	if (freq_info->write)
+		return;
+
+	if (freq_info->filp)
+		fclose(freq_info->filp);
+	else
+		freq_info->path = get_sysfs_path(freq_info->name);
+
+	assert(freq_info->path);
+	freq_info->filp = fopen(freq_info->path, freq_info->mode);
+	if (!(freq_info->filp)) {
+		fprintf(stderr, "Cannot open file %s for write mode %s\nerror %d %s\n",
+			freq_info->path, freq_info->mode, errno, strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+
+	freq_info->write = true;
 }
 
 static void wait_freq_settle(void)
@@ -99,7 +233,7 @@ static void wait_freq_settle(void)
 
 static void set_frequency(struct freq_info *freq_info, int val)
 {
-	initialize_freq_info(freq_info);
+	initialize_write_info(freq_info);
 	rewind(freq_info->filp);
 	assert(fprintf(freq_info->filp, "%d", val) > 0);
 
@@ -110,18 +244,28 @@ static int get_frequency(struct freq_info *freq_info)
 {
 	int val;
 
-	initialize_freq_info(freq_info);
+	initialize_read_info(freq_info);
 	rewind(freq_info->filp);
 	assert(fscanf(freq_info->filp, "%d", &val)==1);
 
 	return val;
 }
 
-static void __attribute__((noreturn))
-usage(const char *prog)
+static const char *
+get_shortname(const char *prog)
 {
-	printf("%s A program to manipulate Intel GPU frequencies.\n\n", prog);
-	printf("Usage: %s [-e] [--min | --max] [--get] [--set frequency_mhz]\n\n", prog);
+	const char *slash = strrchr(prog, '/');
+
+	return slash ? slash + 1 : prog;
+}
+
+static void __attribute__((noreturn))
+usage(const char *prog, int err)
+{
+	const char *shortname = get_shortname(prog);
+
+	printf("%s A program to manipulate Intel GPU frequencies.\n\n", shortname);
+	printf("Usage: %s [-e] [--min | --max] [--get] [--set frequency_mhz]\n\n", shortname);
 	printf("Options: \n");
 	printf("  -e		Lock frequency to the most efficient frequency\n");
 	printf("  -g, --get     Get all the frequency settings\n");
@@ -139,14 +283,39 @@ usage(const char *prog)
 	printf("   intel_gpu_frequency --custom max=750\tSet the max frequency to 750MHz\n");
 	printf("\n");
 	printf("Report bugs to https://gitlab.freedesktop.org/drm/igt-gpu-tools/-/issues\n");
-	exit(EXIT_FAILURE);
+	exit(err);
 }
 
 static void
 version(const char *prog)
 {
-	printf("%s: %s\n", prog, VERSION);
-	printf("Copyright © 2015,2018 Intel Corporation\n");
+	printf("%s: %s\n", get_shortname(prog), VERSION);
+	printf("Copyright © 2015,2018,2025 Intel Corporation\n");
+}
+
+static void
+parse_version_or_help(int argc, char *argv[])
+{
+	char *s;
+	int c;
+
+	if (argc == 1) /* No args */
+		return;
+
+	s = argv[1];
+	c = *s++;
+	if (c == '-')
+		c = *s++;
+	if (c == '-')
+		c = *s++;
+
+	if (c == 'v') {
+		version(argv[0]);
+		exit(EXIT_SUCCESS);
+	}
+
+	if (c == 'h')
+		usage(argv[0], EXIT_SUCCESS);
 }
 
 /* Returns read or write operation */
@@ -192,7 +361,7 @@ parse(int argc, char *argv[], bool *act_upon, size_t act_upon_n, int *new_freq)
 			break;
 		case 's':
 			if (!optarg)
-				usage(argv[0]);
+				usage(argv[0], EXIT_FAILURE);
 
 			if (write == true) {
 				fprintf(stderr, "Only one write may be specified at a time\n");
@@ -207,7 +376,7 @@ parse(int argc, char *argv[], bool *act_upon, size_t act_upon_n, int *new_freq)
 			break;
 		case 'c':
 			if (!optarg)
-				usage(argv[0]);
+				usage(argv[0], EXIT_FAILURE);
 
 			if (write == true) {
 				fprintf(stderr, "Only one write may be specified at a time\n");
@@ -264,12 +433,9 @@ parse(int argc, char *argv[], bool *act_upon, size_t act_upon_n, int *new_freq)
 			act_upon[MAX] = true;
 			write = true;
 			break;
-		case 'v':
-			version(argv[0]);
-			exit(0);
-		case 'h':
 		default:
-			usage(argv[0]);
+			fprintf(stderr, "Error: unknown option\n");
+			usage(argv[0], EXIT_FAILURE);
 		}
 	}
 
@@ -283,10 +449,17 @@ int main(int argc, char *argv[])
 	bool write, fail, targets[MAX+1] = {false};
 	int i, fd, try = 1, set_freq[MAX+1] = {0};
 
+	parse_version_or_help(argc, argv);
+
+	device = get_intel_card();
+	if (device < 0)
+		exit_error("No Intel card found in /dev/dri\n", 0);
+
 	fd = __drm_open_driver(DRIVER_INTEL);
-	devid = intel_get_drm_devid(fd);
-	device = igt_device_get_card_index(fd);
-	close(fd);
+	if (fd >= 0) {
+		devid = intel_get_drm_devid(fd);
+		close(fd);
+	}
 
 	write = parse(argc, argv, targets, ARRAY_SIZE(targets), set_freq);
 	fail = write;

@@ -686,7 +686,7 @@ has_queues(int fd)
 	return gem_has_vm(fd) && gem_context_has_single_timeline(fd);
 }
 
-igt_main
+int igt_main()
 {
 	const int ncpus = sysconf(_SC_NPROCESSORS_ONLN);
 	const struct intel_execution_engine2 *e2;
@@ -707,7 +707,7 @@ igt_main
 	uint32_t light = 0, heavy;
 	int fd = -1;
 
-	igt_fixture {
+	igt_fixture() {
 		const uint32_t bbe = MI_BATCH_BUFFER_END;
 
 		fd = drm_open_driver(DRIVER_INTEL);
@@ -737,8 +737,8 @@ igt_main
 		e2 = &e2__;
 
 		for (typeof(*phases) *p = phases; p->name; p++) {
-			igt_subtest_group {
-				igt_fixture {
+			igt_subtest_group() {
+				igt_fixture() {
 					gem_require_ring(fd, e2->flags);
 					if (p->require)
 						igt_require(p->require(fd));
@@ -766,8 +766,8 @@ igt_main
 	/* Must come after legacy subtests. */
 	for_each_ctx_cfg_engine(fd, &engines_cfg, e2) {
 		for (typeof(*phases) *p = phases; p->name; p++) {
-			igt_subtest_group {
-				igt_fixture {
+			igt_subtest_group() {
+				igt_fixture() {
 					if (p->require)
 						igt_require(p->require(fd));
 				}
@@ -794,8 +794,8 @@ igt_main
 	igt_subtest("all-heavy")
 		all(fd, heavy, &engines_cfg, 0, 2);
 
-	igt_subtest_group {
-		igt_fixture {
+	igt_subtest_group() {
+		igt_fixture() {
 			gem_require_vm(fd);
 		}
 		igt_subtest("queue-light")
@@ -804,7 +804,7 @@ igt_main
 			all(fd, heavy, &engines_cfg, QUEUE, 2);
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		igt_stop_hang_detector();
 		gem_close(fd, heavy);
 		gem_close(fd, light);
