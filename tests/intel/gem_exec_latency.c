@@ -928,13 +928,13 @@ static double clockrate(int i915, int reg)
 		for_each_if(gem_class_can_store_dword(i915, (e)->class)) \
 			igt_dynamic_f("%s", (e)->name)
 
-igt_main
+int igt_main()
 {
 	const struct intel_execution_engine2 *e;
 	const intel_ctx_t *ctx;
 	int device = -1;
 
-	igt_fixture {
+	igt_fixture() {
 		device = drm_open_driver(DRIVER_INTEL);
 		igt_require_gem(device);
 		gem_require_mmap_wc(device);
@@ -956,8 +956,8 @@ igt_main
 		rcs_clock = 1e9 / rcs_clock;
 	}
 
-	igt_subtest_group {
-		igt_fixture
+	igt_subtest_group() {
+		igt_fixture()
 			igt_require(intel_gen(intel_get_drm_devid(device)) >= 7);
 
 		test_each_engine("rthog-submit", device, ctx, e)
@@ -986,8 +986,8 @@ igt_main
 		test_each_engine("wakeup-latency", device, ctx, e)
 			wakeup_latency(device, ctx, e);
 
-		igt_subtest_group {
-			igt_fixture {
+		igt_subtest_group() {
+			igt_fixture() {
 				gem_require_contexts(device);
 				igt_require(gem_scheduler_has_preemption(device));
 			}
@@ -1001,7 +1001,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		intel_register_access_fini(&mmio_data);
 		intel_ctx_destroy(device, ctx);
 		drm_close_driver(device);

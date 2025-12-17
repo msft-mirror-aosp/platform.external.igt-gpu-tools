@@ -878,9 +878,9 @@ static void test_sync_random_merge(void)
 		close(timeline_arr[i]);
 }
 
-igt_main
+int igt_main()
 {
-	igt_fixture {
+	igt_fixture() {
 		igt_require_sw_sync();
 		multi_consumer_threads =
 			min_t(multi_consumer_threads,

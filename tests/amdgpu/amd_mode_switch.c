@@ -176,7 +176,7 @@ static void run_mode_switch_first_last(data_t *data, int num_pipes)
 }
 
 IGT_TEST_DESCRIPTION("Test switching between supported modes");
-igt_main
+int igt_main()
 {
 	data_t data;
 	int i = 0;
@@ -185,7 +185,7 @@ igt_main
 
 	memset(&data, 0, sizeof(data));
 
-	igt_fixture
+	igt_fixture()
 	{
 		data.fd = drm_open_driver_master(DRIVER_AMDGPU);
 
@@ -203,7 +203,7 @@ igt_main
 			run_mode_switch_first_last(&data, i + 1);
 	}
 
-	igt_fixture
+	igt_fixture()
 	{
 		igt_display_fini(&data.display);
 	}

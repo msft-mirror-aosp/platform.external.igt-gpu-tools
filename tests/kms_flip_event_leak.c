@@ -97,19 +97,19 @@ static void test(data_t *data, enum pipe pipe, igt_output_t *output)
 	igt_device_set_master(data->drm_fd);
 
 	igt_plane_set_fb(primary, NULL);
-	igt_output_set_pipe(output, PIPE_ANY);
+	igt_output_set_pipe(output, PIPE_NONE);
 	igt_display_commit(&data->display);
 
 	igt_remove_fb(data->drm_fd, &fb[0]);
 }
 
-igt_main
+int igt_main()
 {
 	data_t data = {};
 	igt_output_t *output;
 	enum pipe pipe;
 
-	igt_fixture {
+	igt_fixture() {
 		data.drm_fd = drm_open_driver_master(DRIVER_ANY);
 		kmstest_set_vt_graphics_mode();
 
@@ -131,7 +131,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		igt_display_fini(&data.display);
 		drm_close_driver(data.drm_fd);
 	}

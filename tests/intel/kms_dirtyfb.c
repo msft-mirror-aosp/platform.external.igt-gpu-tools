@@ -350,11 +350,11 @@ static void run_test(data_t *data)
 	intel_buf_destroy(dst);
 }
 
-igt_main
+int igt_main()
 {
 	data_t data = {};
 
-	igt_fixture {
+	igt_fixture() {
 		data.drm_fd = drm_open_driver_master(DRIVER_INTEL | DRIVER_XE);
 		data.debugfs_fd = igt_debugfs_dir(data.drm_fd);
 		kmstest_set_vt_graphics_mode();
@@ -380,10 +380,8 @@ igt_main
 							      data.output) {
 					data.mode = igt_output_get_mode(data.output);
 
-					/* FBC disabled: Wa_16023588340 */
-					igt_skip_on_f(data.feature == FEATURE_FBC &&
-						      intel_is_fbc_disabled_by_wa(data.drm_fd),
-						      "WA has disabled FBC on BMG\n");
+					igt_skip_on_f((IS_BATTLEMAGE(data.devid) && data.feature == FEATURE_FBC),
+						       "FBC isn't supported on BMG\n");
 
 					/* FBC Disp_ver 8 and below supports only I915_FORMAT_MOD_X_TILED */
 					if (data.feature == FEATURE_FBC &&
@@ -417,7 +415,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		buf_ops_destroy(data.bops);
 		igt_display_fini(&data.display);
 		close(data.drm_fd);

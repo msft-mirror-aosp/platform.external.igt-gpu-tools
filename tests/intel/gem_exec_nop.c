@@ -1000,14 +1000,14 @@ static void preempt(int fd, uint32_t handle,
 		 e->name, count, elapsed(&start, &now)*1e6 / count);
 }
 
-igt_main
+int igt_main()
 {
 	const struct intel_execution_engine2 *e;
 	const intel_ctx_t *ctx;
 	uint32_t handle = 0;
 	int device = -1;
 
-	igt_fixture {
+	igt_fixture() {
 		const uint32_t bbe = MI_BATCH_BUFFER_END;
 
 		device = drm_open_driver(DRIVER_INTEL);
@@ -1077,8 +1077,8 @@ igt_main
 	igt_subtest("context-sequential")
 		sequential(device, handle, ctx, FORKED | CONTEXT, 20);
 
-	igt_subtest_group {
-		igt_fixture {
+	igt_subtest_group() {
+		igt_fixture() {
 			gem_require_contexts(device);
 			igt_require(gem_scheduler_has_ctx_priority(device));
 			igt_require(gem_scheduler_has_preemption(device));
@@ -1091,8 +1091,8 @@ igt_main
 		}
 	}
 
-	igt_subtest_group {
-		igt_fixture {
+	igt_subtest_group() {
+		igt_fixture() {
 			igt_device_set_master(device);
 		}
 
@@ -1117,7 +1117,7 @@ igt_main
 
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		igt_stop_hang_detector();
 		gem_close(device, handle);
 		intel_ctx_destroy(device, ctx);

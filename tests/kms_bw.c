@@ -201,12 +201,12 @@ static void run_test_linear_tiling(data_t *data, int pipe, const drmModeModeInfo
 	for_each_pipe(display, p) num_pipes++;
 
 	igt_skip_on_f(pipe >= num_pipes,
-                      "ASIC does not have %d pipes\n", pipe);
+                      "ASIC does not have %d pipes\n", pipe + 1);
 
 	test_init(data, physical);
 
 	igt_skip_on_f(physical && pipe >= data->connected_outputs,
-		      "Only %d connected need %d connected\n",data->connected_outputs, pipe+1);
+		      "Only %d connected need %d connected\n", data->connected_outputs, pipe + 1);
 
 	/* create buffers */
 	for (i = 0; i <= pipe; i++) {
@@ -259,14 +259,14 @@ static void run_test_linear_tiling(data_t *data, int pipe, const drmModeModeInfo
 	test_fini(data);
 }
 
-igt_main
+int igt_main()
 {
 	data_t data;
 	int i = 0, j = 0;
 
 	memset(&data, 0, sizeof(data));
 
-	igt_fixture
+	igt_fixture()
 	{
 		data.fd = drm_open_driver_master(DRIVER_ANY);
 
@@ -297,7 +297,7 @@ igt_main
         }
 
 
-	igt_fixture
+	igt_fixture()
 	{
 		igt_display_fini(&data.display);
 	}

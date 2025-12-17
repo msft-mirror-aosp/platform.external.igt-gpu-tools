@@ -1080,11 +1080,11 @@ static void test_shared_reset_domain(const intel_ctx_cfg_t *base_cfg,
 #define RUN_TEST(...) do { sync_gpu(); __VA_ARGS__; sync_gpu(); } while (0)
 #define RUN_CTX_TEST(...) do { check_context(e); RUN_TEST(__VA_ARGS__); } while (0)
 
-igt_main
+int igt_main()
 {
 	const struct intel_execution_ring *e;
 
-	igt_fixture {
+	igt_fixture() {
 		bool has_reset_stats;
 		bool using_full_reset;
 		char *tmp;
@@ -1156,11 +1156,11 @@ igt_main
 			RUN_TEST(defer_hangcheck(e));
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		const struct intel_execution_engine2 *e2;
 		intel_ctx_cfg_t cfg = {};
 
-		igt_fixture {
+		igt_fixture() {
 			gem_require_contexts(device);
 			cfg = intel_ctx_cfg_all_physical(device);
 
@@ -1174,11 +1174,11 @@ igt_main
 					test_shared_reset_domain(&cfg, e2);
 			}
 		}
-		igt_fixture {
+		igt_fixture() {
 			enable_hangcheck(device, true);
 		}
 	}
-	igt_fixture {
+	igt_fixture() {
 		igt_assert(igt_params_set(device, "reset", "%d", INT_MAX /* any reset method */));
 		drm_close_driver(device);
 	}

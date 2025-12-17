@@ -419,11 +419,11 @@ static void test_batch(int fd, int mode, int reverse)
 	gem_close(fd, dst);
 }
 
-igt_main
+int igt_main()
 {
 	int fd, sync;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_INTEL);
 		igt_require_gem(fd);
 	}
@@ -450,6 +450,6 @@ igt_main
 	igt_subtest("batch-reverse-wc")
 		test_batch(fd, 2, 1);
 
-	igt_fixture
+	igt_fixture()
 		drm_close_driver(fd);
 }

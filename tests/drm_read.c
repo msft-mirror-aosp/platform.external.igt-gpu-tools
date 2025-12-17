@@ -270,14 +270,14 @@ static void test_short_buffer_wakeup(int in, enum pipe pipe)
 	close(w.fd);
 }
 
-igt_main
+int igt_main()
 {
 	igt_display_t display;
 	struct igt_fb fb;
 	enum pipe pipe;
 	igt_fd_t(fd);
 
-	igt_fixture {
+	igt_fixture() {
 		struct sigaction alarm_action = {};
 		igt_output_t *output;
 

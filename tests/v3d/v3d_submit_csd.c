@@ -29,11 +29,11 @@ short_timeout(void)
 	return gettime_ns() + SHORT_TIME_NSEC;
 }
 
-igt_main
+int igt_main()
 {
 	int fd;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_V3D);
 		igt_require(igt_v3d_get_param(fd, DRM_V3D_PARAM_SUPPORTS_CSD));
 	}
@@ -359,6 +359,6 @@ igt_main
 		igt_v3d_perfmon_destroy(fd, id);
 	}
 
-	igt_fixture
+	igt_fixture()
 		drm_close_driver(fd);
 }

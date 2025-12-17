@@ -40,12 +40,12 @@ amdgpu_stable_pstate_test(amdgpu_device_handle device_handle)
 
 }
 
-igt_main
+int igt_main()
 {
 	amdgpu_device_handle device;
 	int fd = -1;
 
-	igt_fixture {
+	igt_fixture() {
 		uint32_t major, minor;
 		int err;
 
@@ -61,7 +61,7 @@ igt_main
 	igt_subtest("amdgpu_pstate")
 	amdgpu_stable_pstate_test(device);
 
-	igt_fixture {
+	igt_fixture() {
 		amdgpu_device_deinitialize(device);
 		drm_close_driver(fd);
 	}

@@ -126,13 +126,13 @@ static void restore_initial_driver_state(int fd, bool eudebug_enabled, bool vf_a
 	igt_abort_on_f(abort, "Failed to restore initial driver state\n");
 }
 
-igt_main
+int igt_main()
 {
 	bool eudebug_enabled;
 	bool vf_autoprobe;
 	int fd;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_XE);
 		igt_require(igt_sriov_is_pf(fd));
 		igt_require(igt_sriov_vfs_supported(fd));
@@ -147,7 +147,7 @@ igt_main
 	igt_subtest("deny-sriov")
 		test_deny_sriov(fd);
 
-	igt_fixture {
+	igt_fixture() {
 		restore_initial_driver_state(fd, eudebug_enabled, vf_autoprobe);
 		close(fd);
 	}

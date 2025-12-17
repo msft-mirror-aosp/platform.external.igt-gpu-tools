@@ -1199,7 +1199,7 @@ void igt_kunit(const char *module_name, const char *suite, const char *opts)
 	igt_ignore_warn(igt_kmod_load("kunit", NULL));
 	kunit_debugfs_path(debugfs_path);
 
-	igt_fixture {
+	igt_fixture() {
 		igt_require(subtest);
 		igt_require(*debugfs_path);
 
@@ -1211,8 +1211,8 @@ void igt_kunit(const char *module_name, const char *suite, const char *opts)
 
 	/*
 	 * We need to use igt_subtest here, as otherwise it may crash with:
-	 * "skipping is allowed only in fixtures, subtests or igt_simple_main"
-	 * if used on igt_main. This is also needed in order to provide
+	 * "skipping is allowed only in fixtures, subtests or igt_simple_main()"
+	 * if used on igt_main(). This is also needed in order to provide
 	 * proper namespace for dynamic subtests, with is required for CI
 	 * and for documentation.
 	 */
@@ -1222,7 +1222,7 @@ void igt_kunit(const char *module_name, const char *suite, const char *opts)
 		__igt_kunit(&tst, subtest, opts, debugfs_path, &tests, &ktap);
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		char *suite_name = NULL, *case_name = NULL;
 
 		igt_ktap_free(&ktap);
@@ -1355,7 +1355,8 @@ static const char *unfilter(const char *filter, const char *name)
 void igt_kselftests(const char *module_name,
 		    const char *options,
 		    const char *result,
-		    const char *filter)
+		    const char *filter,
+		    igt_kselftest_wrap_t wrapper)
 {
 	struct igt_ktest tst;
 	IGT_LIST_HEAD(tests);
@@ -1364,16 +1365,22 @@ void igt_kselftests(const char *module_name,
 	if (igt_ktest_init(&tst, module_name) != 0)
 		return;
 
-	igt_fixture
+	igt_fixture()
 		igt_require(igt_ktest_begin(&tst) == 0);
 
 	igt_kselftest_get_tests(tst.kmod, filter, &tests);
 	igt_subtest_with_dynamic(filter ?: "all-tests") {
 		igt_list_for_each_entry_safe(tl, tn, &tests, link) {
+			const char *dynamic_name = unfilter(filter, tl->name);
 			unsigned long taints;
 
-			igt_dynamic_f("%s", unfilter(filter, tl->name))
-				igt_kselftest_execute(&tst, tl, options, result);
+			igt_dynamic_f("%s", dynamic_name) {
+				if (wrapper)
+					wrapper(dynamic_name, &tst, tl);
+				else
+					igt_kselftest_execute(&tst, tl,
+							      options, result);
+			}
 			free(tl);
 
 			if (igt_kernel_tainted(&taints)) {
@@ -1383,7 +1390,7 @@ void igt_kselftests(const char *module_name,
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		igt_ktest_end(&tst);
 		igt_require(!igt_list_empty(&tests));
 	}

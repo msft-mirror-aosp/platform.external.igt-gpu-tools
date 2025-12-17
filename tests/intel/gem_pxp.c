@@ -1299,7 +1299,7 @@ static void require_init_powermgt(int i915, struct powermgt_data *pm)
 		init_powermgt_resources(i915, pm);
 }
 
-igt_main
+int igt_main()
 {
 	int i915 = -1;
 	bool pxp_supported = false;
@@ -1308,7 +1308,7 @@ igt_main
 	uint32_t devid = 0;
 	igt_display_t display;
 
-	igt_fixture
+	igt_fixture()
 	{
 		i915 = drm_open_driver(DRIVER_INTEL);
 		igt_require(i915);
@@ -1319,7 +1319,7 @@ igt_main
 		rendercopy = igt_get_render_copyfunc(i915);
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_describe("Verify protected buffer on unsupported hw:");
 		igt_subtest("hw-rejects-pxp-buffer") {
 			require_nopxp(pxp_supported, devid);
@@ -1332,7 +1332,7 @@ igt_main
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_describe("Verify protected buffer on supported hw:");
 		igt_subtest("create-regular-buffer") {
 			require_pxp(pxp_supported, devid);
@@ -1379,7 +1379,7 @@ igt_main
 			test_ctx_mod_protected_to_all_invalid(i915);
 		}
 	}
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_describe("Verify protected render operations:");
 		igt_subtest("regular-baseline-src-copy-readible") {
 			require_pxp_render(pxp_supported, devid, rendercopy);
@@ -1398,7 +1398,7 @@ igt_main
 			test_pxp_dmabuffshare_refcnt(i915);
 		}
 	}
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_describe("Verify suspend-resume teardown management:");
 		igt_subtest("verify-pxp-key-change-after-suspend-resume") {
 			require_pxp_render(pxp_supported, devid, rendercopy);
@@ -1426,7 +1426,7 @@ igt_main
 			test_pxp_pwrcycle_staleasset_execution(i915, &pm);
 		}
 	}
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_describe("Test the display CRC");
 		igt_subtest("display-protected-crc") {
 			require_pxp_render(pxp_supported, devid, rendercopy);
@@ -1436,7 +1436,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		if (pm.debugfsdir != -1)
 			close(pm.debugfsdir);
 

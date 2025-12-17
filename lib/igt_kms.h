@@ -51,7 +51,6 @@
 /**
  * pipe:
  * @PIPE_NONE: Invalid pipe, used for disconnecting a output from a pipe.
- * @PIPE_ANY: Deprecated alias for @PIPE_NONE.
  * @PIPE_A: First crtc.
  * @PIPE_B: Second crtc.
  * @PIPE_C: Third crtc.
@@ -72,7 +71,6 @@
  */
 enum pipe {
         PIPE_NONE = -1,
-        PIPE_ANY = PIPE_NONE,
         PIPE_A = 0,
         PIPE_B,
         PIPE_C,
@@ -143,6 +141,7 @@ const char *kmstest_encoder_type_str(int type);
 const char *kmstest_connector_status_str(int status);
 const char *kmstest_connector_type_str(int type);
 const char *kmstest_scaling_filter_str(int filter);
+const char *kmstest_scaling_mode_str(int mode);
 const char *kmstest_dsc_output_format_str(int output_format);
 
 void kmstest_dump_mode(drmModeModeInfo *mode);
@@ -165,6 +164,7 @@ enum igt_atomic_crtc_properties {
        IGT_CRTC_OUT_FENCE_PTR,
        IGT_CRTC_VRR_ENABLED,
        IGT_CRTC_SCALING_FILTER,
+       IGT_CRTC_SHARPNESS_STRENGTH,
        IGT_NUM_CRTC_PROPS
 };
 
@@ -211,26 +211,6 @@ struct kmstest_connector_config {
 	int pipe;
 	unsigned valid_crtc_idx_mask;
 	char *connector_path;
-};
-
-struct kmstest_plane {
-	int id;
-	int index;
-	int type;
-	int pos_x;
-	int pos_y;
-	int width;
-	int height;
-};
-
-struct kmstest_crtc {
-	int id;
-	int pipe;
-	bool active;
-	int width;
-	int height;
-	int n_planes;
-	struct kmstest_plane *planes;
 };
 
 /**
@@ -366,7 +346,20 @@ enum igt_atomic_plane_properties {
        IGT_PLANE_HOTSPOT_Y,
        IGT_PLANE_SIZE_HINTS,
        IGT_PLANE_IN_FORMATS_ASYNC,
+       IGT_PLANE_COLOR_PIPELINE,
        IGT_NUM_PLANE_PROPS,
+};
+
+enum igt_atomic_colorop_properties {
+	IGT_COLOROP_TYPE,
+	IGT_COLOROP_BYPASS,
+	IGT_COLOROP_CURVE_1D_TYPE,
+	IGT_COLOROP_SIZE,
+	IGT_COLOROP_DATA,
+	IGT_COLOROP_MULTIPLIER,
+	IGT_COLOROP_LUT3D_INTERPOLATION,
+	IGT_COLOROP_NEXT,
+	IGT_NUM_COLOROP_PROPS
 };
 
 /**
@@ -377,9 +370,19 @@ enum igt_atomic_plane_properties {
  */
 extern const char * const igt_plane_prop_names[];
 
+/**
+ * igt_colorop_prop_names
+ *
+ * igt_colorop_prop_names contains a list of colorop property names,
+ * as indexed by the igt_atomic_colorop_properties enum.
+ */
+extern const char * const igt_colorop_prop_names[];
+
 typedef struct igt_display igt_display_t;
 typedef struct igt_pipe igt_pipe_t;
 typedef uint32_t igt_fixed_t;			/* 16.16 fixed point */
+
+#define IGT_NUM_PLANE_COLOR_PIPELINES 4
 
 typedef enum {
 	/* this maps to the kernel API */
@@ -405,6 +408,20 @@ static inline bool igt_rotation_90_or_270(igt_rotation_t rotation)
 {
 	return rotation & (IGT_ROTATION_90 | IGT_ROTATION_270);
 }
+
+typedef struct igt_plane igt_plane_t;
+
+typedef struct igt_colorop {
+	uint32_t id;
+	igt_plane_t *plane;
+
+	char name[DRM_PROP_NAME_LEN];
+
+	uint64_t changed;
+	uint32_t props[IGT_NUM_COLOROP_PROPS];
+	uint64_t values[IGT_NUM_COLOROP_PROPS];
+
+} igt_colorop_t;
 
 typedef struct igt_plane {
 	/*< private >*/
@@ -443,6 +460,11 @@ typedef struct igt_plane {
 	uint64_t *async_modifiers;
 	uint32_t *async_formats;
 	int async_format_mod_count;
+
+	igt_colorop_t *color_pipelines[IGT_NUM_PLANE_COLOR_PIPELINES];
+	int num_color_pipelines;
+
+	igt_colorop_t *assigned_color_pipeline;
 } igt_plane_t;
 
 /*
@@ -455,8 +477,15 @@ struct igt_pipe {
 	igt_display_t *display;
 	/* ID of a hardware pipe */
 	enum pipe pipe;
-	/* pipe is enabled or not */
-	bool enabled;
+
+        /*
+         * Indicates whether this pipe struct is valid and can be used. This can
+         * be false when the pipe is allocated as part of an array indexed by
+         * enum pipe, but the respective pipe is not reported by DRM, meaning
+         * that the pipe could not exist in the underlying hardware, could have
+         * been fused off, etc.
+         */
+        bool valid;
 
 	int n_planes;
 	int num_primary_planes;
@@ -501,13 +530,16 @@ struct igt_display {
 	int log_shift;
 	int n_pipes;
 	int n_planes;
+	int n_colorops;
 	int n_outputs;
 	igt_output_t *outputs;
 	igt_plane_t *planes;
+	igt_colorop_t *colorops;
 	igt_pipe_t *pipes;
 	bool has_cursor_plane;
 	bool is_atomic;
 	bool has_virt_cursor_plane;
+	bool has_plane_color_pipeline;
 	bool first_commit;
 
 	uint64_t *modifiers;
@@ -694,7 +726,7 @@ static inline bool igt_output_is_connected(igt_output_t *output)
  */
 #define for_each_pipe(display, pipe) \
 	for_each_pipe_static(pipe) \
-		for_each_if((display)->pipes[(pipe)].enabled)
+		for_each_if((display)->pipes[(pipe)].valid)
 
 /**
  * for_each_pipe_with_valid_output:
@@ -713,7 +745,7 @@ static inline bool igt_output_is_connected(igt_output_t *output)
 	for (int con__ = (pipe) = 0; \
 	     assert(igt_can_fail()), (pipe) < igt_display_get_n_pipes((display)) && con__ < (display)->n_outputs; \
 	     con__ = (con__ + 1 < (display)->n_outputs) ? con__ + 1 : (pipe = pipe + 1, 0)) \
-		 for_each_if((display)->pipes[pipe].enabled) \
+		 for_each_if((display)->pipes[pipe].valid) \
 			for_each_if ((((output) = &(display)->outputs[con__]), \
 						igt_pipe_connector_valid((pipe), (output))))
 
@@ -800,8 +832,11 @@ uint64_t igt_plane_get_prop(igt_plane_t *plane, enum igt_atomic_plane_properties
  *
  * Check whether a given @prop changed for the @plane.
  */
-#define igt_plane_is_prop_changed(plane, prop) \
-	(!!((plane)->changed & (1 << (prop))))
+static inline bool igt_plane_is_prop_changed(igt_plane_t *plane,
+					     enum igt_atomic_plane_properties prop)
+{
+	return plane->changed & (1 << prop);
+}
 
 /**
  * igt_plane_set_prop_changed:
@@ -810,8 +845,11 @@ uint64_t igt_plane_get_prop(igt_plane_t *plane, enum igt_atomic_plane_properties
  *
  * Sets the given @prop for the @plane.
  */
-#define igt_plane_set_prop_changed(plane, prop) \
-	(plane)->changed |= 1 << (prop)
+static inline void igt_plane_set_prop_changed(igt_plane_t *plane,
+					      enum igt_atomic_plane_properties prop)
+{
+	plane->changed |= 1 << prop;
+}
 
 /**
  * igt_plane_clear_prop_changed:
@@ -820,8 +858,11 @@ uint64_t igt_plane_get_prop(igt_plane_t *plane, enum igt_atomic_plane_properties
  *
  * Clears the given @prop for the @plane.
  */
-#define igt_plane_clear_prop_changed(plane, prop) \
-	(plane)->changed &= ~(1 << (prop))
+static inline void igt_plane_clear_prop_changed(igt_plane_t *plane,
+						enum igt_atomic_plane_properties prop)
+{
+	plane->changed &= ~(1 << prop);
+}
 
 /**
  * igt_plane_set_prop_value:
@@ -831,11 +872,13 @@ uint64_t igt_plane_get_prop(igt_plane_t *plane, enum igt_atomic_plane_properties
  *
  * Sets the given @prop with the @value for the @plane.
  */
-#define igt_plane_set_prop_value(plane, prop, value) \
-	do { \
-		plane->values[prop] = value; \
-		igt_plane_set_prop_changed(plane, prop); \
-	} while (0)
+static inline void igt_plane_set_prop_value(igt_plane_t *plane,
+					    enum igt_atomic_plane_properties prop,
+					    uint64_t value)
+{
+	plane->values[prop] = value;
+	igt_plane_set_prop_changed(plane, prop);
+}
 
 extern bool igt_plane_try_prop_enum(igt_plane_t *plane,
 				    enum igt_atomic_plane_properties prop,
@@ -848,6 +891,56 @@ extern void igt_plane_set_prop_enum(igt_plane_t *plane,
 extern void igt_plane_replace_prop_blob(igt_plane_t *plane,
 					enum igt_atomic_plane_properties prop,
 					const void *ptr, size_t length);
+
+extern bool igt_plane_is_valid_colorop(igt_plane_t *plane, igt_colorop_t *colorop);
+
+extern void igt_plane_set_color_pipeline(igt_plane_t *plane, igt_colorop_t *colorop);
+
+
+/**
+ * igt_colorop_has_prop:
+ * @colorop: colorop to check.
+ * @prop: Property to check.
+ *
+ * Check whether colorop supports a given property.
+ *
+ * Returns: True if the property is supported, otherwise false.
+ */
+static inline bool
+igt_colorop_has_prop(igt_colorop_t *colorop, enum igt_atomic_colorop_properties prop)
+{
+	return colorop->props[prop];
+}
+
+uint64_t igt_colorop_get_prop(igt_display_t *display, igt_colorop_t *colorop, enum igt_atomic_colorop_properties prop);
+
+#define igt_colorop_is_prop_changed(colorop, prop) \
+	(!!((colorop)->changed & (1 << (prop))))
+
+#define igt_colorop_set_prop_changed(colorop, prop) \
+	((colorop)->changed |= 1 << (prop))
+
+#define igt_colorop_clear_prop_changed(colorop, prop) \
+	((colorop)->changed &= ~(1 << (prop)))
+
+#define igt_colorop_set_prop_value(colorop, prop, value) \
+	do { \
+		colorop->values[prop] = value; \
+		igt_colorop_set_prop_changed(colorop, prop); \
+	} while (0)
+
+
+extern bool igt_colorop_try_prop_enum(igt_colorop_t *colorop,
+				      enum igt_atomic_colorop_properties prop,
+				      const char *val);
+
+extern void igt_colorop_set_prop_enum(igt_colorop_t *colorop,
+				      enum igt_atomic_colorop_properties prop,
+				      const char *val);
+
+extern void igt_colorop_replace_prop_blob(igt_colorop_t *colorop,
+					  enum igt_atomic_colorop_properties prop,
+					  const void *ptr, size_t length);
 
 extern bool igt_plane_check_prop_is_mutable(igt_plane_t *plane,
 					    enum igt_atomic_plane_properties igt_prop);
@@ -875,8 +968,11 @@ uint64_t igt_output_get_prop(igt_output_t *output, enum igt_atomic_connector_pro
  *
  * Check whether a given @prop changed for the @Output.
  */
-#define igt_output_is_prop_changed(output, prop) \
-	(!!((output)->changed & (1 << (prop))))
+static inline bool igt_output_is_prop_changed(igt_output_t *output,
+					      enum igt_atomic_connector_properties prop)
+{
+	return output->changed & (1 << prop);
+}
 
 /**
  * igt_output_set_prop_changed:
@@ -885,8 +981,11 @@ uint64_t igt_output_get_prop(igt_output_t *output, enum igt_atomic_connector_pro
  *
  * Sets the given @prop for the @output.
  */
-#define igt_output_set_prop_changed(output, prop) \
-	(output)->changed |= 1 << (prop)
+static inline void igt_output_set_prop_changed(igt_output_t *output,
+					       enum igt_atomic_connector_properties prop)
+{
+	output->changed |= 1 << prop;
+}
 
 /**
  * igt_output_clear_prop_changed:
@@ -895,8 +994,11 @@ uint64_t igt_output_get_prop(igt_output_t *output, enum igt_atomic_connector_pro
  *
  * Clears the given @prop for the @output.
  */
-#define igt_output_clear_prop_changed(output, prop) \
-	(output)->changed &= ~(1 << (prop))
+static inline void igt_output_clear_prop_changed(igt_output_t *output,
+						 enum igt_atomic_connector_properties prop)
+{
+	output->changed &= ~(1 << prop);
+}
 
 /**
  * igt_output_set_prop_value:
@@ -906,11 +1008,13 @@ uint64_t igt_output_get_prop(igt_output_t *output, enum igt_atomic_connector_pro
  *
  * Sets the given @prop with the @value for the @output.
  */
-#define igt_output_set_prop_value(output, prop, value) \
-	do { \
-		(output)->values[prop] = (value); \
-		igt_output_set_prop_changed(output, prop); \
-	} while (0)
+static inline void igt_output_set_prop_value(igt_output_t *output,
+					     enum igt_atomic_connector_properties prop,
+					     uint64_t value)
+{
+	output->values[prop] = value;
+	igt_output_set_prop_changed(output, prop);
+}
 
 extern bool igt_output_try_prop_enum(igt_output_t *output,
 				     enum igt_atomic_connector_properties prop,
@@ -941,50 +1045,17 @@ igt_pipe_obj_has_prop(igt_pipe_t *pipe, enum igt_atomic_crtc_properties prop)
 uint64_t igt_pipe_obj_get_prop(igt_pipe_t *pipe, enum igt_atomic_crtc_properties prop);
 
 /**
- * igt_pipe_get_prop:
- * @display: Pointer to display.
- * @pipe: Target pipe.
- * @prop: Property to return.
- *
- * Return current value on a pipe for a given property.
- *
- * Returns: The value the property is set to, if this
- * is a blob, the blob id is returned. This can be passed
- * to drmModeGetPropertyBlob() to get the contents of the blob.
- */
-static inline uint64_t
-igt_pipe_get_prop(igt_display_t *display, enum pipe pipe,
-		  enum igt_atomic_crtc_properties prop)
-{
-	return igt_pipe_obj_get_prop(&display->pipes[pipe], prop);
-}
-
-/**
- * igt_pipe_has_prop:
- * @display: Pointer to display.
- * @pipe: Pipe to check.
- * @prop: Property to check.
- *
- * Check whether pipe supports a given property.
- *
- * Returns: True if the property is supported, otherwise false.
- */
-static inline bool
-igt_pipe_has_prop(igt_display_t *display, enum pipe pipe,
-		  enum igt_atomic_crtc_properties prop)
-{
-	return display->pipes[pipe].props[prop];
-}
-
-/**
  * igt_pipe_obj_is_prop_changed:
  * @pipe_obj: Pipe object to check.
  * @prop: Property to check.
  *
  * Check whether a given @prop changed for the @pipe_obj.
  */
-#define igt_pipe_obj_is_prop_changed(pipe_obj, prop) \
-	(!!((pipe_obj)->changed & (1 << (prop))))
+static inline bool igt_pipe_obj_is_prop_changed(igt_pipe_t *pipe_obj,
+						enum igt_atomic_crtc_properties prop)
+{
+	return pipe_obj->changed & (1 << prop);
+}
 
 /**
  * igt_pipe_is_prop_changed:
@@ -993,8 +1064,12 @@ igt_pipe_has_prop(igt_display_t *display, enum pipe pipe,
  *
  * Check whether a given @prop changed for the @pipe.
  */
-#define igt_pipe_is_prop_changed(display, pipe, prop) \
-	igt_pipe_obj_is_prop_changed(&(display)->pipes[(pipe)], prop)
+static inline bool igt_pipe_is_prop_changed(igt_display_t *display,
+					    enum pipe pipe,
+					    enum igt_atomic_crtc_properties prop)
+{
+	return igt_pipe_obj_is_prop_changed(&display->pipes[pipe], prop);
+}
 
 /**
  * igt_pipe_obj_set_prop_changed:
@@ -1003,18 +1078,11 @@ igt_pipe_has_prop(igt_display_t *display, enum pipe pipe,
  *
  * Sets the given @prop for the @pipe_obj.
  */
-#define igt_pipe_obj_set_prop_changed(pipe_obj, prop) \
-	(pipe_obj)->changed |= 1 << (prop)
-
-/**
- * igt_pipe_set_prop_changed:
- * @pipe: Pipe object to check.
- * @prop: Property to check.
- *
- * Sets the given @prop for the @pipe.
- */
-#define igt_pipe_set_prop_changed(display, pipe, prop) \
-	igt_pipe_obj_set_prop_changed(&(display)->pipes[(pipe)], prop)
+static inline void igt_pipe_obj_set_prop_changed(igt_pipe_t *pipe_obj,
+						 enum igt_atomic_crtc_properties prop)
+{
+	pipe_obj->changed |= 1 << prop;
+}
 
 /**
  * igt_pipe_obj_clear_prop_changed:
@@ -1023,18 +1091,11 @@ igt_pipe_has_prop(igt_display_t *display, enum pipe pipe,
  *
  * Clears the given @prop for the @pipe_obj.
  */
-#define igt_pipe_obj_clear_prop_changed(pipe_obj, prop) \
-	(pipe_obj)->changed &= ~(1 << (prop))
-
-/**
- * igt_pipe_clear_prop_changed:
- * @pipe: Pipe object to check.
- * @prop: Property to check.
- *
- * Clears the given @prop for the @pipe.
- */
-#define igt_pipe_clear_prop_changed(display, pipe, prop) \
-	igt_pipe_obj_clear_prop_changed(&(display)->pipes[(pipe)], prop)
+static inline void igt_pipe_obj_clear_prop_changed(igt_pipe_t *pipe_obj,
+						   enum igt_atomic_crtc_properties prop)
+{
+	pipe_obj->changed &= ~(1 << prop);
+}
 
 /**
  * igt_pipe_obj_set_prop_value:
@@ -1044,11 +1105,13 @@ igt_pipe_has_prop(igt_display_t *display, enum pipe pipe,
  *
  * Sets the given @prop with the @value for the @pipe_obj.
  */
-#define igt_pipe_obj_set_prop_value(pipe_obj, prop, value) \
-	do { \
-		(pipe_obj)->values[prop] = (value); \
-		igt_pipe_obj_set_prop_changed(pipe_obj, prop); \
-	} while (0)
+static inline void igt_pipe_obj_set_prop_value(igt_pipe_t *pipe_obj,
+					       enum igt_atomic_crtc_properties prop,
+					       uint64_t value)
+{
+	pipe_obj->values[prop] = value;
+	igt_pipe_obj_set_prop_changed(pipe_obj, prop);
+}
 
 /**
  * igt_pipe_set_prop_value:
@@ -1058,8 +1121,13 @@ igt_pipe_has_prop(igt_display_t *display, enum pipe pipe,
  *
  * Sets the given @prop with the @value for the @pipe.
  */
-#define igt_pipe_set_prop_value(display, pipe, prop, value) \
-	igt_pipe_obj_set_prop_value(&(display)->pipes[(pipe)], prop, value)
+static inline void igt_pipe_set_prop_value(igt_display_t *display,
+					   enum pipe pipe,
+					   enum igt_atomic_crtc_properties prop,
+					   uint64_t value)
+{
+	igt_pipe_obj_set_prop_value(&display->pipes[pipe], prop, value);
+}
 
 extern bool igt_pipe_obj_try_prop_enum(igt_pipe_t *pipe,
 				       enum igt_atomic_crtc_properties prop,
@@ -1068,54 +1136,9 @@ extern bool igt_pipe_obj_try_prop_enum(igt_pipe_t *pipe,
 extern void igt_pipe_obj_set_prop_enum(igt_pipe_t *pipe,
 				       enum igt_atomic_crtc_properties prop,
 				       const char *val);
-
-/**
- * igt_pipe_try_prop_enum:
- * @pipe: Target pipe.
- * @prop: Property to check.
- * @val: Value to set.
- *
- * Returns: False if the given @pipe doesn't have the enum @prop or
- * failed to set the enum property @val else True.
- */
-#define igt_pipe_try_prop_enum(display, pipe, prop, val) \
-	igt_pipe_obj_try_prop_enum(&(display)->pipes[(pipe)], prop, val)
-
-/**
- * igt_pipe_set_prop_enum:
- * @pipe: Target pipe.
- * @prop: Property to check.
- * @val: Value to set.
- *
- * This function tries to set given enum property @prop value @val to
- * the given @pipe, and terminate the execution if its failed.
- */
-#define igt_pipe_set_prop_enum(display, pipe, prop, val) \
-	igt_pipe_obj_set_prop_enum(&(display)->pipes[(pipe)], prop, val)
-
 extern void igt_pipe_obj_replace_prop_blob(igt_pipe_t *pipe,
 					   enum igt_atomic_crtc_properties prop,
 					   const void *ptr, size_t length);
-
-/**
- * igt_pipe_replace_prop_blob:
- * @pipe: pipe to set property on.
- * @prop: property for which the blob will be replaced.
- * @ptr: Pointer to contents for the property.
- * @length: Length of contents.
- *
- * This function will destroy the old property blob for the given property,
- * and will create a new property blob with the values passed to this function.
- *
- * The new property blob will be committed when you call igt_display_commit(),
- * igt_display_commit2() or igt_display_commit_atomic().
- *
- * Please use igt_output_override_mode() if you want to set #IGT_CRTC_MODE_ID,
- * it works better with legacy commit.
- */
-#define igt_pipe_replace_prop_blob(display, pipe, prop, ptr, length) \
-	igt_pipe_obj_replace_prop_blob(&(display)->pipes[(pipe)], prop, ptr, length)
-
 void igt_pipe_refresh(igt_display_t *display, enum pipe pipe, bool force);
 
 void igt_enable_connectors(int drm_fd);
@@ -1220,10 +1243,10 @@ uint32_t igt_reduce_format(uint32_t format);
  * @display: pointer to igt_display_t
  * @pipe: pipe which need to check
  *
- * Skip a (sub-)test if the pipe not enabled.
+ * Skip a (sub-)test if the pipe not valid.
  *
  * Should be used everywhere where a test checks pipe and skip
- * test when pipe is not enabled.
+ * test when pipe is not valid.
  */
 void igt_require_pipe(igt_display_t *display,
 		enum pipe pipe);
@@ -1289,5 +1312,11 @@ int igt_backlight_write(int value, const char *fname, igt_backlight_context_t *c
 uint32_t igt_get_connected_output_count(igt_display_t *display);
 
 drmModePropertyBlobRes *igt_get_writeback_formats_blob(igt_output_t *output);
+
+uint64_t igt_get_writeback_fb_id(igt_output_t *output);
+void igt_detach_crtc(igt_display_t *display, igt_output_t *output);
+void igt_get_and_wait_out_fence(igt_output_t *output);
+
+igt_colorop_t *igt_find_colorop(igt_display_t *display, uint32_t id);
 
 #endif /* __IGT_KMS_H__ */

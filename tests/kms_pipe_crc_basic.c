@@ -368,7 +368,7 @@ static int opt_handler(int opt, int opt_index, void *_data)
 const char *help_str =
 	"  -e \tExtended tests.\n";
 
-igt_main_args("e", NULL, help_str, opt_handler, NULL)
+int igt_main_args("e", NULL, help_str, opt_handler, NULL)
 {
 	enum pipe pipe;
 	igt_output_t *output;
@@ -393,7 +393,7 @@ igt_main_args("e", NULL, help_str, opt_handler, NULL)
 	int i;
 	last_pipe = 0;
 
-	igt_fixture {
+	igt_fixture() {
 		data.drm_fd = drm_open_driver_master(DRIVER_ANY);
 
 		kmstest_set_vt_graphics_mode();
@@ -499,7 +499,7 @@ igt_main_args("e", NULL, help_str, opt_handler, NULL)
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		igt_display_fini(&data.display);
 		drm_close_driver(data.drm_fd);
 	}

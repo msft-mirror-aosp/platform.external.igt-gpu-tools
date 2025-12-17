@@ -700,7 +700,7 @@ static void lease_unleased_crtc(data_t *data)
 {
 	enum pipe p;
 	uint32_t bad_crtc_id;
-	drmModeCrtc *crtc;
+	drmModeCrtc *drm_crtc;
 	int ret;
 
 	/* Create a valid lease */
@@ -724,19 +724,19 @@ static void lease_unleased_crtc(data_t *data)
 	/* sanity check */
 	ret = drmModeSetCrtc(data->lease.fd, data->crtc_id, 0, 0, 0, NULL, 0, NULL);
 	igt_assert_eq(ret, 0);
-	crtc = drmModeGetCrtc(data->lease.fd, data->crtc_id);
-	igt_assert(crtc);
-	drmModeFreeCrtc(crtc);
+	drm_crtc = drmModeGetCrtc(data->lease.fd, data->crtc_id);
+	igt_assert(drm_crtc);
+	drmModeFreeCrtc(drm_crtc);
 
 	/* Attempt to use the unleased crtc id. We need raw ioctl to bypass the
 	 * igt_kms helpers.
 	 */
 	ret = drmModeSetCrtc(data->lease.fd, bad_crtc_id, 0, 0, 0, NULL, 0, NULL);
 	igt_assert_eq(ret, -ENOENT);
-	crtc = drmModeGetCrtc(data->lease.fd, bad_crtc_id);
-	igt_assert(!crtc);
+	drm_crtc = drmModeGetCrtc(data->lease.fd, bad_crtc_id);
+	igt_assert(!drm_crtc);
 	igt_assert_eq(errno, ENOENT);
-	drmModeFreeCrtc(crtc);
+	drmModeFreeCrtc(drm_crtc);
 }
 
 static void lease_unleased_connector(data_t *data)
@@ -1239,20 +1239,20 @@ static void lease_uevent(data_t *data)
 	igt_cleanup_uevents(uevent_monitor);
 }
 
-igt_main
+int igt_main()
 {
 	data_t data;
 	igt_output_t *output;
 	igt_display_t *display = &data.master.display;
 
-	igt_fixture {
+	igt_fixture() {
 		data.master.fd = drm_open_driver_master(DRIVER_ANY);
 		kmstest_set_vt_graphics_mode();
 		igt_display_require(display, data.master.fd);
 	}
 
 	//Display dependent subtests
-	igt_subtest_group {
+	igt_subtest_group() {
 
 		const struct {
 			const char *name;
@@ -1282,7 +1282,7 @@ igt_main
 			{ }
 		}, *f;
 
-		igt_fixture
+		igt_fixture()
 			igt_display_require_output(display);
 
 		for (f = funcs; f->name; f++) {
@@ -1312,7 +1312,7 @@ igt_main
 	}
 
 	//Display independent subtests
-	igt_subtest_group {
+	igt_subtest_group() {
 
 		igt_describe("Tests error handling while creating invalid corner-cases for "
 			     "create-lease ioctl");
@@ -1343,7 +1343,7 @@ igt_main
 			lease_uevent(&data);
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		igt_display_fini(display);
 		drm_close_driver(data.master.fd);
 	}

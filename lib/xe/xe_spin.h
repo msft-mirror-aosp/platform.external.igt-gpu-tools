@@ -35,6 +35,7 @@ void xe_spin_free(int fd, struct igt_spin *spin);
  * Used to perform memory copy with the spinner.
  */
 struct xe_spin_mem_copy {
+	int fd;
 	struct blt_mem_object *src;
 	struct blt_mem_object *dst;
 	uint64_t src_offset;
@@ -45,6 +46,7 @@ struct xe_spin_mem_copy {
  * struct xe_spin_opts
  * @addr: offset of spinner within vm
  * @preempt: allow spinner to be preempted or not
+ * @multi_queue_switch: Add a multi-queue switch point
  * @ctx_ticks: number of ticks after which spinner is stopped, applied if > 0
  * @mem_copy: container of objects used for memory copy (optional)
  *
@@ -53,6 +55,7 @@ struct xe_spin_mem_copy {
 struct xe_spin_opts {
 	uint64_t addr;
 	bool preempt;
+	bool multi_queue_switch;
 	uint32_t ctx_ticks;
 	bool write_timestamp;
 	struct xe_spin_mem_copy *mem_copy;
@@ -64,6 +67,7 @@ struct xe_spin {
 	uint64_t pad;
 	uint32_t start;
 	uint32_t end;
+	uint32_t wait_cond;
 	uint32_t ticks_delta;
 	uint64_t exec_sync;
 	uint32_t timestamp;
@@ -76,6 +80,8 @@ void xe_spin_init(struct xe_spin *spin, struct xe_spin_opts *opts);
 bool xe_spin_started(struct xe_spin *spin);
 void xe_spin_wait_started(struct xe_spin *spin);
 void xe_spin_end(struct xe_spin *spin);
+void xe_spin_preempt_wait(struct xe_spin *spin);
+void xe_spin_preempt_nowait(struct xe_spin *spin);
 
 /*
  * xe_cork: higher level API that simplifies exec'ing an xe_spin by taking care

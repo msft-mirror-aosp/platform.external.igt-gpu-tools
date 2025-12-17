@@ -1589,12 +1589,12 @@ static int mmap_ioctl(int i915, struct drm_i915_gem_mmap_gtt *arg)
 
 int fd;
 
-igt_main
+int igt_main()
 {
 	if (igt_run_in_simulation())
 		OBJECT_SIZE = 1 * 1024 * 1024;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_INTEL);
 
 		/*
@@ -1750,7 +1750,7 @@ igt_main
 	igt_subtest("huge-bo-tiledY")
 		test_huge_bo(fd, 1, I915_TILING_Y);
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		const struct copy_size {
 			const char *prefix;
 			int size;
@@ -1822,6 +1822,6 @@ igt_main
 	}
 
 
-	igt_fixture
+	igt_fixture()
 		drm_close_driver(fd);
 }

@@ -1625,7 +1625,7 @@ static void invalid_domains(int fd)
 	gem_close(fd, obj[0].handle);
 }
 
-igt_main
+int igt_main()
 {
 	const intel_ctx_t *ctx;
 	const struct intel_execution_engine2 *e;
@@ -1666,7 +1666,7 @@ igt_main
 	uint64_t size;
 	int fd = -1;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver_master(DRIVER_INTEL);
 		igt_require_gem(fd);
 		/* Check if relocations supported by platform */
@@ -1677,8 +1677,8 @@ igt_main
 	for (f = flags; f->name; f++) {
 		igt_hang_t hang;
 
-		igt_subtest_group {
-			igt_fixture {
+		igt_subtest_group() {
+			igt_fixture() {
 				if (f->flags & HANG)
 					hang = igt_allow_hang(fd, 0, 0);
 			}
@@ -1703,7 +1703,7 @@ igt_main
 				}
 			}
 
-			igt_fixture {
+			igt_fixture() {
 				if (f->flags & HANG)
 					igt_disallow_hang(fd, hang);
 			}
@@ -1752,13 +1752,13 @@ igt_main
 	igt_subtest("invalid-domains")
 		invalid_domains(fd);
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_display_t display = {
 			.drm_fd = fd,
 			.n_pipes = IGT_MAX_PIPES
 		};
 
-		igt_fixture {
+		igt_fixture() {
 			igt_device_set_master(fd);
 			kmstest_set_vt_graphics_mode();
 			igt_display_require(&display, fd);
@@ -1771,10 +1771,10 @@ igt_main
 			}
 		}
 
-		igt_fixture
+		igt_fixture()
 			igt_display_fini(&display);
 	}
 
-	igt_fixture
+	igt_fixture()
 		drm_close_driver(fd);
 }

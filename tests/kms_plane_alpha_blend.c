@@ -732,11 +732,11 @@ static int opt_handler(int opt, int opt_index, void *_data)
 const char *help_str =
 	"  -e \tExtended tests.\n";
 
-igt_main_args("e", NULL, help_str, opt_handler, NULL)
+int igt_main_args("e", NULL, help_str, opt_handler, NULL)
 {
 	data_t data = {};
 
-	igt_fixture {
+	igt_fixture() {
 		enum pipe pipe;
 
 		last_pipe = 0;
@@ -756,7 +756,7 @@ igt_main_args("e", NULL, help_str, opt_handler, NULL)
 
 	run_subtests(&data);
 
-	igt_fixture {
+	igt_fixture() {
 		remove_fbs(&data);
 		igt_display_reset(&data.display);
 		igt_display_commit2(&data.display, data.display.is_atomic ?

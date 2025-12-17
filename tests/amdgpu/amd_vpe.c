@@ -214,14 +214,14 @@ static void amdgpu_cs_vpe_blit(amdgpu_device_handle device_handle,
 	free_resource(&dst_plane_bo);
 }
 
-igt_main
+int igt_main()
 {
 	struct mmd_context context = {};
 	struct mmd_shared_context shared_context = {};
 	amdgpu_device_handle device;
 	int fd = -1;
 
-	igt_fixture {
+	igt_fixture() {
 		uint32_t major, minor;
 		int r;
 
@@ -249,7 +249,7 @@ igt_main
 	igt_subtest("vpe-blit-test")
 	amdgpu_cs_vpe_blit(device, &context);
 
-	igt_fixture {
+	igt_fixture() {
 		amdgpu_device_deinitialize(device);
 		drm_close_driver(fd);
 	}

@@ -90,7 +90,7 @@ static int append_range(struct xe_sriov_provisioned_range **ranges,
 /**
  * xe_sriov_find_ggtt_provisioned_pte_offsets - Find GGTT provisioned PTE offsets
  * @pf_fd: File descriptor for the Physical Function
- * @gt: GT identifier
+ * @tile: Tile id
  * @mmio: Pointer to the MMIO structure
  * @ranges: Pointer to the array of provisioned ranges
  * @nr_ranges: Pointer to the number of provisioned ranges
@@ -106,7 +106,7 @@ static int append_range(struct xe_sriov_provisioned_range **ranges,
  *
  * Returns 0 on success, or a negative error code on failure.
  */
-int xe_sriov_find_ggtt_provisioned_pte_offsets(int pf_fd, int gt, struct xe_mmio *mmio,
+int xe_sriov_find_ggtt_provisioned_pte_offsets(int pf_fd, uint8_t tile, struct xe_mmio *mmio,
 					       struct xe_sriov_provisioned_range **ranges,
 					       unsigned int *nr_ranges)
 {
@@ -122,7 +122,7 @@ int xe_sriov_find_ggtt_provisioned_pte_offsets(int pf_fd, int gt, struct xe_mmio
 
 	for (uint32_t offset = START_PTE_OFFSET; offset < MAX_PTE_OFFSET;
 	     offset += sizeof(xe_ggtt_pte_t)) {
-		pte = xe_mmio_ggtt_read(mmio, gt, offset);
+		pte = xe_mmio_ggtt_read(mmio, tile, offset);
 		vf_id = (pte & vfid_mask) >> GGTT_PTE_VFID_SHIFT;
 
 		if (vf_id != current_vf_id) {
@@ -571,42 +571,6 @@ void xe_sriov_set_engine_reset(int pf, unsigned int gt_num, bool value)
 }
 
 /**
- * __xe_sriov_get_sched_if_idle - Get the scheduling if idle policy for a given GT
- * @pf: PF device file descriptor
- * @gt_num: GT number
- * @value: Pointer to store the read scheduling if idle policy status
- *
- * Reads the scheduling if idle policy status for the given PF device @pf on GT @gt_num.
- *
- * Return: 0 on success, negative error code on failure.
- */
-int __xe_sriov_get_sched_if_idle(int pf, unsigned int gt_num, bool *value)
-{
-	return __xe_sriov_pf_debugfs_get_boolean(pf, 0, gt_num, "sched_if_idle", value);
-}
-
-/**
- * xe_sriov_get_sched_if_idle - Get the scheduling if idle policy for a given GT
- * @pf: PF device file descriptor
- * @gt_num: GT number
- *
- * A throwing version of __xe_sriov_get_sched_if_idle().
- * Instead of returning an error code, it returns the scheduling if idle policy status
- * and asserts in case of an error.
- *
- * Return: The scheduling if idle status for the given GT.
- *         Asserts in case of failure.
- */
-bool xe_sriov_get_sched_if_idle(int pf, unsigned int gt_num)
-{
-	bool value;
-
-	igt_fail_on(__xe_sriov_get_sched_if_idle(pf, gt_num, &value));
-
-	return value;
-}
-
-/**
  * __xe_sriov_set_sched_if_idle - Set the scheduling if idle policy status for a given GT
  * @pf: PF device file descriptor
  * @gt_num: GT number
@@ -731,7 +695,6 @@ void xe_sriov_set_sched_priority(int pf, unsigned int vf_num, unsigned int gt_nu
  * Default scheduling attributes are as follows for each VF and PF:
  * - exec_quantum_ms equals zero (meaning infinity)
  * - preempt_timeout_us equals zero (meaning infinity)
- * - sched_if_idle equals false
  * - reset_engine equals false
  * - sched_priority equals XE_SRIOV_SCHED_PRIORITY_LOW
  */
@@ -739,13 +702,11 @@ void xe_sriov_require_default_scheduling_attributes(int pf)
 {
 	unsigned int totalvfs = igt_sriov_get_total_vfs(pf);
 	enum xe_sriov_sched_priority sched_priority;
-	bool sched_if_idle, reset_engine;
+	bool reset_engine;
 	uint32_t eq, pt;
 	unsigned int gt;
 
 	xe_for_each_gt(pf, gt) {
-		igt_skip_on(__xe_sriov_get_sched_if_idle(pf, gt, &sched_if_idle));
-		igt_require_f(!sched_if_idle, "sched_if_idle != false on gt%u\n", gt);
 		igt_skip_on(__xe_sriov_get_engine_reset(pf, gt, &reset_engine));
 		igt_require_f(!reset_engine, "reset_engine != false on gt%u\n", gt);
 

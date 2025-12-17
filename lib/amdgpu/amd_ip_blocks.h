@@ -21,6 +21,10 @@
 #include "amd_registers.h"
 #include "amd_family.h"
 
+#ifndef MIN
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#endif
+
 #define MAX_CARDS_SUPPORTED 4
 
 /* reset mask */
@@ -38,15 +42,61 @@
 #define PAGE_SIZE 4096
 #endif
 
+/*
+* USERMODE_QUEUE_SIZE
+* USERMODE_QUEUE_SIZE_DW
+* USERMODE_QUEUE_SIZE_DW_MASK
+* --------------------------------------------------------------
+* USERMODE_QUEUE_SIZE        : Total size of the usermode command queue (1 MB).
+* USERMODE_QUEUE_SIZE_DW     : Same size expressed in DWORDs (size / 4).
+* USERMODE_QUEUE_SIZE_DW_MASK: Bitmask used for fast ring wrap-around.
+*
+* The ring size is a power of two, so the mask (DW_size - 1) enables:
+*
+*      index % queue_size  →  index & USERMODE_QUEUE_SIZE_DW_MASK
+*
+* This provides fast modulo arithmetic and prevents buffer overruns.
+*/
 #define USERMODE_QUEUE_SIZE		(PAGE_SIZE * 256)   //In bytes with total size as 1 Mbyte
 #define ALIGNMENT			4096
 #define DOORBELL_INDEX			4
 #define USERMODE_QUEUE_SIZE_DW		(USERMODE_QUEUE_SIZE >> 2)
 #define USERMODE_QUEUE_SIZE_DW_MASK	(USERMODE_QUEUE_SIZE_DW - 1)
 
+/*
+* amdgpu_pkt_begin()
+* ---------------------------------------------------------------
+* Begins building a packet in the usermode queue.
+* - __num_dw_written tracks DWORDs written in the current packet.
+* - __ring_start is the starting write pointer for this packet,
+*   wrapped by the ring mask to ensure it is within bounds.
+*/
 #define amdgpu_pkt_begin() uint32_t __num_dw_written = 0; \
 	uint32_t __ring_start = *ring_context->wptr_cpu & USERMODE_QUEUE_SIZE_DW_MASK;
 
+/*
+* amdgpu_sdma_pkt_begin()
+* ---------------------------------------------------------------
+* Same as amdgpu_pkt_begin, but SDMA rings use a byte-based wptr.
+* - Convert byte-based wptr → DWORD index (>> 2)
+* - Wrap with mask to stay within the ring
+* - __ring_start holds DWORD index of the write pointer
+*/
+#define amdgpu_sdma_pkt_begin() \
+    uint32_t __num_dw_written = 0, __ring_start = 0; \
+    if (ring_context->wptr_cpu) \
+        *ring_context->wptr_cpu = (*ring_context->wptr_cpu & USERMODE_QUEUE_SIZE_DW_MASK) >> 2; \
+    __ring_start = *ring_context->wptr_cpu;
+
+/*
+* amdgpu_pkt_add_dw(value)
+* ---------------------------------------------------------------
+* Writes a single DWORD into the queue at:
+*
+*    queue_cpu[(ring_start + num_dw_written) & mask]
+*
+* Masking handles ring wrap-around. Increments __num_dw_written.
+*/
 #define amdgpu_pkt_add_dw(value) do { \
 	*(ring_context->queue_cpu + \
 	((__ring_start + __num_dw_written) & USERMODE_QUEUE_SIZE_DW_MASK)) \
@@ -54,8 +104,28 @@
 	__num_dw_written++;\
 } while (0)
 
+/*
+* amdgpu_pkt_end()
+* ---------------------------------------------------------------
+* Finalizes the packet:
+* - Advances the write pointer by the number of DWORDs written.
+* - Wrap-around handled by mask.
+*
+* The wptr remains in DWORD units (unlike SDMA).
+*/
 #define amdgpu_pkt_end() \
-	*ring_context->wptr_cpu += __num_dw_written
+	*ring_context->wptr_cpu = (*ring_context->wptr_cpu + __num_dw_written) & USERMODE_QUEUE_SIZE_DW_MASK
+
+/*
+* amdgpu_sdma_pkt_end()
+* ---------------------------------------------------------------
+* Finalizes SDMA packet:
+* - Advance DWORD wptr
+* - Wrap with mask
+* - Convert back to a byte offset (<< 2) because SDMA uses byte-based wptrs.
+*/
+#define amdgpu_sdma_pkt_end() \
+	*ring_context->wptr_cpu = (((*ring_context->wptr_cpu + __num_dw_written ) & USERMODE_QUEUE_SIZE_DW_MASK) << 2)
 
 enum amd_ip_block_type {
 	AMD_IP_GFX = 0,
@@ -193,7 +263,7 @@ struct amdgpu_ring_context {
 	uint32_t *queue_cpu;
 	volatile uint64_t *wptr_cpu;
 	volatile uint64_t *rptr_cpu;
-	uint64_t *doorbell_cpu;
+	volatile uint64_t *doorbell_cpu;
 
 	uint32_t db_handle;
 	uint32_t queue_id;
@@ -230,7 +300,7 @@ struct amdgpu_ip_funcs {
 
 	/* userq functions */
 	void (*userq_create)(amdgpu_device_handle device_handle, struct amdgpu_ring_context *ctxt, unsigned int type);
-	void (*userq_submit)(amdgpu_device_handle device, struct amdgpu_ring_context *ring_context, unsigned int ip_type, uint64_t mc_address);
+	int (*userq_submit)(amdgpu_device_handle device, struct amdgpu_ring_context *ring_context, unsigned int ip_type, uint64_t mc_address);
 	void (*userq_destroy)(amdgpu_device_handle device_handle, struct amdgpu_ring_context *ctxt, unsigned int type);
 
 	/* program minimal compute pipeline for a raw PM4 launch */
@@ -364,6 +434,18 @@ is_support_page_queue(enum amd_ip_block_type ip_type, const struct pci_addr *pci
 
 int
 find_dri_id_by_pci(const struct pci_addr *pci);
+
+int
+get_dri_index_from_device(amdgpu_device_handle device, int fd);
+/**
+ * is_apu - Check if the GPU is an APU (accelerated processing unit)
+ * @info: Pointer to amdgpu_gpu_info structure containing device info
+ *
+ * Returns true if the device is an APU, false otherwise.
+ */
+bool is_apu(const struct amdgpu_gpu_info *info);
+
+const char *cmd_get_ip_name(enum amd_ip_block_type ip_type);
 
 int
 amdgpu_bo_alloc_and_map_uq(amdgpu_device_handle device_handle, unsigned int size,

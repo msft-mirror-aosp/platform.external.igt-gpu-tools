@@ -539,12 +539,12 @@ static void set_lut(data_t *data, enum pipe pipe)
 {
 	igt_pipe_t *pipe_obj = &data->display.pipes[pipe];
 	struct drm_color_lut *lut;
-	drmModeCrtc *crtc;
+	drmModeCrtc *drm_crtc;
 	int i, lut_size;
 
-	crtc = drmModeGetCrtc(data->drm_fd, pipe_obj->crtc_id);
-	lut_size = crtc->gamma_size;
-	drmModeFreeCrtc(crtc);
+	drm_crtc = drmModeGetCrtc(data->drm_fd, pipe_obj->crtc_id);
+	lut_size = drm_crtc->gamma_size;
+	drmModeFreeCrtc(drm_crtc);
 
 	lut = malloc(sizeof(lut[0]) * lut_size);
 
@@ -714,14 +714,14 @@ static void run_tests(data_t *data, uint32_t index, enum pipe pipe,
 		test_flip_to_scaled(data, index, pipe, output, modetoset, 1);
 }
 
-igt_main
+int igt_main()
 {
 	enum pipe pipe;
 	data_t data = {};
 	igt_output_t *output;
 	drmModeModeInfoPtr modetoset = NULL;
 
-	igt_fixture {
+	igt_fixture() {
 		data.drm_fd = drm_open_driver_master(DRIVER_INTEL | DRIVER_XE);
 		data.gen = intel_display_ver(intel_get_drm_devid(data.drm_fd));
 		igt_require(data.gen >= 9);
@@ -778,7 +778,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		free_fbs(&data);
 		if (data.pipe_crc) {
 			igt_pipe_crc_stop(data.pipe_crc);

@@ -614,7 +614,7 @@ static void iris_pipeline(int i915)
 #endif /* I915_DEFINE_CONTEXT_PARAM_ENGINES */
 }
 
-igt_main
+int igt_main()
 {
 	const int ncpus = sysconf(_SC_NPROCESSORS_ONLN);
 	struct drm_i915_gem_context_create create;
@@ -622,7 +622,7 @@ igt_main
 	intel_ctx_cfg_t cfg;
 	int fd = -1;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_INTEL);
 		igt_require_gem(fd);
 		gem_require_contexts(fd);
@@ -721,7 +721,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		igt_stop_hang_detector();
 		drm_close_driver(fd);
 	}

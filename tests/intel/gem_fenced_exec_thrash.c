@@ -191,13 +191,13 @@ static void run_test(int fd, int num_fences, int expected_errno,
 	put_ahnd(ahnd);
 }
 
-igt_main
+int igt_main()
 {
 	uint32_t devid = 0;
 	unsigned int num_fences = 0;
 	int fd = -1;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_INTEL);
 		igt_require_gem(fd);
 
@@ -219,6 +219,6 @@ igt_main
 	igt_subtest("too-many-fences")
 		run_test(fd, num_fences + 1, intel_gen(devid) >= 4 ? 0 : ENOBUFS, 0);
 
-	igt_fixture
+	igt_fixture()
 		drm_close_driver(fd);
 }

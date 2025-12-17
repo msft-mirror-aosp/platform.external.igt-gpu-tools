@@ -851,7 +851,16 @@ test_seamless_virtual_rr_basic(data_t *data, enum pipe pipe, igt_output_t *outpu
 	/* Switch to Virtual RR */
 	virtual_mode = *igt_output_get_mode(output);
 
-	for (vrefresh = data->range.min + step_size; vrefresh < data->range.max; vrefresh += step_size) {
+	/*
+	 * Start virtual RR testing from above the midpoint of the VRR range when multiple
+	 * modes are available. This avoids the driver mode adjustment. which can cause an
+	 * unintended clock change.
+	 */
+	vrefresh = (output->config.connector->count_modes > 1) ?
+		   (((data->range.max + data->range.min) / 2) + step_size) :
+		   data->range.min + step_size;
+
+	for ( ; vrefresh < data->range.max; vrefresh += step_size) {
 		virtual_rr_vrr_range_mode(&virtual_mode, vrefresh);
 
 		igt_info("Requesting Virtual Mode with Refresh Rate (%u Hz): \n", vrefresh);
@@ -961,7 +970,9 @@ static void test_cleanup(data_t *data, enum pipe pipe, igt_output_t *output)
 {
 	igt_pipe_set_prop_value(&data->display, pipe, IGT_CRTC_VRR_ENABLED, false);
 
-	igt_plane_set_fb(data->primary, NULL);
+	if (data->primary)
+		igt_plane_set_fb(data->primary, NULL);
+
 	igt_output_set_pipe(output, PIPE_NONE);
 	igt_output_override_mode(output, NULL);
 	igt_display_commit2(&data->display, COMMIT_ATOMIC);
@@ -1057,7 +1068,7 @@ static bool config_constraint(data_t *data, igt_output_t *output, uint32_t flags
 	}
 
 	if ((flags & (TEST_SEAMLESS_VRR | TEST_SEAMLESS_DRRS)) &&
-	    (intel_display_ver(data->drm_fd) >= 14)) {
+	    (intel_display_ver(data->drm_fd) >= 20)) {
 		igt_info("DRRS is not supported on LNL and newer platforms\n");
 		return false;
 	}
@@ -1133,9 +1144,9 @@ static const char help_str[] =
 
 static data_t data;
 
-igt_main_args("drs:", long_opts, help_str, opt_handler, &data)
+int igt_main_args("drs:", long_opts, help_str, opt_handler, &data)
 {
-	igt_fixture {
+	igt_fixture() {
 		data.drm_fd = drm_open_driver_master(DRIVER_ANY);
 
 		kmstest_set_vt_graphics_mode();
@@ -1173,8 +1184,8 @@ igt_main_args("drs:", long_opts, help_str, opt_handler, &data)
 	igt_subtest_with_dynamic("max-min")
 		run_vrr_test(&data, test_basic, TEST_MAXMIN);
 
-	igt_subtest_group {
-		igt_fixture
+	igt_subtest_group() {
+		igt_fixture()
 			igt_require_intel(data.drm_fd);
 
 		igt_describe("Test to switch RR seamlessly without modeset.");
@@ -1211,7 +1222,7 @@ igt_main_args("drs:", long_opts, help_str, opt_handler, &data)
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		igt_display_fini(&data.display);
 		drm_close_driver(data.drm_fd);
 	}

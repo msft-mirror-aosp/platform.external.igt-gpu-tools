@@ -519,12 +519,12 @@ static int mmap_ioctl(int i915, struct drm_i915_gem_mmap *arg)
 
 int fd;
 
-igt_main
+int igt_main()
 {
 	if (igt_run_in_simulation())
 		OBJECT_SIZE = 1 * 1024 * 1024;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_INTEL);
 		igt_require(gem_has_legacy_mmap(fd));
 		gem_require_mmap_wc(fd);
@@ -637,8 +637,8 @@ igt_main
 	igt_subtest("write-cpu-read-wc-unflushed")
 		test_write_cpu_read_wc(fd, 0);
 
-	igt_subtest_group {
-		igt_fixture gem_require_mappable_ggtt(fd);
+	igt_subtest_group() {
+		igt_fixture() gem_require_mappable_ggtt(fd);
 		igt_subtest("write-wc-read-gtt")
 			test_write_wc_read_gtt(fd);
 		igt_subtest("write-gtt-read-wc")
@@ -650,6 +650,6 @@ igt_main
 	igt_subtest("set-cache-level")
 		test_set_cache_level(fd);
 
-	igt_fixture
+	igt_fixture()
 		drm_close_driver(fd);
 }

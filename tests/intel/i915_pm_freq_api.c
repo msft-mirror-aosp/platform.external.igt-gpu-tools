@@ -159,9 +159,9 @@ static void restore_sysfs_freq(int sig)
 	drm_close_driver(i915);
 }
 
-igt_main
+int igt_main()
 {
-	igt_fixture {
+	igt_fixture() {
 		int num_gts, dirfd, gt;
 
 		i915 = drm_open_driver(DRIVER_INTEL);

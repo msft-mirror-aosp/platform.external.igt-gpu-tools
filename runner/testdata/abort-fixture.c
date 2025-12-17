@@ -23,9 +23,9 @@
 
 #include "igt.h"
 
-igt_main
+int igt_main()
 {
-	igt_fixture {
+	igt_fixture() {
 		igt_abort_on_f(true, "I'm out!\n");
 	}
 

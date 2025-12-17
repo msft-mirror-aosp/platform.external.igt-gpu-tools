@@ -42,11 +42,11 @@ __noreturn static void fake_main(void)
 	igt_subtest("A")
 		;
 
-	igt_fixture
+	igt_fixture()
 		printf("should not be executed!\n");
 
 	igt_describe("Group with B, C & D");
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_describe("Basic B");
 		igt_subtest("B")
 			;
@@ -55,7 +55,7 @@ __noreturn static void fake_main(void)
 			printf("should not be executed!\n");
 
 		igt_describe("Group with C & D");
-		igt_subtest_group {
+		igt_subtest_group() {
 			igt_describe("Basic C");
 			igt_subtest("C")
 				printf("should not be executed!\n");
@@ -67,7 +67,7 @@ __noreturn static void fake_main(void)
 	}
 
 	// NO DOC
-	igt_subtest_group {
+	igt_subtest_group() {
 		// NO DOC
 		igt_subtest("E")
 			;

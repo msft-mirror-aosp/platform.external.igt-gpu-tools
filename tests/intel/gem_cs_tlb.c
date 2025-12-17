@@ -154,13 +154,13 @@ static void run_on_ring(int fd, const intel_ctx_t *ctx,
 	}
 }
 
-igt_main
+int igt_main()
 {
 	const struct intel_execution_engine2 *e;
 	const intel_ctx_t *ctx;
 	int fd = -1;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_INTEL);
 		igt_require_gem(fd);
 		ctx = intel_ctx_create_all_physical(fd);
@@ -173,6 +173,6 @@ igt_main
 		}
 	}
 
-	igt_fixture
+	igt_fixture()
 		drm_close_driver(fd);
 }

@@ -469,20 +469,20 @@ static void all(int i915, const intel_ctx_t *ctx)
 		for_each_if (gem_class_can_store_dword(i915, (e)->class)) \
 			igt_dynamic_f("%s", (e)->name)
 
-igt_main
+int igt_main()
 {
 	const struct intel_execution_engine2 *e;
 	const intel_ctx_t *ctx;
 	int fd = -1;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver_master(DRIVER_INTEL);
 		igt_require_gem(fd);
 		ctx = intel_ctx_create_all_physical(fd);
 	}
 
-	igt_subtest_group {
-		igt_fixture {
+	igt_subtest_group() {
+		igt_fixture() {
 			intel_allocator_multiprocess_start();
 			igt_fork_hang_detector(fd);
 		}
@@ -507,20 +507,20 @@ igt_main
 		igt_subtest("close-race")
 			close_race(fd, ctx);
 
-		igt_fixture {
+		igt_fixture() {
 			igt_stop_hang_detector();
 			intel_allocator_multiprocess_stop();
 		}
 	}
 
 
-	igt_subtest_group {
-		igt_fixture {
+	igt_subtest_group() {
+		igt_fixture() {
 			igt_fork_hang_detector(fd);
 		}
 
-		igt_subtest_group {
-			igt_fixture {
+		igt_subtest_group() {
+			igt_fixture() {
 				igt_require(has_extended_busy_ioctl(fd));
 				gem_require_mmap_device_coherent(fd);
 			}
@@ -543,8 +543,8 @@ igt_main
 			}
 		}
 
-		igt_subtest_group {
-			igt_fixture {
+		igt_subtest_group() {
+			igt_fixture() {
 				igt_require(has_extended_busy_ioctl(fd));
 				igt_require(has_semaphores(fd));
 			}
@@ -559,15 +559,15 @@ igt_main
 			}
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			igt_stop_hang_detector();
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_hang_t hang;
 
-		igt_fixture {
+		igt_fixture() {
 			hang = igt_allow_hang(fd, ctx->id, 0);
 		}
 
@@ -579,8 +579,8 @@ igt_main
 			gem_quiescent_gpu(fd);
 		}
 
-		igt_subtest_group {
-			igt_fixture {
+		igt_subtest_group() {
+			igt_fixture() {
 				igt_require(has_extended_busy_ioctl(fd));
 				gem_require_mmap_device_coherent(fd);
 			}
@@ -595,12 +595,12 @@ igt_main
 			}
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			igt_disallow_hang(fd, hang);
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		intel_ctx_destroy(fd, ctx);
 		drm_close_driver(fd);
 	}

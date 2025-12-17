@@ -586,14 +586,14 @@ amdgpu_vce_enc_test(amdgpu_device_handle device, struct mmd_shared_context *shar
 	mmd_context_clean(device, context);
 }
 
-igt_main
+int igt_main()
 {
 	amdgpu_device_handle device;
 	struct mmd_shared_context shared_context = {};
 	int fd = -1;
 	bool is_mv_supported = false;
 
-	igt_fixture {
+	igt_fixture() {
 		uint32_t major, minor;
 		int err;
 
@@ -611,7 +611,7 @@ igt_main
 	igt_subtest("amdgpu_vce_encoder")
 		amdgpu_vce_enc_test(device, &shared_context, is_mv_supported);
 
-	igt_fixture {
+	igt_fixture() {
 		amdgpu_device_deinitialize(device);
 		drm_close_driver(fd);
 	}

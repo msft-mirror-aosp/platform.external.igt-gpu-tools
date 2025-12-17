@@ -313,7 +313,7 @@ static void sig_handler(int i)
  * helper can also be used from children spawned with #igt_fork.
  *
  * In tests with subtests this function can be called outside of failure
- * catching code blocks like #igt_fixture or #igt_subtest.
+ * catching code blocks like #igt_fixture() or #igt_subtest.
  *
  * Note that this just spews signals at the current process unconditionally and
  * hence incurs quite a bit of overhead. For a more focused approach, with less
@@ -350,7 +350,7 @@ void igt_fork_signal_helper(void)
  * Stops the child process spawned with igt_fork_signal_helper() again.
  *
  * In tests with subtests this function can be called outside of failure
- * catching code blocks like #igt_fixture or #igt_subtest.
+ * catching code blocks like #igt_fixture() or #igt_subtest.
  */
 void igt_stop_signal_helper(void)
 {
@@ -419,7 +419,7 @@ __noreturn static void shrink_helper_process(int fd, pid_t pid)
  *
  * This is useful to exercise swapping paths, without requiring us to hit swap.
  *
- * This should only be used from an igt_fixture.
+ * This should only be used from an igt_fixture().
  */
 void igt_fork_shrink_helper(int drm_fd)
 {
@@ -2123,4 +2123,52 @@ void igt_wait_and_close(int fence_fd)
 {
 	poll(&(struct pollfd){fence_fd, POLLIN}, 1, -1);
 	close(fence_fd);
+}
+
+static uint64_t bitmap_get_nbits(void *bitmap, int nbits)
+{
+	uint64_t val = 0;
+
+	igt_assert(nbits < BITS_PER_TYPE(val));
+
+	memcpy(&val, bitmap, DIV_ROUND_UP(nbits, BITS_PER_BYTE));
+	return val & ((1ULL << nbits) - 1);
+}
+
+/**
+ * igt_bitmap_hweight: count enabled bits in bitmap
+ *
+ * @bitmap: pointer to bitmap
+ * @nbits: number of bits to examine
+ */
+int igt_bitmap_hweight(void *bitmap, int nbits)
+{
+	uint64_t *p = bitmap;
+	int ret = 0;
+
+	for (; nbits >= BITS_PER_TYPE(*p); nbits -= BITS_PER_TYPE(*p))
+		ret += igt_hweight(*p++);
+	if (nbits)
+		ret += igt_hweight(bitmap_get_nbits(p, nbits));
+	return ret;
+}
+
+/**
+ * igt_bitmap_fls: find last set bit in bitmap
+ *
+ * @bitmap: pointer to bitmap
+ * @nbits: number of bits to examine
+ *
+ * Bitmap version of fls.
+ */
+int igt_bitmap_fls(void *bitmap, int nbits)
+{
+	uint64_t *p = bitmap;
+	int n = nbits / BITS_PER_TYPE(*p), r = nbits % BITS_PER_TYPE(*p);
+	uint64_t v = r ? bitmap_get_nbits(p + n, r) : 0;
+
+	while (!v && n)
+		v = p[--n];
+
+	return n * BITS_PER_TYPE(*p) + igt_fls(v);
 }

@@ -53,7 +53,9 @@
 #include "intel_cmds_info.h"
 
 #define CCS_RATIO(fd) (intel_gen(intel_get_drm_devid(fd)) >= 20 ? 512 : 256)
-#define XE2_MEM_COPY_MOCS_SHIFT                     25
+#define GEN12_MEM_COPY_MOCS_SHIFT		25
+#define XE2_MEM_COPY_SRC_MOCS_SHIFT		28
+#define XE2_MEM_COPY_DST_MOCS_SHIFT		3
 
 enum blt_color_depth {
 	CD_8bit,
@@ -262,6 +264,9 @@ int blt_ctrl_surf_copy(int fd,
 		       const struct intel_execution_engine2 *e,
 		       uint64_t ahnd,
 		       const struct blt_ctrl_surf_copy_data *surf);
+
+uint64_t emit_xe_flush_dw(int fd, const struct blt_copy_data *blt,
+			  uint64_t bb_pos);
 
 uint64_t emit_blt_fast_copy(int fd,
 			    uint64_t ahnd,

@@ -3155,13 +3155,13 @@ static void test_syncobj_backward_timeline_chain_engines(int fd, const intel_ctx
 	teardown_timeline_chain_engines(&ctx);
 }
 
-igt_main
+int igt_main()
 {
 	const struct intel_execution_engine2 *e;
 	const intel_ctx_t *ctx;
 	int i915 = -1;
 
-	igt_fixture {
+	igt_fixture() {
 		i915 = drm_open_driver(DRIVER_INTEL);
 		igt_require_gem(i915);
 		igt_require(gem_has_exec_fence(i915));
@@ -3171,10 +3171,10 @@ igt_main
 		gem_submission_print_method(i915);
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_hang_t hang;
 
-		igt_fixture {
+		igt_fixture() {
 			igt_fork_hang_detector(i915);
 		}
 
@@ -3187,7 +3187,7 @@ igt_main
 		igt_subtest("basic-wait-all")
 			test_fence_busy_all(i915, ctx, WAIT);
 
-		igt_fixture {
+		igt_fixture() {
 			igt_stop_hang_detector();
 			hang = igt_allow_hang(i915, ctx->id, 0);
 		}
@@ -3202,19 +3202,19 @@ igt_main
 		igt_subtest("wait-hang-all")
 			test_fence_busy_all(i915, ctx, WAIT | HANG);
 
-		igt_fixture {
+		igt_fixture() {
 			igt_disallow_hang(i915, hang);
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		for_each_ctx_engine(i915, ctx, e) {
-			igt_fixture {
+			igt_fixture() {
 				igt_require(gem_class_can_store_dword(i915, e->class));
 			}
 		}
-		igt_subtest_group {
-			igt_fixture {
+		igt_subtest_group() {
+			igt_fixture() {
 				igt_fork_hang_detector(i915);
 				intel_allocator_multiprocess_start();
 			}
@@ -3330,16 +3330,16 @@ igt_main
 				test_submit_chain(i915, ctx);
 			}
 
-			igt_fixture {
+			igt_fixture() {
 				intel_allocator_multiprocess_stop();
 				igt_stop_hang_detector();
 			}
 		}
 
-		igt_subtest_group {
+		igt_subtest_group() {
 			igt_hang_t hang;
 
-			igt_fixture {
+			igt_fixture() {
 				hang = igt_allow_hang(i915, ctx->id, 0);
 				intel_allocator_multiprocess_start();
 			}
@@ -3376,17 +3376,17 @@ igt_main
 						test_fence_await(i915, ctx, e, NONBLOCK | HANG);
 				}
 			}
-			igt_fixture {
+			igt_fixture() {
 				intel_allocator_multiprocess_stop();
 				igt_disallow_hang(i915, hang);
 			}
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		long ring_size = 0;
 
-		igt_fixture {
+		igt_fixture() {
 			ring_size = gem_submission_measure(i915, &ctx->cfg,
 							   ALL_ENGINES);
 			igt_info("Ring size: %ld batches\n", ring_size);
@@ -3404,8 +3404,8 @@ igt_main
 			test_long_history(i915, ctx, ring_size, EXPIRED);
 	}
 
-	igt_subtest_group { /* syncobj */
-		igt_fixture {
+	igt_subtest_group() { /* syncobj */
+		igt_fixture() {
 			igt_require(exec_has_fence_array(i915));
 			igt_assert(has_syncobj(i915));
 			igt_fork_hang_detector(i915);
@@ -3456,14 +3456,14 @@ igt_main
 		igt_subtest("syncobj-channel")
 			test_syncobj_channel(i915);
 
-		igt_fixture {
+		igt_fixture() {
 			intel_allocator_multiprocess_stop();
 			igt_stop_hang_detector();
 		}
 	}
 
-	igt_subtest_group { /* syncobj timeline */
-		igt_fixture {
+	igt_subtest_group() { /* syncobj timeline */
+		igt_fixture() {
 			igt_require(exec_has_timeline_fences(i915));
 			igt_require(has_syncobj_timeline(i915));
 			igt_fork_hang_detector(i915);
@@ -3505,8 +3505,8 @@ igt_main
 		igt_subtest("syncobj-timeline-multiple-ext-nodes")
 			test_syncobj_timeline_multiple_ext_nodes(i915);
 
-		igt_subtest_group { /* syncobj timeline engine chaining */
-			igt_fixture {
+		igt_subtest_group() { /* syncobj timeline engine chaining */
+			igt_fixture() {
 				/*
 				 * We need support for MI_ALU on all
 				 * engines which seems to be there
@@ -3528,12 +3528,12 @@ igt_main
 				test_syncobj_backward_timeline_chain_engines(i915, &ctx->cfg);
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			igt_stop_hang_detector();
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		drm_close_driver(i915);
 	}
 }

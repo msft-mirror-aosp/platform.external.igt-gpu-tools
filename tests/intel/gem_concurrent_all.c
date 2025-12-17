@@ -1564,7 +1564,7 @@ run_mode(const char *prefix,
 	}, *h;
 	struct buffers buffers;
 
-	igt_fixture
+	igt_fixture()
 		buffers_init(&buffers, prefix, create, mode,
 			     size, num_buffers, fd);
 
@@ -1573,12 +1573,12 @@ run_mode(const char *prefix,
 			continue;
 
 		if (!*h->suffix)
-			igt_fixture
+			igt_fixture()
 				igt_fork_hang_detector(fd);
 
 		for (p = all ? pipelines : pskip; p->prefix; p++) {
-			igt_subtest_group  {
-				igt_fixture p->require();
+			igt_subtest_group()  {
+				igt_fixture() p->require();
 
 				igt_subtest_f("%s-%s-%s-sanitycheck0%s%s", prefix, mode->name, p->prefix, suffix, h->suffix) {
 					buffers_create(&buffers);
@@ -1707,11 +1707,11 @@ run_mode(const char *prefix,
 		}
 
 		if (!*h->suffix)
-			igt_fixture
+			igt_fixture()
 				igt_stop_hang_detector();
 	}
 
-	igt_fixture
+	igt_fixture()
 		buffers_fini(&buffers);
 }
 
@@ -1735,8 +1735,8 @@ run_modes(const char *style,
 	};
 
 	while (mode->name) {
-		igt_subtest_group {
-			igt_fixture {
+		igt_subtest_group() {
+			igt_fixture() {
 				if (mode->require)
 					mode->require(create, num);
 			}
@@ -1775,7 +1775,7 @@ num_buffers(uint64_t max,
 	return n;
 }
 
-igt_main
+int igt_main()
 {
 	const struct access_mode modes[] = {
 		{
@@ -1897,7 +1897,7 @@ igt_main
 	if (strstr(igt_test_name(), "all"))
 		all = true;
 
-	igt_fixture {
+	igt_fixture() {
 		igt_allow_unlimited_files();
 
 		fd = drm_open_driver(DRIVER_INTEL);
@@ -1920,8 +1920,8 @@ igt_main
 			/* Minimum test set */
 			snprintf(name, sizeof(name), "%s%s-%s",
 				 c->name, s->name, "tiny");
-			igt_subtest_group {
-				igt_fixture {
+			igt_subtest_group() {
+				igt_fixture() {
 					count = num_buffers(0, s, c, CHECK_RAM);
 				}
 				run_modes(name, c, modes, s, count);
@@ -1930,8 +1930,8 @@ igt_main
 			/* "Average" test set */
 			snprintf(name, sizeof(name), "%s%s-%s",
 				 c->name, s->name, "small");
-			igt_subtest_group {
-				igt_fixture {
+			igt_subtest_group() {
+				igt_fixture() {
 					count = num_buffers(gem_mappable_aperture_size(fd)/4,
 							    s, c, CHECK_RAM);
 				}
@@ -1941,8 +1941,8 @@ igt_main
 			/* Use the entire mappable aperture */
 			snprintf(name, sizeof(name), "%s%s-%s",
 				 c->name, s->name, "thrash");
-			igt_subtest_group {
-				igt_fixture {
+			igt_subtest_group() {
+				igt_fixture() {
 					count = num_buffers(gem_mappable_aperture_size(fd),
 							    s, c, CHECK_RAM);
 				}
@@ -1952,8 +1952,8 @@ igt_main
 			/* Use the entire global GTT */
 			snprintf(name, sizeof(name), "%s%s-%s",
 				 c->name, s->name, "global");
-			igt_subtest_group {
-				igt_fixture {
+			igt_subtest_group() {
+				igt_fixture() {
 					count = num_buffers(gem_global_aperture_size(fd),
 							    s, c, CHECK_RAM);
 				}
@@ -1963,8 +1963,8 @@ igt_main
 			/* Use the entire per-process GTT */
 			snprintf(name, sizeof(name), "%s%s-%s",
 				 c->name, s->name, "full");
-			igt_subtest_group {
-				igt_fixture {
+			igt_subtest_group() {
+				igt_fixture() {
 					count = num_buffers(gem_aperture_size(fd),
 							    s, c, CHECK_RAM);
 				}
@@ -1973,8 +1973,8 @@ igt_main
 
 			snprintf(name, sizeof(name), "%s%s-%s",
 				 c->name, s->name, "shrink");
-			igt_subtest_group {
-				igt_fixture {
+			igt_subtest_group() {
+				igt_fixture() {
 					count = num_buffers(gem_mappable_aperture_size(fd),
 							    s, c, CHECK_RAM);
 
@@ -1982,15 +1982,15 @@ igt_main
 				}
 				run_modes(name, c, modes, s, count);
 
-				igt_fixture
+				igt_fixture()
 					igt_stop_shrink_helper();
 			}
 
 			/* Use the entire mappable aperture, force swapping */
 			snprintf(name, sizeof(name), "%s%s-%s",
 				 c->name, s->name, "swap");
-			igt_subtest_group {
-				igt_fixture {
+			igt_subtest_group() {
+				igt_fixture() {
 					if (igt_get_avail_ram_mb() > gem_mappable_aperture_size(fd)/(1024*1024)) {
 						pin_sz = igt_get_avail_ram_mb() - gem_mappable_aperture_size(fd)/(1024*1024);
 
@@ -2021,7 +2021,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		drm_close_driver(fd);
 		drm_close_driver(vgem_drv);
 	}

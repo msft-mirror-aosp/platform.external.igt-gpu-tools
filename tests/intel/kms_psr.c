@@ -720,10 +720,9 @@ static void test_setup(data_t *data)
 	igt_require_f(data->output,
 		      "No available output found\n");
 
-	/* FBC disabled: Wa_16023588340 */
-	igt_skip_on_f(data->op_fbc_mode == FBC_ENABLED &&
-		      intel_is_fbc_disabled_by_wa(data->drm_fd),
-		      "WA has disabled FBC on BMG\n");
+
+	igt_skip_on_f(IS_BATTLEMAGE(data->devid) && data->op_fbc_mode == FBC_ENABLED,
+		      "FBC isn't supported on BMG\n");
 
 	if (data->op_fbc_mode == FBC_ENABLED)
 		igt_require_f(data->fbc_flag,
@@ -770,7 +769,7 @@ static void dpms_off_on(data_t *data)
 
 data_t data = {};
 
-igt_main
+int igt_main()
 {
 	int z, y;
 	enum operations op;
@@ -790,7 +789,7 @@ igt_main
 	bool fbc_chipset_support;
 	int disp_ver;
 
-	igt_fixture {
+	igt_fixture() {
 		data.drm_fd = drm_open_driver_master(DRIVER_INTEL | DRIVER_XE);
 		data.debugfs_fd = igt_debugfs_dir(data.drm_fd);
 		kmstest_set_vt_graphics_mode();
@@ -964,7 +963,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 
 		close(data.debugfs_fd);
 		buf_ops_destroy(data.bops);

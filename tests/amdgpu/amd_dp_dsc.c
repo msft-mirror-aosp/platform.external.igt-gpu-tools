@@ -537,12 +537,12 @@ static void test_dsc_bpc(data_t *data)
 	test_fini(data);
 }
 
-igt_main {
+int igt_main() {
 	data_t data = { 0 };
 
 	igt_skip_on_simulation();
 
-	igt_fixture {
+	igt_fixture() {
 		data.fd = drm_open_driver_master(DRIVER_ANY);
 
 		igt_display_require(&data.display, data.fd);
@@ -569,7 +569,7 @@ igt_main {
 	igt_subtest("dsc-bpc")
 	    test_dsc_bpc(&data);
 
-	igt_fixture {
+	igt_fixture() {
 		igt_reset_connectors();
 		igt_display_fini(&data.display);
 	}

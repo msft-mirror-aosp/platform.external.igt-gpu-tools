@@ -1579,7 +1579,7 @@ const char *help_str =
 	"  -c n\tCalculate crc up to (1 << n)\n"
 	;
 
-igt_main_args("dpibc:", NULL, help_str, opt_handler, NULL)
+int igt_main_args("dpibc:", NULL, help_str, opt_handler, NULL)
 {
 	int i915, i, gen;
 	struct buf_ops *bops;
@@ -1594,7 +1594,7 @@ igt_main_args("dpibc:", NULL, help_str, opt_handler, NULL)
 		{ I915_TILING_Y, "y" },
 	};
 
-	igt_fixture {
+	igt_fixture() {
 		i915 = drm_open_driver(DRIVER_INTEL);
 		bops = buf_ops_create(i915);
 		gen = intel_gen(intel_get_drm_devid(i915));
@@ -1717,7 +1717,7 @@ igt_main_args("dpibc:", NULL, help_str, opt_handler, NULL)
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		buf_ops_destroy(bops);
 		drm_close_driver(i915);
 	}

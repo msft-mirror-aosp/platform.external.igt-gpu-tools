@@ -140,14 +140,14 @@ static void media_fill(data_t *data, igt_fillfunc_t fill,
 	munmap(ptr, buf->surface[0].size);
 }
 
-igt_main
+int igt_main()
 {
 	data_t data = {0, };
 	igt_fillfunc_t fill_fn = NULL;
 	struct drm_i915_query_memory_regions *query_info;
 	struct igt_collection *set, *region_set;
 
-	igt_fixture {
+	igt_fixture() {
 		data.drm_fd = drm_open_driver_render(DRIVER_INTEL);
 		igt_require_gem(data.drm_fd);
 
@@ -178,7 +178,7 @@ igt_main
 			free(sub_name);
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		igt_collection_destroy(set);
 		igt_stop_hang_detector();
 		drm_close_driver(data.drm_fd);

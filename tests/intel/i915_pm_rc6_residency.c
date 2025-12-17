@@ -601,14 +601,14 @@ static unsigned int rc6_enabled_mask(int i915, int dirfd)
 	return get_rc6_enabled_mask(dirfd);
 }
 
-igt_main
+int igt_main()
 {
 	int i915 = -1;
 	unsigned int dirfd, gt;
 	const intel_ctx_t *ctx;
 
 	/* Use drm_open_driver to verify device existence */
-	igt_fixture {
+	igt_fixture() {
 		i915 = drm_open_driver(DRIVER_INTEL);
 	}
 
@@ -647,11 +647,11 @@ igt_main
 				rc6_fence(i915, gt);
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		unsigned int rc6_enabled = 0;
 		unsigned int devid = 0;
 
-		igt_fixture {
+		igt_fixture() {
 			devid = intel_get_drm_devid(i915);
 			sysfs = igt_sysfs_open(i915);
 			igt_assert(sysfs != 1);
@@ -683,11 +683,11 @@ igt_main
 			residency_accuracy(res.media_rc6, res.duration, "media_rc6");
 		}
 
-		igt_fixture
+		igt_fixture()
 			close(sysfs);
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		free(drpc);
 		drm_close_driver(i915);
 	}

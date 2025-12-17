@@ -209,12 +209,12 @@ static void major_evictions(int fd, uint64_t size, uint64_t count)
 
 #define MAX_32b ((1ull << 32) - 4096)
 
-igt_main
+int igt_main()
 {
 	uint64_t size, count;
 	int fd = -1;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_INTEL);
 		igt_require_gem(fd);
 		gem_require_blitter(fd);
@@ -240,7 +240,7 @@ igt_main
 		major_evictions(fd, size, count);
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		igt_stop_hang_detector();
 	}
 
@@ -283,7 +283,7 @@ igt_main
 	}
 	igt_stop_signal_helper();
 
-	igt_fixture {
+	igt_fixture() {
 		igt_stop_hang_helper();
 		drm_close_driver(fd);
 	}

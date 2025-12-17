@@ -2612,9 +2612,8 @@ static void prepare_subtest_data(const struct test_mode *t,
 
 static void prepare_subtest_screens(const struct test_mode *t)
 {
-	/* FBC disabled: Wa_16023588340 */
-	igt_skip_on_f(t->feature == FEATURE_FBC && intel_is_fbc_disabled_by_wa(drm.fd),
-		      "WA has disabled FBC on BMG\n");
+	igt_skip_on_f((IS_BATTLEMAGE(drm.devid) && t->feature == FEATURE_FBC),
+		      "FBC isn't supported on BMG\n");
 
 	if (t->pipes == PIPE_DUAL)
 		enable_both_screens_and_wait(t);
@@ -2660,9 +2659,8 @@ static void prepare_subtest(const struct test_mode *t,
  */
 static void rte_subtest(const struct test_mode *t)
 {
-	/* FBC disabled: Wa_16023588340 */
-	igt_skip_on_f(t->feature == FEATURE_FBC && intel_is_fbc_disabled_by_wa(drm.fd),
-		      "WA has disabled FBC on BMG\n");
+	igt_skip_on_f((IS_BATTLEMAGE(drm.devid) && t->feature == FEATURE_FBC),
+		      "FBC isn't supported on BMG\n");
 
 	prepare_subtest_data(t, NULL);
 
@@ -4089,13 +4087,13 @@ struct option long_options[] = {
 	{ 0, 0, 0, 0 }
 };
 
-igt_main_args("", long_options, help_str, opt_handler, NULL)
+int igt_main_args("", long_options, help_str, opt_handler, NULL)
 {
 	struct test_mode t;
 	enum pipe pipe;
 	igt_output_t *output;
 
-	igt_fixture {
+	igt_fixture() {
 		setup_drm();
 		drm.devid = intel_get_drm_devid(drm.fd);
 		drm.display_ver = intel_display_ver(drm.devid);
@@ -4150,7 +4148,7 @@ igt_main_args("", long_options, help_str, opt_handler, NULL)
 		plane_fbc_rte_subtest(&t);
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_subtest_with_dynamic("pipe-fbc-rte") {
 
 			enum pipe default_pipe = prim_mode_params.pipe;
@@ -4165,9 +4163,8 @@ igt_main_args("", long_options, help_str, opt_handler, NULL)
 			t.flip = -1;
 			t.tiling = opt.tiling;
 
-			/* FBC disabled: Wa_16023588340 */
-			igt_skip_on_f(t.feature == FEATURE_FBC && intel_is_fbc_disabled_by_wa(drm.fd),
-				      "WA has disabled FBC on BMG\n");
+			igt_skip_on_f((IS_BATTLEMAGE(drm.devid) && t.feature == FEATURE_FBC),
+				      "FBC isn't supported on BMG\n");
 
 			for_each_pipe(&drm.display, pipe) {
 				if (pipe == default_pipe) {
@@ -4198,7 +4195,7 @@ igt_main_args("", long_options, help_str, opt_handler, NULL)
 			}
 		}
 
-		igt_fixture
+		igt_fixture()
 			init_modeset_cached_params();
 	}
 
@@ -4462,6 +4459,6 @@ igt_main_args("", long_options, help_str, opt_handler, NULL)
 		basic_subtest(&t);
 	}
 
-	igt_fixture
+	igt_fixture()
 		teardown_environment();
 }

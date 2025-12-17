@@ -53,7 +53,7 @@ static uint32_t batch_create(int fd, uint64_t *batch_size, uint32_t region)
 	return handle;
 }
 
-igt_main
+int igt_main()
 {
 	const struct intel_execution_engine2 *e;
 	struct drm_i915_query_memory_regions *query_info;
@@ -62,7 +62,7 @@ igt_main
 	const intel_ctx_t *ctx;
 	int fd = -1;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_INTEL);
 		ctx = intel_ctx_create_all_physical(fd);
 
@@ -107,7 +107,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		free(query_info);
 		igt_collection_destroy(set);
 		igt_stop_hang_detector();

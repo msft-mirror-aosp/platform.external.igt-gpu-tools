@@ -1289,7 +1289,7 @@ static bool set_heartbeat(int i915, const char *name, unsigned int value)
 	return true;
 }
 
-igt_main
+int igt_main()
 {
 	static const struct {
 		const char *name;
@@ -1376,7 +1376,7 @@ igt_main
 	intel_ctx_cfg_t cfg;
 	int i915 = -1;
 
-	igt_fixture {
+	igt_fixture() {
 		igt_require_sw_sync();
 
 		i915 = drm_open_driver_master(DRIVER_INTEL);
@@ -1449,7 +1449,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		igt_stop_hang_detector();
 		drm_close_driver(i915);
 	}

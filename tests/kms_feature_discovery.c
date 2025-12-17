@@ -71,17 +71,17 @@ static igt_display_t display;
 IGT_TEST_DESCRIPTION("A metatest that checks for \"features\" presence. "
 		     "The subtests here should only skip or pass, "
 		     "anything else means we have a serious problem.");
-igt_main {
+int igt_main() {
 	igt_fd_t(debugfs_fd);
 	igt_fd_t(fd);
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver_master(DRIVER_ANY);
 		debugfs_fd = igt_debugfs_dir(fd);
 	}
 
-	igt_subtest_group {
-		igt_fixture {
+	igt_subtest_group() {
+		igt_fixture() {
 			igt_display_require(&display, fd);
 		}
 
@@ -90,12 +90,12 @@ igt_main {
 			/* will skip because of the fixture */
 		}
 
-		igt_subtest_group {
+		igt_subtest_group() {
 			volatile int output_count = 0;
 			igt_output_t *output;
 			enum pipe pipe;
 
-			igt_fixture {
+			igt_fixture() {
 				/* this is what most of the 2x tests are doing */
 				for_each_pipe(&display, pipe) {
 					for_each_valid_output_on_pipe(&display, pipe, output) {

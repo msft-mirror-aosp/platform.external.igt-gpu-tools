@@ -189,13 +189,13 @@ static bool has_async_execbuf(int fd)
 	igt_subtest_with_dynamic(T) for_each_ctx_engine(i915, ctx, e) \
 		igt_dynamic_f("%s", (e)->name)
 
-igt_main
+int igt_main()
 {
 	const struct intel_execution_engine2 *e;
 	const intel_ctx_t *ctx;
 	int fd = -1;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver_master(DRIVER_INTEL);
 		igt_require_gem(fd);
 		gem_require_mmap_device_coherent(fd);
@@ -209,20 +209,20 @@ igt_main
 	test_each_engine("concurrent-writes", fd, ctx, e)
 		one(fd, ctx, e->flags, 0);
 
-	igt_subtest_group {
-		igt_fixture {
+	igt_subtest_group() {
+		igt_fixture() {
 			intel_allocator_multiprocess_start();
 		}
 
 		test_each_engine("forked-writes", fd, ctx, e)
 			one(fd, ctx, e->flags, FORKED);
 
-		igt_fixture {
+		igt_fixture() {
 			intel_allocator_multiprocess_stop();
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		igt_stop_hang_detector();
 		intel_ctx_destroy(fd, ctx);
 		drm_close_driver(fd);

@@ -92,7 +92,7 @@ struct xe_sriov_provisioned_range {
 
 const char *xe_sriov_shared_res_to_string(enum xe_sriov_shared_res res);
 bool xe_sriov_is_shared_res_provisionable(int pf, enum xe_sriov_shared_res res, unsigned int gt);
-int xe_sriov_find_ggtt_provisioned_pte_offsets(int pf_fd, int gt, struct xe_mmio *mmio,
+int xe_sriov_find_ggtt_provisioned_pte_offsets(int pf_fd, uint8_t tile, struct xe_mmio *mmio,
 					       struct xe_sriov_provisioned_range **ranges,
 					       unsigned int *nr_ranges);
 const char *xe_sriov_shared_res_attr_name(enum xe_sriov_shared_res res,
@@ -134,8 +134,6 @@ int __xe_sriov_get_engine_reset(int pf, unsigned int gt_num, bool *value);
 bool xe_sriov_get_engine_reset(int pf, unsigned int gt_num);
 int __xe_sriov_set_engine_reset(int pf, unsigned int gt_num, bool value);
 void xe_sriov_set_engine_reset(int pf, unsigned int gt_num, bool value);
-int __xe_sriov_get_sched_if_idle(int pf, unsigned int gt_num, bool *value);
-bool xe_sriov_get_sched_if_idle(int pf, unsigned int gt_num);
 int __xe_sriov_set_sched_if_idle(int pf, unsigned int gt_num, bool value);
 void xe_sriov_set_sched_if_idle(int pf, unsigned int gt_num, bool value);
 int __xe_sriov_get_sched_priority(int pf, unsigned int vf_num,

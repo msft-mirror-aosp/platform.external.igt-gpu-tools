@@ -535,7 +535,7 @@ static int opt_handler(int opt, int opt_index, void *data)
 
 const char *help_str = "  -s\tObject size in bytes\n";
 
-igt_main_args("s:", NULL, help_str, opt_handler, NULL)
+int igt_main_args("s:", NULL, help_str, opt_handler, NULL)
 {
 	double usecs;
 	const char* bps;
@@ -555,7 +555,7 @@ igt_main_args("s:", NULL, help_str, opt_handler, NULL)
 		object_size = OBJECT_SIZE;
 	object_size = (object_size + 3) & -4;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_INTEL);
 		gem_require_pread_pwrite(fd);
 
@@ -603,7 +603,7 @@ igt_main_args("s:", NULL, help_str, opt_handler, NULL)
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		free(src);
 		gem_close(fd, dst);
 	}
@@ -640,6 +640,6 @@ igt_main_args("s:", NULL, help_str, opt_handler, NULL)
 		}
 	}
 
-	igt_fixture
+	igt_fixture()
 		drm_close_driver(fd);
 }

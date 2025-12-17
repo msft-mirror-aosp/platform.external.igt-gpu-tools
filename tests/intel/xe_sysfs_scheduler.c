@@ -6,7 +6,7 @@
 /**
  * TEST: xe sysfs scheduler
  * Category: Core
- * Mega feature: SysMan
+ * Mega feature: General Core features
  * Sub-category: SysMan tests
  * Functionality: scheduler control interface
  *
@@ -219,7 +219,7 @@ static void test_invalid_large_string(int xe, int engine, const char **property,
 }
 
 #define MAX_GTS 8
-igt_main
+int igt_main()
 {
 	static const struct {
 		const char *name;
@@ -246,7 +246,7 @@ igt_main
 	int engines_fd[MAX_GTS], gt_fd[MAX_GTS];
 	int *engine_list[MAX_GTS];
 
-	igt_fixture {
+	igt_fixture() {
 		xe = drm_open_driver(DRIVER_XE);
 		xe_device_get(xe);
 
@@ -300,7 +300,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		for (int gtn = gt_count - 1; gtn >= 0; gtn--) {
 			int *list, i = 0;
 

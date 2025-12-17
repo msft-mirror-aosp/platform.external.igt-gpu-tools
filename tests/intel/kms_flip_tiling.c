@@ -176,7 +176,7 @@ static void test_cleanup(data_t *data, enum pipe pipe, igt_output_t *output)
 	/* Clean up. */
 	igt_plane_set_fb(primary, NULL);
 	pipe_crc_free(data);
-	igt_output_set_pipe(output, PIPE_ANY);
+	igt_output_set_pipe(output, PIPE_NONE);
 
 	igt_remove_fb(data->drm_fd, &data->fb[0]);
 	igt_remove_fb(data->drm_fd, &data->fb[1]);
@@ -209,9 +209,9 @@ static void handle_lost_event(data_t *data) {
 static data_t data = {};
 igt_output_t *output;
 
-igt_main
+int igt_main()
 {
-	igt_fixture {
+	igt_fixture() {
 		data.drm_fd = drm_open_driver_master(DRIVER_INTEL | DRIVER_XE);
 		data.gen = intel_display_ver(intel_get_drm_devid(data.drm_fd));
 
@@ -273,7 +273,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		igt_display_fini(&data.display);
 		drm_close_driver(data.drm_fd);
 	}

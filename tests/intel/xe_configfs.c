@@ -150,6 +150,43 @@ static void test_engines_allowed(int configfs_device_fd)
 }
 
 /**
+ * SUBTEST: gt-types-allowed
+ * Description: Validate gt_types_allowed attribute
+ */
+static void test_gt_types_allowed(int configfs_device_fd)
+{
+	static const char *values[] = {
+		"primary,media", "primary", "media", "",
+		"media,primary", "primary\n", "primary\nmedia",
+		"media\n", "media\nprimary\n",
+	};
+
+	static const char *invalid_values[] = {
+                "check",
+        };
+
+	/*
+	 * These only test if gt type parsing is correct, so just make sure
+	 * there's no device bound
+	 */
+	igt_kmod_unbind("xe", bus_addr);
+
+	for (size_t i = 0; i < ARRAY_SIZE(values); i++) {
+		const char *v = values[i];
+
+		igt_debug("Writing '%s' to gt_types_allowed\n", v);
+		igt_assert(igt_sysfs_set(configfs_device_fd, "gt_types_allowed", v));
+	}
+
+	for (size_t i = 0; i < ARRAY_SIZE(invalid_values); i++) {
+		const char *v = invalid_values[i];
+
+		igt_debug("Writing '%s' to gt_types_allowed\n", v);
+		igt_assert(!igt_sysfs_set(configfs_device_fd, "gt_types_allowed", v));
+	}
+}
+
+/**
  * SUBTEST: ctx-restore-post-bb-invalid
  * Description: Validate ctx_restore_post_bb attribute for invalid values
  *
@@ -168,14 +205,20 @@ static void test_ctx_restore_invalid(int configfs_device_fd, const char *type)
 		{ .test = "invalid-type",
 		  .in = "rcs 11000001 4F100 DEADBEEF",
 		},
-		{ .test = "invalid-number",
-		  .in = "rcs cmd 1100000g 4F100 DEADBEEF",
+		{ .test = "invalid-number-start",
+		  .in = "rcs cmd g1100000 4F100 DEADBEEF",
 		},
-		{ .test = "invalid-number",
+		{ .test = "invalid-number-middle",
+		  .in = "rcs cmd 11g00000 4F100 DEADBEEF",
+		},
+		{ .test = "invalid-number-end",
 		  .in = "rcs cmd 1100000g 4F100 DEADBEEF",
 		},
 		{ .test = "invalid-reg-addr-only",
 		  .in = "rcs reg 4F100",
+		},
+		{ .test = "invalid-engine-instance",
+		  .in = "rcs0 reg 4F100 DEADBEEF",
 		},
 	};
 	char buf[4096] = { };
@@ -303,13 +346,13 @@ static int create_device_configfs_group(int configfs_fd)
 	return configfs_device_fd;
 }
 
-igt_main
+int igt_main()
 {
 	int fd, configfs_fd, configfs_device_fd;
 	uint32_t devid;
 	bool is_vf_device;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_XE);
 		devid = intel_get_drm_devid(fd);
 		is_vf_device = intel_is_vf_device(fd);
@@ -337,6 +380,10 @@ igt_main
 	igt_subtest("engines-allowed")
 		test_engines_allowed(configfs_device_fd);
 
+	igt_describe("Validate gt_types_allowed");
+	igt_subtest("gt-types-allowed")
+		test_gt_types_allowed(configfs_device_fd);
+
 	igt_describe("Validate ctx_restore_post_bb with invalid options");
 	igt_subtest("ctx-restore-post-bb-invalid")
 		test_ctx_restore_invalid(configfs_device_fd, "post");
@@ -353,7 +400,7 @@ igt_main
 	igt_subtest("ctx-restore-mid-bb")
 		test_ctx_restore(configfs_device_fd, "mid");
 
-	igt_fixture {
+	igt_fixture() {
 		close(configfs_device_fd);
 		close(configfs_fd);
 	}

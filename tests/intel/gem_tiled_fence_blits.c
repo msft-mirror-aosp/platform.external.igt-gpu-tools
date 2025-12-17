@@ -292,7 +292,7 @@ static void run_test(int fd, int count, uint64_t end)
 
 #define MAX_32b ((1ull << 32) - 4096)
 
-igt_main
+int igt_main()
 {
 	/*
 	 * For machines with many cpu cores buffer verification can take
@@ -302,7 +302,7 @@ igt_main
 	uint64_t count = 0, end;
 	int fd;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_INTEL);
 		igt_require_gem(fd);
 		gem_require_blitter(fd);
@@ -325,8 +325,8 @@ igt_main
 	igt_subtest("basic")
 		run_test(fd, 2, end);
 
-	igt_subtest_group {
-		igt_fixture {
+	igt_subtest_group() {
+		igt_fixture() {
 			intel_allocator_multiprocess_start();
 		}
 
@@ -337,11 +337,11 @@ igt_main
 			igt_waitchildren();
 		}
 
-		igt_fixture {
+		igt_fixture() {
 			intel_allocator_multiprocess_stop();
 		}
 	}
 
-	igt_fixture
+	igt_fixture()
 		drm_close_driver(fd);
 }

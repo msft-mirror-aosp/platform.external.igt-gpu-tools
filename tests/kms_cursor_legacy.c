@@ -294,7 +294,7 @@ static void stress(igt_display_t *display,
 		}
 	} else {
 		num_crtcs = 1;
-		if(display->pipes[pipe].enabled) {
+		if(display->pipes[pipe].valid) {
 			arg.crtc_id = crtc_id[0] = display->pipes[pipe].crtc_id;
 			do_ioctl(display->drm_fd, DRM_IOCTL_MODE_CURSOR, &arg);
 		}
@@ -403,8 +403,8 @@ static	igt_plane_t
 
 static void set_cursor_hotspot(igt_plane_t *cursor, int  hot_x, int hot_y)
 {
-	igt_output_set_prop_value(cursor, IGT_PLANE_HOTSPOT_X, hot_x);
-	igt_output_set_prop_value(cursor, IGT_PLANE_HOTSPOT_Y, hot_y);
+	igt_plane_set_prop_value(cursor, IGT_PLANE_HOTSPOT_X, hot_x);
+	igt_plane_set_prop_value(cursor, IGT_PLANE_HOTSPOT_Y, hot_y);
 }
 
 static void populate_cursor_args(igt_display_t *display, enum pipe pipe,
@@ -1824,7 +1824,7 @@ static void modeset_atomic_cursor_hotspot(igt_display_t *display)
 	igt_remove_fb(display->drm_fd, &cursor_fb);
 }
 
-igt_main
+int igt_main()
 {
 	const int ncpus = sysconf(_SC_NPROCESSORS_ONLN);
 	igt_display_t display = { .drm_fd = -1 };
@@ -1839,7 +1839,7 @@ igt_main
 		"atomic-transitions-varying-size"
 	};
 
-	igt_fixture {
+	igt_fixture() {
 		unsigned int debug_mask_if_ci = DRM_UT_KMS;
 		display.drm_fd = drm_open_driver_master(DRIVER_ANY);
 		kmstest_set_vt_graphics_mode();
@@ -1858,7 +1858,7 @@ igt_main
 
 	igt_describe("Test checks how many cursor updates we can fit between vblanks "
 		     "on single/all pipes with different modes, priority and number of processes");
-	igt_subtest_group {
+	igt_subtest_group() {
 		enum pipe n;
 		struct {
 			const char *name;
@@ -1891,8 +1891,8 @@ igt_main
 
 	igt_describe("Test checks how many cursor updates we can fit between vblanks "
 		    "on all pipes with different modes, priority and number of processes");
-	igt_subtest_group {
-		igt_fixture
+	igt_subtest_group() {
+		igt_fixture()
 			igt_display_require_output(&display);
 
 		igt_subtest("nonblocking-modeset-vs-cursor-atomic")
@@ -1904,8 +1904,8 @@ igt_main
 
 	igt_describe("Test changes the cursor hotspot and checks that the "
 		      "property is updated accordignly");
-	igt_subtest_group {
-		igt_fixture
+	igt_subtest_group() {
+		igt_fixture()
 			igt_display_require_output(&display);
 
 		igt_subtest("modeset-atomic-cursor-hotspot") {
@@ -1915,7 +1915,7 @@ igt_main
 
 	igt_describe("This test executes flips on both CRTCs "
 		     "while running cursor updates in parallel");
-	igt_subtest_group {
+	igt_subtest_group() {
 		struct {
 			const char *name;
 			int nloops;
@@ -1930,7 +1930,7 @@ igt_main
 			{ "2x-long-nonblocking-modeset-vs-cursor-atomic", 15, true, true },
 		};
 
-		igt_fixture
+		igt_fixture()
 			igt_display_require_output(&display);
 
 		for (i = 0; i < ARRAY_SIZE(tests); i++) {
@@ -1944,7 +1944,7 @@ igt_main
 
 	igt_describe("This test executes flips on both CRTCs "
 		     "while running cursor updates in parallel");
-	igt_subtest_group {
+	igt_subtest_group() {
 		struct {
 			const char *name;
 			int nloops;
@@ -1956,7 +1956,7 @@ igt_main
 			{ "2x-long-cursor-vs-flip-atomic", 50, true },
 		};
 
-		igt_fixture
+		igt_fixture()
 			igt_display_require_output(&display);
 
 		for (i = 0; i < ARRAY_SIZE(tests); i++) {
@@ -1968,8 +1968,8 @@ igt_main
 	}
 
 	igt_describe("Test will first does a page flip and then cursor update");
-	igt_subtest_group {
-		igt_fixture {
+	igt_subtest_group() {
+		igt_fixture() {
 			igt_require_pipe_crc(display.drm_fd);
 			igt_display_require_output(&display);
 		}
@@ -1982,8 +1982,8 @@ igt_main
 	}
 
 	igt_describe("this test perform a busy bo update followed by a cursor update");
-	igt_subtest_group {
-		igt_fixture {
+	igt_subtest_group() {
+		igt_fixture() {
 			igt_require_intel(display.drm_fd);
 			igt_require_pipe_crc(display.drm_fd);
 			igt_display_require_output(&display);
@@ -2001,7 +2001,7 @@ igt_main
 		"* atomic-transition: alternates between a full screen sprite plane "
 			"and full screen primary plane.\n"
 		"* toggle: which toggles cursor visibility and make sure cursor moves between updates.");
-	igt_subtest_group {
+	igt_subtest_group() {
 		struct {
 			const char *name;
 			enum basic_flip_cursor order;
@@ -2013,7 +2013,7 @@ igt_main
 		};
 		int t;
 
-		igt_fixture
+		igt_fixture()
 			igt_display_require_output(&display);
 
 		for (i = 0; i <= flip_test_last; i++) {
@@ -2043,7 +2043,7 @@ igt_main
 
 	igt_describe("The essence of the basic test is that neither the cursor nor the "
 		     "nonblocking flip stall the application of the next");
-	igt_subtest_group {
+	igt_subtest_group() {
 		struct {
 			const char *name;
 			int cursor_pipe;
@@ -2056,7 +2056,7 @@ igt_main
 			{ "cursorB-vs-flipB", 1, 1, 10 },
 		};
 
-		igt_fixture
+		igt_fixture()
 			igt_display_require_output(&display);
 
 		for (i = 0; i <= flip_test_last; i++) {
@@ -2076,7 +2076,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		if (intel_psr2_restore)
 			i915_psr2_sel_fetch_restore(display.drm_fd, NULL);
 		igt_display_fini(&display);

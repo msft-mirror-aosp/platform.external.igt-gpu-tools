@@ -73,9 +73,7 @@
 
 #define OAG_OASTATUS (0xdafc)
 #define OAG_PERF_COUNTER_B(idx) (0xDA94 + 4 * (idx))
-#define OAG_OATAILPTR (0xdb04)
 #define OAG_OATAILPTR_MASK 0xffffffc0
-#define OAG_OABUFFER (0xdb08)
 
 #define XE_OA_MAX_SET_PROPERTIES 16
 
@@ -91,6 +89,24 @@ struct accumulator {
 	enum intel_xe_oa_format_name format;
 
 	uint64_t deltas[MAX_RAW_OA_COUNTERS];
+};
+
+#define MEDIA_GT_GSI_OFFSET		0x380000
+#define XE_OAM_SAG_BASE_ADJ		(MEDIA_GT_GSI_OFFSET + 0x13000)
+#define XE_OAM_SCMI_0_BASE_ADJ		(MEDIA_GT_GSI_OFFSET + 0x14000)
+#define XE_OAM_SCMI_1_BASE_ADJ		(MEDIA_GT_GSI_OFFSET + 0x14800)
+
+/** struct xe_oa_regs - Registers for each OA unit */
+struct xe_oa_regs {
+	u32 base;
+	u32 oa_head_ptr;
+	u32 oa_tail_ptr;
+	u32 oa_buffer;
+	u32 oa_ctx_ctrl;
+	u32 oa_ctrl;
+	u32 oa_debug;
+	u32 oa_status;
+	u32 oa_mmio_trg;
 };
 
 struct oa_buf_size {
@@ -486,7 +502,22 @@ static u64 oa_format_fields(u64 name)
 
 static const struct drm_xe_engine_class_instance *oa_unit_engine(const struct drm_xe_oa_unit *oau)
 {
-	return !oau ? NULL : oau->num_engines ? &oau->eci[random() % oau->num_engines] : NULL;
+	const struct drm_xe_engine_class_instance *hwe;
+
+	igt_assert(oau);
+
+	hwe = oau->num_engines ? &oau->eci[random() % oau->num_engines] : NULL;
+
+	/* If an OA unit has no hwe's, return a hwe from the same gt */
+	if (hwe || !(oau->capabilities & DRM_XE_OA_CAPS_OA_UNIT_GT_ID))
+		goto exit;
+
+	xe_for_each_engine(drm_fd, hwe)
+		if (hwe->gt_id == oau->gt_id)
+			break;
+	igt_assert(hwe);
+exit:
+	return hwe;
 }
 
 static int __first_and_num_oa_units(const struct drm_xe_oa_unit **oau)
@@ -3886,10 +3917,10 @@ emit_oa_reg_read(struct intel_bb *ibb, struct intel_buf *dst, uint32_t offset,
 }
 
 static void
-emit_mmio_triggered_report(struct intel_bb *ibb, uint32_t value)
+emit_mmio_triggered_report(struct intel_bb *ibb, uint32_t reg, uint32_t value)
 {
 	intel_bb_out(ibb, MI_LOAD_REGISTER_IMM(1));
-	intel_bb_out(ibb, OAG_MMIOTRIGGER);
+	intel_bb_out(ibb, reg);
 	intel_bb_out(ibb, value);
 }
 
@@ -3964,6 +3995,59 @@ static u32 oa_get_mmio_base(const struct drm_xe_engine_class_instance *hwe)
 	return mmio_base;
 }
 
+/* For register mmio offsets look at drivers/gpu/drm/xe/regs/xe_oa_regs.h in the kernel */
+static struct xe_oa_regs __oag_regs(void)
+{
+	return (struct xe_oa_regs) {
+		.base		= 0,
+		.oa_head_ptr	= 0xdb00,
+		.oa_tail_ptr	= 0xdb04,
+		.oa_buffer	= 0xdb08,
+		.oa_ctx_ctrl	= 0x2b28,
+		.oa_ctrl	= 0xdaf4,
+		.oa_debug	= 0xdaf8,
+		.oa_status	= 0xdafc,
+		.oa_mmio_trg	= 0xdb1c,
+	};
+}
+
+static struct xe_oa_regs __oam_regs(u32 base)
+{
+	return (struct xe_oa_regs) {
+		.base		= base,
+		.oa_head_ptr	= base + 0x1a0,
+		.oa_tail_ptr	= base + 0x1a4,
+		.oa_buffer	= base + 0x1a8,
+		.oa_ctx_ctrl	= base + 0x1bc,
+		.oa_ctrl	= base + 0x194,
+		.oa_debug	= base + 0x198,
+		.oa_status	= base + 0x19c,
+		.oa_mmio_trg	= base + 0x1d0,
+	};
+}
+
+static struct xe_oa_regs oa_unit_regs(const struct drm_xe_oa_unit *oau)
+{
+	switch (oau->oa_unit_type) {
+	case DRM_XE_OA_UNIT_TYPE_OAM: {
+		const struct drm_xe_oa_unit *first_oam_unit =
+			oa_unit_by_type(drm_fd, DRM_XE_OA_UNIT_TYPE_OAM);
+
+		igt_assert(first_oam_unit);
+		if (oau->oa_unit_id == first_oam_unit->oa_unit_id)
+			return __oam_regs(XE_OAM_SCMI_0_BASE_ADJ);
+		else
+			return __oam_regs(XE_OAM_SCMI_1_BASE_ADJ);
+	}
+	case DRM_XE_OA_UNIT_TYPE_OAM_SAG:
+		return __oam_regs(XE_OAM_SAG_BASE_ADJ);
+	case DRM_XE_OA_UNIT_TYPE_OAG:
+		return __oag_regs();
+	default:
+		igt_assert_f(0, "Unknown oa_unit_type %d\n", oau->oa_unit_type);
+	}
+}
+
 /**
  * SUBTEST: oa-regs-whitelisted
  * Description: Verify that OA registers are whitelisted
@@ -4019,6 +4103,7 @@ __test_mmio_triggered_reports(const struct drm_xe_oa_unit *oau)
 {
 	struct intel_xe_perf_metric_set *test_set = oa_unit_metric_set(oau);
 	const struct drm_xe_engine_class_instance *hwe = oa_unit_engine(oau);
+	struct xe_oa_regs regs = oa_unit_regs(oau);
 	uint64_t properties[] = {
 		DRM_XE_OA_PROPERTY_OA_UNIT_ID, oau->oa_unit_id,
 		DRM_XE_OA_PROPERTY_SAMPLE_OA, true,
@@ -4063,18 +4148,18 @@ __test_mmio_triggered_reports(const struct drm_xe_oa_unit *oau)
 	buf = mmap(0, default_oa_buffer_size, PROT_READ, MAP_PRIVATE, stream_fd, 0);
 	igt_assert(buf != NULL);
 
-	emit_oa_reg_read(ibb, dst_buf, 0, OAG_OABUFFER);
-	emit_oa_reg_read(ibb, dst_buf, 4, OAG_OATAILPTR);
-	emit_mmio_triggered_report(ibb, 0xc0ffee11);
+	emit_oa_reg_read(ibb, dst_buf, 0, regs.oa_buffer);
+	emit_oa_reg_read(ibb, dst_buf, 4, regs.oa_tail_ptr);
+	emit_mmio_triggered_report(ibb, regs.oa_mmio_trg, 0xc0ffee11);
 
-	if (render_copy)
+	if (render_copy && oau->oa_unit_type == DRM_XE_OA_UNIT_TYPE_OAG)
 		render_copy(ibb,
 			    &src, 0, 0, rc_width, rc_height,
 			    &dst, 0, 0);
 
-	emit_mmio_triggered_report(ibb, 0xc0ffee22);
+	emit_mmio_triggered_report(ibb, regs.oa_mmio_trg, 0xc0ffee22);
 
-	emit_oa_reg_read(ibb, dst_buf, 8, OAG_OATAILPTR);
+	emit_oa_reg_read(ibb, dst_buf, 8, regs.oa_tail_ptr);
 
 	intel_bb_flush_render(ibb);
 	intel_bb_sync(ibb);
@@ -4126,6 +4211,7 @@ __test_mmio_triggered_reports_read(const struct drm_xe_oa_unit *oau)
 {
 	struct intel_xe_perf_metric_set *test_set = oa_unit_metric_set(oau);
 	const struct drm_xe_engine_class_instance *hwe = oa_unit_engine(oau);
+	struct xe_oa_regs regs = oa_unit_regs(oau);
 	uint64_t properties[] = {
 		DRM_XE_OA_PROPERTY_OA_UNIT_ID, oau->oa_unit_id,
 		DRM_XE_OA_PROPERTY_SAMPLE_OA, true,
@@ -4159,14 +4245,14 @@ __test_mmio_triggered_reports_read(const struct drm_xe_oa_unit *oau)
 	stream_fd = __perf_open(drm_fd, &param, false);
 	set_fd_flags(stream_fd, O_CLOEXEC);
 
-	emit_mmio_triggered_report(ibb, 0xc0ffee11);
+	emit_mmio_triggered_report(ibb, regs.oa_mmio_trg, 0xc0ffee11);
 
-	if (render_copy)
+	if (render_copy && oau->oa_unit_type == DRM_XE_OA_UNIT_TYPE_OAG)
 		render_copy(ibb,
 			    &src, 0, 0, rc_width, rc_height,
 			    &dst, 0, 0);
 
-	emit_mmio_triggered_report(ibb, 0xc0ffee22);
+	emit_mmio_triggered_report(ibb, regs.oa_mmio_trg, 0xc0ffee22);
 
 	intel_bb_flush_render(ibb);
 	intel_bb_sync(ibb);
@@ -4254,111 +4340,64 @@ test_sysctl_defaults(void)
 }
 
 /**
- * SUBTEST: oa-unit-exclusive-stream-sample-oa
- * Description: Check that only a single stream can be opened on an OA unit (with sampling)
- *
- * SUBTEST: oa-unit-exclusive-stream-exec-q
- * Description: Check that only a single stream can be opened on an OA unit (for OAR/OAC)
+ * SUBTEST: oa-unit-exclusive-stream
+ * Description: Check that only a single stream can be opened on an OA unit
 */
 /*
  * Test if OA buffer streams can be independently opened on OA unit. Once a user
  * opens a stream, that oa unit is exclusive to the user, other users get -EBUSY on
  * trying to open a stream.
  */
-static void
-test_oa_unit_exclusive_stream(bool exponent)
+static void test_oa_unit_exclusive_stream(void)
 {
 	struct drm_xe_query_oa_units *qoa = xe_oa_units(drm_fd);
-	const struct drm_xe_engine_class_instance *hwe;
 	const struct drm_xe_oa_unit *oau;
 	uint64_t properties[] = {
 		DRM_XE_OA_PROPERTY_OA_UNIT_ID, 0,
 		DRM_XE_OA_PROPERTY_SAMPLE_OA, true,
 		DRM_XE_OA_PROPERTY_OA_METRIC_SET, 0,
 		DRM_XE_OA_PROPERTY_OA_FORMAT, __ff(0),
-		DRM_XE_OA_PROPERTY_OA_ENGINE_INSTANCE, 0,
 		DRM_XE_OA_PROPERTY_OA_PERIOD_EXPONENT, oa_exponent_default,
 	};
 	struct intel_xe_oa_open_prop param = {
 		.num_properties = ARRAY_SIZE(properties) / 2,
 		.properties_ptr = to_user_pointer(properties),
 	};
-	uint32_t *exec_q = calloc(qoa->num_oa_units, sizeof(u32));
 	uint32_t *perf_fd = calloc(qoa->num_oa_units, sizeof(u32));
-	u32 vm = xe_vm_create(drm_fd, 0, 0);
 	struct intel_xe_perf_metric_set *test_set;
 	uint32_t i;
 
-	/* for each oa unit, open one random perf stream with sample OA */
+	/* for each oa unit, open one stream with sample OA */
 	for (i = 0; i < qoa->num_oa_units; i++) {
 		oau = oa_unit_by_id(drm_fd, i);
-		hwe = oa_unit_engine(oau);
-
-		if (!hwe)
-			continue;
 		test_set = oa_unit_metric_set(oau);
 
-		igt_debug("opening OA buffer with c:i %d:%d\n",
-			  hwe->engine_class, hwe->engine_instance);
-		exec_q[i] = xe_exec_queue_create_deconst(drm_fd, vm, hwe, 0);
-		if (!exponent) {
-			properties[10] = DRM_XE_OA_PROPERTY_EXEC_QUEUE_ID;
-			properties[11] = exec_q[i];
-		}
+		igt_debug("Opening OA stream on OA unit id:type %d:%d\n", i, oau->oa_unit_type);
 
 		properties[1] = oau->oa_unit_id;
 		properties[5] = test_set->perf_oa_metrics_set;
 		properties[7] = __ff(test_set->perf_oa_format);
-		properties[9] = hwe->engine_instance;
 		perf_fd[i] = intel_xe_perf_ioctl(drm_fd, DRM_XE_OBSERVATION_OP_STREAM_OPEN, &param);
 		igt_assert(perf_fd[i] >= 0);
 	}
 
-	/* Xe KMD holds reference to the exec_q's so they shouldn't be really destroyed */
-	for (i = 0; i < qoa->num_oa_units; i++)
-		if (exec_q[i])
-			xe_exec_queue_destroy(drm_fd, exec_q[i]);
-
 	/* for each oa unit make sure no other streams can be opened */
 	for (i = 0; i < qoa->num_oa_units; i++) {
-		int err;
-
 		oau = oa_unit_by_id(drm_fd, i);
-		hwe = oa_unit_engine(oau);
-
-		if (!hwe)
-			continue;
 		test_set = oa_unit_metric_set(oau);
 
-		igt_debug("try with exp with c:i %d:%d\n",
-			  hwe->engine_class, hwe->engine_instance);
+		igt_debug("Try on OA unit id:type %d:%d\n", i, oau->oa_unit_type);
+
 		/* case 1: concurrent access to OAG should fail */
 		properties[1] = oau->oa_unit_id;
 		properties[5] = test_set->perf_oa_metrics_set;
 		properties[7] = __ff(test_set->perf_oa_format);
-		properties[9] = hwe->engine_instance;
-		properties[10] = DRM_XE_OA_PROPERTY_OA_PERIOD_EXPONENT;
-		properties[11] = oa_exponent_default;
 		intel_xe_perf_ioctl_err(drm_fd, DRM_XE_OBSERVATION_OP_STREAM_OPEN, &param, EBUSY);
-
-		/* case 2: concurrent access to non-OAG unit should fail */
-		igt_debug("try with exec_q with c:i %d:%d\n",
-			  hwe->engine_class, hwe->engine_instance);
-		exec_q[i] = xe_exec_queue_create_deconst(drm_fd, vm, hwe, 0);
-		properties[10] = DRM_XE_OA_PROPERTY_EXEC_QUEUE_ID;
-		properties[11] = exec_q[i];
-		errno = 0;
-		err = intel_xe_perf_ioctl(drm_fd, DRM_XE_OBSERVATION_OP_STREAM_OPEN, &param);
-		igt_assert_lt(err, 0);
-		igt_assert(errno == EBUSY || errno == ENODEV);
 	}
 
-	for (i = 0; i < qoa->num_oa_units; i++) {
+	for (i = 0; i < qoa->num_oa_units; i++)
 		if (perf_fd[i])
 			close(perf_fd[i]);
-		if (exec_q[i])
-			xe_exec_queue_destroy(drm_fd, exec_q[i]);
-	}
 }
 
 /**
@@ -4975,7 +5014,7 @@ static struct option long_options[] = {
 	{ NULL, 0, 0, 0 }
 };
 
-igt_main_args("b:t", long_options, help_str, opt_handler, NULL)
+int igt_main_args("b:t", long_options, help_str, opt_handler, NULL)
 {
 	const struct sync_section {
 		const char *name;
@@ -4993,10 +5032,10 @@ igt_main_args("b:t", long_options, help_str, opt_handler, NULL)
 		{ "ufence-wait", OA_SYNC_TYPE_UFENCE, WAIT },
 		{ NULL },
 	};
-	const struct drm_xe_oa_unit *oau;
+	const struct drm_xe_oa_unit *oau0, *oau;
 	struct xe_device *xe_dev;
 
-	igt_fixture {
+	igt_fixture() {
 		struct stat sb;
 
 		/*
@@ -5012,7 +5051,7 @@ igt_main_args("b:t", long_options, help_str, opt_handler, NULL)
 	igt_subtest("sysctl-defaults")
 		test_sysctl_defaults();
 
-	igt_fixture {
+	igt_fixture() {
 		/* We expect that the ref count test before these fixtures
 		 * should have closed drm_fd...
 		 */
@@ -5025,7 +5064,7 @@ igt_main_args("b:t", long_options, help_str, opt_handler, NULL)
 		/* See xe_query_oa_units_new() */
 		igt_require(xe_dev->oa_units);
 		igt_require(xe_dev->oa_units->num_oa_units);
-		oau = oa_unit_by_id(drm_fd, 0);
+		oau0 = oa_unit_by_id(drm_fd, 0);
 
 		devid = intel_get_drm_devid(drm_fd);
 		sysfs = igt_sysfs_open(drm_fd);
@@ -5064,7 +5103,7 @@ igt_main_args("b:t", long_options, help_str, opt_handler, NULL)
 			test_oa_exponents(oau);
 
 	igt_subtest_with_dynamic("buffer-fill") {
-		igt_require(oau->capabilities & DRM_XE_OA_CAPS_OA_BUFFER_SIZE);
+		igt_require(oau0->capabilities & DRM_XE_OA_CAPS_OA_BUFFER_SIZE);
 		__for_oa_unit_by_type(DRM_XE_OA_UNIT_TYPE_OAG)
 			test_buffer_fill(oau);
 	}
@@ -5076,14 +5115,14 @@ igt_main_args("b:t", long_options, help_str, opt_handler, NULL)
 	igt_subtest_with_dynamic("buffer-size") {
 		long k = random() % num_buf_sizes;
 
-		igt_require(oau->capabilities & DRM_XE_OA_CAPS_OA_BUFFER_SIZE);
+		igt_require(oau0->capabilities & DRM_XE_OA_CAPS_OA_BUFFER_SIZE);
 		__for_oa_unit_by_type_w_arg(DRM_XE_OA_UNIT_TYPE_OAG, buf_sizes[k].name)
 			test_non_zero_reason(oau, buf_sizes[k].size);
 	}
 
 	igt_subtest_with_dynamic("non-zero-reason") {
 		igt_require(!igt_run_in_simulation());
-		igt_require(oau->capabilities & DRM_XE_OA_CAPS_OA_BUFFER_SIZE);
+		igt_require(oau0->capabilities & DRM_XE_OA_CAPS_OA_BUFFER_SIZE);
 		__for_oa_unit_by_type(DRM_XE_OA_UNIT_TYPE_OAG)
 			test_non_zero_reason(oau, 0);
 	}
@@ -5093,7 +5132,7 @@ igt_main_args("b:t", long_options, help_str, opt_handler, NULL)
 	 * Description: Non zero reason over all OA units
 	 */
 	igt_subtest_with_dynamic("non-zero-reason-all") {
-		igt_require(oau->capabilities & DRM_XE_OA_CAPS_OA_BUFFER_SIZE);
+		igt_require(oau0->capabilities & DRM_XE_OA_CAPS_OA_BUFFER_SIZE);
 		__for_each_oa_unit(oau)
 			test_non_zero_reason(oau, SZ_128K);
 	}
@@ -5131,7 +5170,7 @@ igt_main_args("b:t", long_options, help_str, opt_handler, NULL)
 	igt_subtest("short-reads")
 		test_short_reads();
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_subtest_with_dynamic("mi-rpc")
 			__for_oa_unit_by_type(DRM_XE_OA_UNIT_TYPE_OAG)
 				test_mi_rpc(oau);
@@ -5150,12 +5189,9 @@ igt_main_args("b:t", long_options, help_str, opt_handler, NULL)
 		}
 	}
 
-	igt_subtest_group {
-		igt_subtest("oa-unit-exclusive-stream-sample-oa")
-			test_oa_unit_exclusive_stream(true);
-
-		igt_subtest("oa-unit-exclusive-stream-exec-q")
-			test_oa_unit_exclusive_stream(false);
+	igt_subtest_group() {
+		igt_subtest("oa-unit-exclusive-stream")
+			test_oa_unit_exclusive_stream();
 
 		igt_subtest("oa-unit-concurrent-oa-buffer-read") {
 			igt_require(!igt_run_in_simulation());
@@ -5185,7 +5221,7 @@ igt_main_args("b:t", long_options, help_str, opt_handler, NULL)
 	igt_subtest("whitelisted-registers-userspace-config")
 		test_whitelisted_registers_userspace_config();
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_subtest_with_dynamic("map-oa-buffer")
 			__for_oa_unit_by_type(DRM_XE_OA_UNIT_TYPE_OAG)
 				test_mapped_oa_buffer(check_reports_from_mapped_buffer, oau);
@@ -5214,13 +5250,13 @@ igt_main_args("b:t", long_options, help_str, opt_handler, NULL)
 	igt_subtest_with_dynamic("tail-address-wrap") {
 		long k = random() % num_buf_sizes;
 
-		igt_require(oau->capabilities & DRM_XE_OA_CAPS_OA_BUFFER_SIZE);
+		igt_require(oau0->capabilities & DRM_XE_OA_CAPS_OA_BUFFER_SIZE);
 		__for_oa_unit_by_type_w_arg(DRM_XE_OA_UNIT_TYPE_OAG, buf_sizes[k].name)
 			test_tail_address_wrap(oau, buf_sizes[k].size);
 	}
 
-	igt_subtest_group {
-		igt_fixture {
+	igt_subtest_group() {
+		igt_fixture() {
 			perf_init_whitelist();
 		}
 
@@ -5230,20 +5266,22 @@ igt_main_args("b:t", long_options, help_str, opt_handler, NULL)
 
 		igt_subtest_with_dynamic("mmio-triggered-reports") {
 			igt_require(HAS_OA_MMIO_TRIGGER(devid));
-			__for_oa_unit_by_type(DRM_XE_OA_UNIT_TYPE_OAG)
+			igt_require(oau0->capabilities & DRM_XE_OA_CAPS_OA_UNIT_GT_ID);
+			__for_each_oa_unit(oau)
 				test_mmio_triggered_reports(oau, false);
 		}
 
 		igt_subtest_with_dynamic("mmio-triggered-reports-read") {
 			igt_require(HAS_OA_MMIO_TRIGGER(devid));
-			__for_oa_unit_by_type(DRM_XE_OA_UNIT_TYPE_OAG)
+			igt_require(oau0->capabilities & DRM_XE_OA_CAPS_OA_UNIT_GT_ID);
+			__for_each_oa_unit(oau)
 				test_mmio_triggered_reports(oau, true);
 		}
 	}
 
-	igt_subtest_group {
-		igt_fixture {
-			igt_require(oau->capabilities & DRM_XE_OA_CAPS_SYNCS);
+	igt_subtest_group() {
+		igt_fixture() {
+			igt_require(oau0->capabilities & DRM_XE_OA_CAPS_SYNCS);
 		}
 
 		for (const struct sync_section *s = sync_sections; s->name; s++) {
@@ -5254,7 +5292,7 @@ igt_main_args("b:t", long_options, help_str, opt_handler, NULL)
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		/* leave sysctl options in their default state... */
 		write_u64_file("/proc/sys/dev/xe/observation_paranoid", 1);
 

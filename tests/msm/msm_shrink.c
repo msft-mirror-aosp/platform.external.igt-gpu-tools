@@ -243,13 +243,13 @@ static void run_test(int nchildren, uint64_t alloc_size_mb, unsigned num_bos,
 
 static const unsigned num_bos[] = { 8, 32 };
 
-igt_main
+int igt_main()
 {
 	struct msm_device *dev = NULL;
 	uint64_t alloc_size_mb = 0;
 	int num_processes = 0;
 
-	igt_fixture {
+	igt_fixture() {
 		int params, ncpus;
 		uint64_t mem_size;
 		uint64_t swap_size;
@@ -306,7 +306,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		igt_msm_dev_close(dev);
 	}
 }

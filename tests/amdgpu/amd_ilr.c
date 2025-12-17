@@ -315,14 +315,14 @@ static void test_flow(data_t *data, enum sub_test option)
 	}
 }
 
-igt_main
+int igt_main()
 {
 	data_t data;
 	memset(&data, 0, sizeof(data));
 
 	igt_skip_on_simulation();
 
-	igt_fixture
+	igt_fixture()
 	{
 		data.drm_fd = drm_open_driver_master(DRIVER_AMDGPU);
 		if (data.drm_fd == -1)
@@ -342,7 +342,7 @@ igt_main
 	igt_subtest("ilr-policy")
 		test_flow(&data, ILR_POLICY);
 
-	igt_fixture
+	igt_fixture()
 	{
 		igt_display_fini(&data.display);
 	}

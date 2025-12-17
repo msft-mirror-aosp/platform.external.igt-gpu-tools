@@ -14,7 +14,7 @@
 
 #define MAX_BOS 1000
 
-igt_main
+int igt_main()
 {
 	struct msm_device *dev = NULL;
 	struct msm_pipe *pipe = NULL;
@@ -24,7 +24,7 @@ igt_main
 		10, 100, 250, 500, 1000,
 	};
 
-	igt_fixture {
+	igt_fixture() {
 		struct drm_msm_gem_submit req;
 
 		dev = igt_msm_dev_open();
@@ -78,7 +78,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		for (int i = 0; i < MAX_BOS; i++)
 			igt_msm_bo_free(bos[i]);
 		igt_msm_pipe_close(pipe);

@@ -487,7 +487,7 @@ static void test_off(int i915, int engine)
 	put_ahnd(ahnd);
 }
 
-igt_main
+int igt_main()
 {
 	static const struct {
 		const char *name;
@@ -504,7 +504,7 @@ igt_main
 	};
 	int i915 = -1, engines = -1;
 
-	igt_fixture {
+	igt_fixture() {
 		int sys;
 
 		i915 = drm_open_driver(DRIVER_INTEL);
@@ -525,7 +525,7 @@ igt_main
 		igt_subtest_with_dynamic(t->name)
 			dyn_sysfs_engines(i915, engines, ATTR, t->fn);
 
-	igt_fixture {
+	igt_fixture() {
 		close(engines);
 		drm_close_driver(i915);
 	}

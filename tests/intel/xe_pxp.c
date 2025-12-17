@@ -1102,12 +1102,12 @@ static void exit_handler(int sig)
 	usleep(50 * 1000); /* give time for the termination to be processed */
 }
 
-igt_main
+int igt_main()
 {
 	bool pxp_supported = true;
 	drmModeResPtr res;
 
-	igt_fixture {
+	igt_fixture() {
 		xe_fd = drm_open_driver(DRIVER_XE);
 		igt_require(xe_has_engine_class(xe_fd, DRM_XE_ENGINE_CLASS_RENDER));
 		pxp_supported = is_pxp_hw_supported(xe_fd);
@@ -1116,7 +1116,7 @@ igt_main
 			igt_install_exit_handler(exit_handler);
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_describe("Verify PXP allocations work as expected");
 		igt_subtest("pxp-bo-alloc")
 			test_pxp_bo_alloc(xe_fd, pxp_supported);
@@ -1125,7 +1125,7 @@ igt_main
 			test_pxp_queue_creation(xe_fd, pxp_supported);
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_describe("Verify protected render operations:");
 		igt_subtest("regular-src-to-pxp-dest-rendercopy") {
 			require_pxp_render(xe_fd, pxp_supported);
@@ -1137,7 +1137,7 @@ igt_main
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		const struct mode {
 			enum termination_type type;
 			const char *tag;
@@ -1159,7 +1159,7 @@ igt_main
 		}
 	}
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		igt_display_t display;
 
 		igt_describe("Test the flip of PXP objects to display");
@@ -1176,7 +1176,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		drmModeFreeResources(res);
 		if (!pxp_supported)
 			drm_close_driver(xe_fd);

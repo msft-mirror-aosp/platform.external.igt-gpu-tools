@@ -57,6 +57,7 @@ int __get_drm_device_name(int fd, char *name, int name_size);
 #define DRIVER_VMWGFX   (1 << 8)
 #define DRIVER_VKMS	(1 << 9)
 #define DRIVER_VIRTIO	(1 << 10)
+#define DRIVER_PANTHOR	(1 << 11)
 
 /*
  * Exclude DRIVER_VGEM and DRIVER_VIRTIO from DRIVER_ANY since if you run
@@ -141,6 +142,7 @@ void igt_require_vc4(int fd);
 void igt_require_xe(int fd);
 void igt_require_vkms(void);
 
+bool is_vkms_device(int fd);
 bool is_amdgpu_device(int fd);
 bool is_i915_device(int fd);
 bool is_mtk_device(int fd);

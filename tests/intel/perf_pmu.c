@@ -1079,7 +1079,7 @@ static void cleanup_crtc(data_t *data, int fd, igt_output_t *output)
 	primary = igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY);
 	igt_plane_set_fb(primary, NULL);
 
-	igt_output_set_pipe(output, PIPE_ANY);
+	igt_output_set_pipe(output, PIPE_NONE);
 	igt_display_commit(display);
 }
 
@@ -2278,7 +2278,7 @@ static void restore_sysfs_freq(int i915)
 	free(stash_boost);
 }
 
-igt_main
+int igt_main()
 {
 	const struct intel_execution_engine2 *e;
 	unsigned int num_engines = 0;
@@ -2292,7 +2292,7 @@ igt_main
 	 * Including all the I915_PMU_OTHER(x).
 	 */
 
-	igt_fixture {
+	igt_fixture() {
 		fd = __drm_open_driver(DRIVER_INTEL);
 
 		igt_require_gem(fd);
@@ -2423,8 +2423,8 @@ igt_main
 	 * Check that reported usage is correct when PMU is
 	 * enabled after two batches are running.
 	 */
-	igt_subtest_group {
-		igt_fixture gem_require_contexts(fd);
+	igt_subtest_group() {
+		igt_fixture() gem_require_contexts(fd);
 
 		test_each_engine("busy-double-start", fd, ctx, e)
 			busy_double_start(fd, ctx, e);
@@ -2437,7 +2437,7 @@ igt_main
 	test_each_engine("enable-race", fd, ctx, e)
 		test_enable_race(fd, ctx, e);
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		const unsigned int pct[] = { 2, 50, 98 };
 
 		/**
@@ -2537,11 +2537,11 @@ igt_main
 	/**
 	 * Check render nodes are counted.
 	 */
-	igt_subtest_group {
+	igt_subtest_group() {
 		int render_fd = -1;
 		const intel_ctx_t *render_ctx = NULL;
 
-		igt_fixture {
+		igt_fixture() {
 			render_fd = __drm_open_driver_render(DRIVER_INTEL);
 			igt_require_gem(render_fd);
 			render_ctx = intel_ctx_create_all_physical(render_fd);
@@ -2554,13 +2554,13 @@ igt_main
 		test_each_engine("render-node-busy-idle", render_fd, render_ctx, e)
 			single(render_fd, render_ctx, e, TEST_BUSY | TEST_TRAILING_IDLE);
 
-		igt_fixture {
+		igt_fixture() {
 			intel_ctx_destroy(render_fd, render_ctx);
 			drm_close_driver(render_fd);
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		intel_ctx_destroy(fd, ctx);
 		drm_close_driver(fd);
 		free(drpc);

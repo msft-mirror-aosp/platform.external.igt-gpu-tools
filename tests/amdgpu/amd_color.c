@@ -392,7 +392,7 @@ static void test_crtc_lut_accuracy(data_t *data)
 	lut_free(&lut_degamma);
 }
 
-igt_main
+int igt_main()
 {
 	data_t data;
 
@@ -400,7 +400,7 @@ igt_main
 
 	memset(&data, 0, sizeof(data));
 
-	igt_fixture
+	igt_fixture()
 	{
 		data.fd = drm_open_driver_master(DRIVER_AMDGPU);
 
@@ -418,7 +418,7 @@ igt_main
 	igt_describe("Tests color accuracy of CRTC degamma and regamma");
 	igt_subtest("crtc-lut-accuracy") test_crtc_lut_accuracy(&data);
 
-	igt_fixture
+	igt_fixture()
 	{
 		igt_display_fini(&data.display);
 	}

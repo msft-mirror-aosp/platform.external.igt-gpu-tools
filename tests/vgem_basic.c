@@ -489,7 +489,7 @@ static bool has_prime_export(int fd)
 	return value & DRM_PRIME_CAP_EXPORT;
 }
 
-igt_main
+int igt_main()
 {
 	int fd = -1;
 
@@ -497,7 +497,7 @@ igt_main
 	igt_subtest("unload")
 		test_unload();
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_VGEM);
 	}
 
@@ -559,8 +559,8 @@ igt_main
 	igt_subtest("busy-fence")
 		test_busy_fence(fd);
 
-	igt_subtest_group {
-		igt_fixture {
+	igt_subtest_group() {
+		igt_fixture() {
 			igt_require(has_prime_export(fd));
 		}
 
@@ -574,8 +574,8 @@ igt_main
 		igt_subtest("dmabuf-mmap")
 			test_dmabuf_mmap(fd);
 
-		igt_subtest_group {
-			igt_fixture {
+		igt_subtest_group() {
+			igt_fixture() {
 				igt_require(vgem_has_fences(fd));
 			}
 
@@ -598,7 +598,7 @@ igt_main
 	igt_subtest("debugfs")
 		test_debugfs_read(fd);
 
-	igt_fixture {
+	igt_fixture() {
 		drm_close_driver(fd);
 	}
 }

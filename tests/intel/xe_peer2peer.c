@@ -18,8 +18,8 @@
 /**
  * TEST: xe_peer2peer
  * Category: Core
- * Mega feature: General Core features
- * Sub-category: MultiGPU
+ * Mega feature: MultiGPU
+ * Sub-category: MultiGPU tests
  * Functionality: dma buf copy
  * Description: Peer2peer dma buf copy tests
  * Test category: xe
@@ -116,11 +116,24 @@ static void test_read(struct gpu_info *ex_gpu, struct gpu_info *im_gpu,
 	uint32_t im_xe = im_gpu->fd;
 	uint32_t ex_src, dmabuf;
 	uint32_t stride;
-
 	struct drm_xe_engine_class_instance inst = {
 		.engine_class = DRM_XE_ENGINE_CLASS_COPY,
 	};
 	intel_ctx_t *ctx;
+	int err;
+
+	blt_copy_init(ex_xe, &ex_blt);
+	src = blt_create_object(&ex_blt, ex_reg, width, height, bpp, 0,
+				T_LINEAR, COMPRESSION_DISABLED, 0, true);
+
+	dmabuf = prime_handle_to_fd(ex_xe, src->handle);
+	err = __prime_fd_to_handle(im_xe, dmabuf, &ex_src);
+	if (err == -ENOTSUP) {
+		blt_destroy_object(ex_xe, src);
+		igt_assert(ex_reg != system_memory(ex_xe));
+		igt_skip("P2P VRAM import not supported on this device, skipping.\n");
+	}
+	igt_assert(!err);
 
 	vm = xe_vm_create(im_xe, 0, 0);
 	exec_queue = xe_exec_queue_create(im_xe, vm, &inst, 0);
@@ -129,17 +142,12 @@ static void test_read(struct gpu_info *ex_gpu, struct gpu_info *im_gpu,
 					 INTEL_ALLOCATOR_SIMPLE,
 					 ALLOC_STRATEGY_LOW_TO_HIGH, 0);
 
-	blt_copy_init(ex_xe, &ex_blt);
 	blt_copy_init(im_xe, &im_blt);
 
-	src = blt_create_object(&ex_blt, ex_reg, width, height, bpp, 0,
-				T_LINEAR, COMPRESSION_DISABLED, 0, true);
 	dst = blt_create_object(&im_blt, im_reg, width, height, bpp, 0,
 				T_LINEAR, COMPRESSION_DISABLED, 0, true);
 	blt_surface_fill_rect(ex_xe, src, width, height);
 
-	dmabuf = prime_handle_to_fd(ex_xe, src->handle);
-	ex_src = prime_fd_to_handle(im_xe, dmabuf);
 	im_src = calloc(1, sizeof(*im_src));
 
 	stride = width * 4;
@@ -198,11 +206,23 @@ static void test_write(struct gpu_info *ex_gpu, struct gpu_info *im_gpu,
 	uint32_t im_xe = im_gpu->fd;
 	uint32_t ex_dst, dmabuf;
 	uint32_t stride;
-
 	struct drm_xe_engine_class_instance inst = {
 		.engine_class = DRM_XE_ENGINE_CLASS_COPY,
 	};
 	intel_ctx_t *ctx;
+	int err;
+
+	blt_copy_init(ex_xe, &ex_blt);
+	dst = blt_create_object(&ex_blt, ex_reg, width, height, bpp, 0,
+				T_LINEAR, COMPRESSION_DISABLED, 0, true);
+	dmabuf = prime_handle_to_fd(ex_xe, dst->handle);
+	err = __prime_fd_to_handle(im_xe, dmabuf, &ex_dst);
+	if (err == -ENOTSUP) {
+		blt_destroy_object(ex_xe, dst);
+		igt_assert(ex_reg != system_memory(ex_xe));
+		igt_skip("P2P VRAM import not supported on this device, skipping.\n");
+	}
+	igt_assert(!err);
 
 	vm = xe_vm_create(im_xe, 0, 0);
 	exec_queue = xe_exec_queue_create(im_xe, vm, &inst, 0);
@@ -211,17 +231,12 @@ static void test_write(struct gpu_info *ex_gpu, struct gpu_info *im_gpu,
 					 INTEL_ALLOCATOR_SIMPLE,
 					 ALLOC_STRATEGY_LOW_TO_HIGH, 0);
 
-	blt_copy_init(ex_xe, &ex_blt);
 	blt_copy_init(im_xe, &im_blt);
 
-	dst = blt_create_object(&ex_blt, ex_reg, width, height, bpp, 0,
-				T_LINEAR, COMPRESSION_DISABLED, 0, true);
 	src = blt_create_object(&im_blt, im_reg, width, height, bpp, 0,
 				T_LINEAR, COMPRESSION_DISABLED, 0, true);
 	blt_surface_fill_rect(im_xe, src, width, height);
 
-	dmabuf = prime_handle_to_fd(ex_xe, dst->handle);
-	ex_dst = prime_fd_to_handle(im_xe, dmabuf);
 	im_dst = calloc(1, sizeof(*im_dst));
 
 	stride = width * 4;
@@ -348,12 +363,12 @@ static void gpu_write(struct gpu_info *ex_gpu, struct gpu_info *im_gpu)
 
 #define DEFAULT_SIZE 0
 
-igt_main_args("", NULL, NULL, NULL, NULL)
+int igt_main_args("", NULL, NULL, NULL, NULL)
 {
 	struct gpu_info gpus[2];
 	int gpu_cnt;
 
-	igt_fixture {
+	igt_fixture() {
 		gpu_cnt = get_device_info(gpus, ARRAY_SIZE(gpus));
 		igt_skip_on(gpu_cnt < 2);
 	}
@@ -366,7 +381,7 @@ igt_main_args("", NULL, NULL, NULL, NULL)
 	igt_subtest_with_dynamic_f("write")
 		gpu_write(&gpus[0], &gpus[1]);
 
-	igt_fixture {
+	igt_fixture() {
 		int cnt;
 
 		for (cnt = 0; cnt < gpu_cnt; cnt++)

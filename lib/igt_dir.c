@@ -18,7 +18,7 @@
  * Utilities to facilitate reading and processing files within a directory.
  * For example, to read and discard all files from debugfs:
  *
- * igt_fixture {
+ * igt_fixture() {
  *	fd = drm_open_driver_master(DRIVER_ANY);
  *	debugfs = igt_debugfs_dir(fd);
  * }
@@ -27,7 +27,7 @@
  * igt_dir_scan_dirfd(igt_dir, -1); // -1 means unlimited scan depth
  * igt_dir_process_files(igt_dir, NULL, NULL);
  *
- * igt_fixture {
+ * igt_fixture() {
  *	igt_dir_destroy(igt_dir);
  *	closedir(debugfs);
  *	drm_close_driver(fd);
@@ -47,14 +47,14 @@
  * igt_dir_process_files(), and igt_dir_destroy(). For using the "_simple"
  * interface:
  *
- * igt_fixture {
+ * igt_fixture() {
  *	fd = drm_open_driver_master(DRIVER_ANY);
  *	debugfs = igt_debugfs_dir(fd);
  * }
  *
  * igt_dir_process_files_simple(debugfs);
  *
- * igt_fixture {
+ * igt_fixture() {
  *	igt_dir_destroy(igt_dir);
  *	closedir(debugfs);
  *	drm_close_driver(fd);
@@ -223,7 +223,6 @@ static int _igt_dir_scan_dirfd(igt_dir_t *config, int scan_maxdepth,
 	}
 
 	closedir(dirp);
-	close(dirfd);
 
 	return ret;
 }
@@ -241,7 +240,6 @@ int igt_dir_scan_dirfd(igt_dir_t *config, int scan_maxdepth)
 	igt_require(config->root_path);
 	igt_require(config->dirfd >= 0);
 	igt_require(scan_maxdepth >= -1);
-	igt_require(scan_maxdepth != 0);
 
 	/* If the linked list is not empty, clean it first */
 	if (!igt_list_empty(&config->file_list_head)) {

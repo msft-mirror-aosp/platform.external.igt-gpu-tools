@@ -86,13 +86,13 @@ static bool ref_surface_and_check_contents(int32 fd, uint32 surface_handle)
 	return data_valid;
 }
 
-igt_main
+int igt_main()
 {
 	int32 fd1, fd2;
 	const uint32 size = sizeof(data);
 	SVGA3dSize surface_size = { .width = size, .height = 1, .depth = 1 };
 
-	igt_fixture
+	igt_fixture()
 	{
 		fd1 = drm_open_driver_render(DRIVER_VMWGFX);
 		fd2 = drm_open_driver_render(DRIVER_VMWGFX);
@@ -445,7 +445,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		drm_close_driver(fd1);
 		drm_close_driver(fd2);
 	}

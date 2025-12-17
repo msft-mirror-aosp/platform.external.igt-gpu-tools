@@ -173,7 +173,7 @@ static void test_timeout(int fd, int engine, const char **property, uint16_t cla
 }
 
 #define	MAX_GTS	8
-igt_main
+int igt_main()
 {
 	static const struct {
 		const char *name;
@@ -192,7 +192,7 @@ igt_main
 	unsigned int pts[MAX_GTS][XE_MAX_ENGINE_INSTANCE];
 	int *engine_list[MAX_GTS];
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_XE);
 
 		sys_fd = igt_sysfs_open(fd);
@@ -236,7 +236,7 @@ igt_main
 			}
 		}
 	}
-	igt_fixture {
+	igt_fixture() {
 		for (int i = 0; i < gt_count; i++) {
 			int *list, j = 0;
 

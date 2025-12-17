@@ -2450,7 +2450,7 @@ static void test_oom(int fd)
 	}
 }
 
-igt_main
+int igt_main()
 {
 	struct drm_xe_engine_class_instance *hwe, *hwe_non_copy = NULL;
 	uint64_t bind_size;
@@ -2562,7 +2562,7 @@ igt_main
                 { }
         };
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_XE);
 
 		xe_for_each_engine(fd, hwe)
@@ -2850,6 +2850,6 @@ igt_main
 		test_oom(fd);
 	}
 
-	igt_fixture
+	igt_fixture()
 		drm_close_driver(fd);
 }

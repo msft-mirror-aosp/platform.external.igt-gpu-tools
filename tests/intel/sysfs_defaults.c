@@ -91,11 +91,11 @@ static void test_writable(int i915, int engine)
 	closedir(dir);
 }
 
-igt_main
+int igt_main()
 {
 	int i915 = -1, engines = -1;
 
-	igt_fixture {
+	igt_fixture() {
 		int sys;
 
 		i915 = drm_open_driver(DRIVER_INTEL);
@@ -114,7 +114,7 @@ igt_main
 	igt_subtest_with_dynamic("readonly")
 		dyn_sysfs_engines(i915, engines, NULL, test_writable);
 
-	igt_fixture {
+	igt_fixture() {
 		close(engines);
 		drm_close_driver(i915);
 	}

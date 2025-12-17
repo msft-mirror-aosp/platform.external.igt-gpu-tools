@@ -203,6 +203,7 @@ enum plane_move_postion {
 
 typedef struct {
 	int drm_fd;
+	uint32_t devid;
 	int debugfs_fd;
 	igt_display_t display;
 	drmModeModeInfo *mode;
@@ -251,7 +252,6 @@ static bool set_sel_fetch_mode_for_output(data_t *data)
 							PR_MODE_SEL_FETCH, data->output)) {
 		supported = true;
 		data->psr_mode = PR_MODE_SEL_FETCH;
-		data->et_flag = true;
 	} else if (psr_sink_support(data->drm_fd, data->debugfs_fd,
 							PSR_MODE_2_ET, data->output)) {
 		supported = true;
@@ -561,10 +561,8 @@ static void prepare(data_t *data)
 	igt_plane_set_position(primary, 0, 0);
 	igt_display_commit2(&data->display, COMMIT_ATOMIC);
 
-	/* FBC disabled: Wa_16023588340 */
-	igt_skip_on_f(data->op_fbc_mode == FBC_ENABLED &&
-		      intel_is_fbc_disabled_by_wa(data->drm_fd),
-		      "WA has disabled FBC on BMG\n");
+	igt_skip_on_f(IS_BATTLEMAGE(data->devid) && data->op_fbc_mode == FBC_ENABLED,
+		      "FBC isn't supported on BMG\n");
 
 	if (data->coexist_feature & FEATURE_DSC)
 		igt_require_f(igt_is_dsc_enabled(data->drm_fd, output->name),
@@ -1174,7 +1172,7 @@ static void run_plane_update_continuous(data_t data, int i, int coexist_features
 	}
 }
 
-igt_main
+int igt_main()
 {
 	bool output_supports_pr_psr2_sel_fetch = false;
 	bool pr_psr2_sel_fetch_supported = false;
@@ -1198,7 +1196,7 @@ igt_main
 	bool fbc_chipset_support;
 	int disp_ver;
 
-	igt_fixture {
+	igt_fixture() {
 		drmModeResPtr res;
 
 		data.drm_fd = drm_open_driver_master(DRIVER_INTEL | DRIVER_XE);
@@ -1207,7 +1205,8 @@ igt_main
 
 		display_init(&data);
 
-		disp_ver = intel_display_ver(intel_get_drm_devid(data.drm_fd));
+		data.devid = intel_get_drm_devid(data.drm_fd);
+		disp_ver = intel_display_ver(data.devid);
 		fbc_chipset_support = intel_fbc_supported_on_chipset(data.drm_fd, data.pipe);
 
 		data.damage_area_count = MAX_DAMAGE_AREAS;
@@ -1547,7 +1546,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		close(data.debugfs_fd);
 		display_fini(&data);
 		drm_close_driver(data.drm_fd);

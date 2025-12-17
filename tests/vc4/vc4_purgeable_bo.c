@@ -94,14 +94,14 @@ static void igt_vc4_purgeable_subtest_prepare(int fd, struct igt_list_head *list
 	igt_assert(!igt_list_empty(list));
 }
 
-igt_main
+int igt_main()
 {
 	struct igt_vc4_bo *bo;
 	struct igt_list_head list;
 	uint32_t *map;
 	int fd, ret;
 
-	igt_fixture {
+	igt_fixture() {
 		fd = drm_open_driver(DRIVER_VC4);
 		igt_require(igt_vc4_get_param(fd, DRM_VC4_PARAM_SUPPORTS_MADVISE));
 		IGT_INIT_LIST_HEAD(&list);
@@ -248,6 +248,6 @@ igt_main
 		free(bo);
 	}
 
-	igt_fixture
+	igt_fixture()
 		drm_close_driver(fd);
 }

@@ -11,8 +11,8 @@
 #include "lib/amdgpu/amd_command_submission.h"
 #include "lib/amdgpu/amd_compute.h"
 #include "lib/amdgpu/amd_gfx.h"
-#include "lib/amdgpu/amd_shaders.h"
-#include "lib/amdgpu/amd_dispatch.h"
+#include "lib/amdgpu/shaders/amd_shaders.h"
+#include "lib/amdgpu/compute_utils/amd_dispatch.h"
 
 #define BUFFER_SIZE (8 * 1024)
 
@@ -662,7 +662,7 @@ amdgpu_sync_dependency_test(amdgpu_device_handle device_handle, bool user_queue)
 	free(ring_context);
 }
 
-igt_main
+int igt_main()
 {
 	amdgpu_device_handle device;
 	struct amdgpu_gpu_info gpu_info = {0};
@@ -678,7 +678,7 @@ igt_main
 	enable_test = env && atoi(env);
 #endif
 
-	igt_fixture {
+	igt_fixture() {
 		uint32_t major, minor;
 		int err;
 
@@ -811,7 +811,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		amdgpu_device_deinitialize(device);
 		drm_close_driver(fd);
 	}

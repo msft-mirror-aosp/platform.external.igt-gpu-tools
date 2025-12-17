@@ -238,7 +238,7 @@ amdgpu_cs_gang(amdgpu_device_handle device, uint32_t ring, bool is_vmid)
 	free(ring_context);
 }
 
-igt_main
+int igt_main()
 {
 	amdgpu_device_handle device;
 	struct amdgpu_gpu_info gpu_info = {0};
@@ -246,7 +246,7 @@ igt_main
 	int r;
 	bool arr_cap[AMD_IP_MAX] = {0};
 
-	igt_fixture {
+	igt_fixture() {
 		uint32_t major, minor;
 		int err;
 
@@ -282,7 +282,7 @@ igt_main
 		}
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		amdgpu_device_deinitialize(device);
 		drm_close_driver(fd);
 	}

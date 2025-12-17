@@ -149,16 +149,16 @@ bool __igt_fixture(void);
 void __igt_fixture_complete(void);
 __noreturn void __igt_fixture_end(void);
 /**
- * igt_fixture:
+ * igt_fixture():
  *
  * Annotate global test fixture code
  *
  * Testcase with subtests often need to set up a bunch of global state as the
  * common test fixture. To avoid such code interfering with the subtest
  * enumeration (e.g. when enumerating on systems without an intel gpu) such
- * blocks should be annotated with igt_fixture.
+ * blocks should be annotated with igt_fixture().
  */
-#define igt_fixture for (volatile int igt_unique(__tmpint) = 0; \
+#define igt_fixture() for (volatile int igt_unique(__tmpint) = 0; \
 			 igt_unique(__tmpint) < 1 && \
 			 (STATIC_ANALYSIS_BUILD || \
 			 (__igt_fixture() && \
@@ -193,7 +193,7 @@ int igt_subtest_init_parse_opts(int *argc, char **argv,
  * igt_subtest_init_parse_opts().
  *
  * If there's not a reason to the contrary it's less error prone to just use an
- * #igt_main block instead of stitching the test's main() function together
+ * #igt_main() block instead of stitching the test's main() function together
  * manually.
  */
 #define igt_subtest_init(argc, argv) \
@@ -318,7 +318,7 @@ bool __igt_run_dynamic_subtest(const char *dynamic_subtest_name);
  * allowed. Example:
  *
  * |[<!-- language="C" -->
- * igt_main
+ * igt_main()
  * {
  *     igt_subtest_with_dynamic("engine-tests") {
  *               igt_require(is_awesome(fd)); // requires ok here
@@ -388,7 +388,7 @@ bool igt_only_list_subtests(void);
 void __igt_subtest_group_save(int *, int *);
 void __igt_subtest_group_restore(int, int);
 /**
- * igt_subtest_group:
+ * igt_subtest_group():
  *
  * Group a set of subtests together with their common setup code
  *
@@ -398,11 +398,11 @@ void __igt_subtest_group_restore(int, int);
  * e.g. igt_require() would result in all subsequent tests skipping. Even those
  * from a different group.
  *
- * This macro allows to group together a set of #igt_fixture and #igt_subtest
+ * This macro allows to group together a set of #igt_fixture() and #igt_subtest
  * clauses. If any common setup in a fixture fails, only the subtests in this
  * group will fail or skip. Subtest groups can be arbitrarily nested.
  */
-#define igt_subtest_group for (int igt_unique(__tmpint) = 0, \
+#define igt_subtest_group() for (int igt_unique(__tmpint) = 0, \
 			       igt_unique(__save) = 0, \
 			       igt_unique(__desc) = 0; \
 			       igt_unique(__tmpint) < 1 && \
@@ -426,6 +426,7 @@ void __igt_subtest_group_restore(int, int);
  * #igt_subtest_init_parse_opts.
  */
 #define igt_main_args(short_opts, long_opts, help_str, opt_handler, handler_data) \
+	main(int argc, char **argv); \
 	static void igt_unique(__real_main)(void); \
 	int main(int argc, char **argv) { \
 		igt_subtest_init_parse_opts(&argc, argv, \
@@ -438,12 +439,12 @@ void __igt_subtest_group_restore(int, int);
 
 
 /**
- * igt_main:
+ * igt_main():
  *
  * This is a magic control flow block used instead of a main() function for
  * tests with subtests. Open-coding the main() function is not recommended.
  */
-#define igt_main igt_main_args(NULL, NULL, NULL, NULL, NULL)
+#define igt_main() igt_main_args(NULL, NULL, NULL, NULL, NULL)
 
 const char *igt_test_name(void);
 void igt_simple_init_parse_opts(int *argc, char **argv,
@@ -461,7 +462,7 @@ void igt_simple_init_parse_opts(int *argc, char **argv,
  * This initializes a simple test without any support for subtests.
  *
  * If there's not a reason to the contrary it's less error prone to just use an
- * #igt_simple_main block instead of stitching the test's main() function together
+ * #igt_simple_main() block instead of stitching the test's main() function together
  * manually.
  */
 #define igt_simple_init(argc, argv) \
@@ -482,6 +483,7 @@ void igt_simple_init_parse_opts(int *argc, char **argv,
  * #igt_simple_init_parse_opts.
  */
 #define igt_simple_main_args(short_opts, long_opts, help_str, opt_handler, handler_data) \
+	main(int argc, char **argv); \
 	static void igt_unique(__real_main)(void); \
 	int main(int argc, char **argv) { \
 		igt_simple_init_parse_opts(&argc, argv, \
@@ -494,12 +496,12 @@ void igt_simple_init_parse_opts(int *argc, char **argv,
 
 
 /**
- * igt_simple_main:
+ * igt_simple_main():
  *
  * This is a magic control flow block used instead of a main() function for
  * simple tests. Open-coding the main() function is not recommended.
  */
-#define igt_simple_main igt_simple_main_args(NULL, NULL, NULL, NULL, NULL)
+#define igt_simple_main() igt_simple_main_args(NULL, NULL, NULL, NULL, NULL)
 
 /**
  * igt_constructor:
@@ -556,7 +558,7 @@ void igt_describe_f(const char *fmt, ...);
  * igt_describe:
  * @dsc: string containing description
  *
- * Attach a description to the following #igt_subtest or #igt_subtest_group
+ * Attach a description to the following #igt_subtest or #igt_subtest_group()
  * block.
  *
  * The description should complement the test/subtest name and provide more
@@ -588,17 +590,17 @@ void igt_describe_f(const char *fmt, ...);
  *
  *
  * Resulting #igt_subtest documentation is a concatenation of its own
- * description and all the parenting #igt_subtest_group descriptions, starting
+ * description and all the parenting #igt_subtest_group() descriptions, starting
  * from the outermost one. Example:
  *
  * |[<!-- language="C" -->
  * #include "igt.h"
  *
  * IGT_TEST_DESCRIPTION("Global description of the whole binary");
- * igt_main
+ * igt_main()
  * {
  * 	igt_describe("Desc of the subgroup with A and B");
- * 	igt_subtest_group {
+ * 	igt_subtest_group() {
  * 		igt_describe("Desc of the subtest A");
  * 		igt_subtest("subtest-a") {
  * 			...
@@ -638,7 +640,7 @@ void igt_describe_f(const char *fmt, ...);
  * ]|
  *
  * Every single #igt_subtest does not have to be preceded with a #igt_describe
- * as long as it has good-enough explanation provided on the #igt_subtest_group
+ * as long as it has good-enough explanation provided on the #igt_subtest_group()
  * level.
  *
  * Example:
@@ -646,10 +648,10 @@ void igt_describe_f(const char *fmt, ...);
  * |[<!-- language="C" -->
  * #include "igt.h"
  *
- * igt_main
+ * igt_main()
  * {
  * 	igt_describe("check xyz with different tilings");
- * 	igt_subtest_group {
+ * 	igt_subtest_group() {
  * 		// no need for extra description, group is enough and tiling is
  * 		// obvious from the test name
  * 		igt_subtest("foo-tiling-x") {

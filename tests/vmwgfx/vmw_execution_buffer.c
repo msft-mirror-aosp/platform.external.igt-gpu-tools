@@ -248,11 +248,11 @@ static void execbuf_stress_test(int fd)
 	pthread_join(threads[1], &status);
 }
 
-igt_main_args("st:", long_options, NULL, parse_options, NULL)
+int igt_main_args("st:", long_options, NULL, parse_options, NULL)
 {
 	int fd;
 
-	igt_fixture
+	igt_fixture()
 	{
 		fd = drm_open_driver_render(DRIVER_VMWGFX);
 	}
@@ -287,7 +287,7 @@ igt_main_args("st:", long_options, NULL, parse_options, NULL)
 		}
 	}
 
-	igt_fixture
+	igt_fixture()
 	{
 		drm_close_driver(fd);
 	}

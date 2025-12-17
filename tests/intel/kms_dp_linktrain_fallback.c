@@ -400,6 +400,11 @@ static void test_fallback(data_t *data, bool is_mst)
 		curr_link_rate = igt_get_current_link_rate(data->drm_fd, data->output);
 		curr_lane_count = igt_get_current_lane_count(data->drm_fd, data->output);
 
+		igt_debug("Fallback state: prev %dx%d, curr %dx%d, max %dx%d, retries=%u\n",
+			  prev_link_rate, prev_lane_count,
+			  curr_link_rate, curr_lane_count,
+			  max_link_rate,  max_lane_count,
+			  retries);
 		igt_assert_f((curr_link_rate < prev_link_rate ||
 			     curr_lane_count < prev_lane_count) ||
 			     ((curr_link_rate == max_link_rate && curr_lane_count == max_lane_count) && --retries),
@@ -592,11 +597,11 @@ static bool run_dsc_sst_fallaback_test(data_t *data)
 	return ran;
 }
 
-igt_main
+int igt_main()
 {
 	data_t data = {};
 
-	igt_fixture {
+	igt_fixture() {
 		unsigned int debug_mask_if_ci = DRM_UT_KMS;
 		data.drm_fd = drm_open_driver_master(DRIVER_INTEL |
 						     DRIVER_XE);
@@ -626,7 +631,7 @@ igt_main
 			      "Skipping test as DSC fallback conditions not met.\n");
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		igt_remove_fb(data.drm_fd, &data.fb);
 		igt_display_fini(&data.display);
 		close(data.drm_fd);

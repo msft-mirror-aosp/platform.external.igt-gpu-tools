@@ -298,7 +298,7 @@ test_suspend_without_i915(int state)
 
 int fd;
 
-igt_main
+int igt_main()
 {
 	igt_describe("Validate suspend-to-idle without i915 module");
 	igt_subtest("basic-s2idle-without-i915")
@@ -308,7 +308,7 @@ igt_main
 	igt_subtest("basic-s3-without-i915")
 		test_suspend_without_i915(SUSPEND_STATE_S3);
 
-	igt_fixture {
+	igt_fixture() {
 		/*
 		 * Since above subtests may fail, leaving i915 module unloaded
 		 * but device list populated, refresh the device list before
@@ -362,6 +362,6 @@ igt_main
 	igt_subtest("forcewake-hibernate")
 		test_forcewake(fd, true);
 
-	igt_fixture
+	igt_fixture()
 		drm_close_driver(fd);
 }

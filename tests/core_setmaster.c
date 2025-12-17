@@ -133,9 +133,9 @@ static void tweak_perm(uint8_t *saved_perm, char *path, bool save)
 	igt_assert_f(!ret, "chmod failed with %d path=%s\n", errno, path);
 }
 
-igt_main
+int igt_main()
 {
-	igt_fixture {
+	igt_fixture() {
 		/*
 		 * We're operating on the device files themselves
 		 * before opening them, make sure the drivers are
@@ -150,7 +150,7 @@ igt_main
 	}
 
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		uint8_t saved_perm;
 		char buf[255];
 
@@ -166,7 +166,7 @@ igt_main
 		/* Note: we use a fixture to ensure the permissions are
 		 * restored on skip or failure.
 		 */
-		igt_fixture {
+		igt_fixture() {
 			char path[255];
 			int len;
 			int fd;
@@ -202,7 +202,7 @@ igt_main
 		}
 
 		/* Restore the original permissions */
-		igt_fixture {
+		igt_fixture() {
 			tweak_perm(&saved_perm, buf, false);
 		}
 	}

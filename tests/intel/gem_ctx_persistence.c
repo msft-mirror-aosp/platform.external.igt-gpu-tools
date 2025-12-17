@@ -1331,7 +1331,7 @@ static void exit_handler(int sig)
 	enable_hangcheck(i915);
 }
 
-igt_main
+int igt_main()
 {
 	const intel_ctx_cfg_t empty_cfg = {};
 	struct {
@@ -1351,7 +1351,7 @@ igt_main
 	};
 	const intel_ctx_t *ctx;
 
-	igt_fixture {
+	igt_fixture() {
 		i915 = drm_open_driver(DRIVER_INTEL);
 		igt_require_gem(i915);
 
@@ -1400,8 +1400,8 @@ igt_main
 	igt_subtest("heartbeat-hostile")
 		test_noheartbeat_close(i915, IGT_SPIN_NO_PREEMPTION);
 
-	igt_subtest_group {
-		igt_fixture
+	igt_subtest_group() {
+		igt_fixture()
 			gem_require_contexts(i915);
 
 		for (test = tests; test->name; test++) {
@@ -1420,10 +1420,10 @@ igt_main
 
 	/* New way of selecting engines. */
 
-	igt_subtest_group {
+	igt_subtest_group() {
 		const struct intel_execution_engine2 *e;
 
-		igt_fixture
+		igt_fixture()
 			gem_require_contexts(i915);
 
 		for (test = tests; test->name; test++) {
@@ -1456,8 +1456,8 @@ igt_main
 			many_contexts(i915, &ctx->cfg);
 	}
 
-	igt_subtest_group {
-		igt_fixture {
+	igt_subtest_group() {
+		igt_fixture() {
 			gem_require_contexts(i915);
 			intel_allocator_multiprocess_start();
 		}
@@ -1465,13 +1465,13 @@ igt_main
 		igt_subtest("smoketest")
 			smoketest(i915, &ctx->cfg);
 
-		igt_fixture {
+		igt_fixture() {
 			intel_allocator_multiprocess_stop();
 		}
 
 	}
 
-	igt_fixture {
+	igt_fixture() {
 		drm_close_driver(i915);
 	}
 }
