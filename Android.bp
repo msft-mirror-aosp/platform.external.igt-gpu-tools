@@ -133,7 +133,9 @@ cc_library_static {
         "lib/i915/intel_memory_region.c",
         "lib/i915/i915_crc.c",
         "lib/igt_collection.c",
+        "lib/igt_color.c",
         "lib/igt_color_encoding.c",
+        "lib/igt_color_lut.c",
         "lib/igt_crc.c",
         "lib/igt_debugfs.c",
         "lib/igt_device.c",
@@ -400,6 +402,15 @@ cc_test {
     srcs: [
         "tests/kms_color_helper.c",
         "tests/kms_color.c",
+    ],
+}
+
+cc_test {
+    name: "kms_colorop",
+    defaults: ["igt-gpu-tools-test-defaults"],
+    srcs: [
+        "tests/kms_colorop.c",
+        "tests/kms_colorop_helper.c",
     ],
 }
 
