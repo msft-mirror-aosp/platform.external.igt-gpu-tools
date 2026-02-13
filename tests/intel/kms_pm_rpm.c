@@ -1620,24 +1620,26 @@ static bool is_preferred_mode_present(igt_output_t *output, enum pipe pipe,
 
 static void set_prefered_mode(void)
 {
-	enum pipe pipe;
+	igt_crtc_t *crtc;
 	igt_output_t *output;
 	bool mode_found = false;
 	igt_display_t *display = &ms_data.display;
 
 	igt_display_reset(display);
 
-	for_each_pipe_with_valid_output(display, pipe, output) {
+	for_each_crtc_with_valid_output(display, crtc, output) {
 
-		igt_output_set_pipe(output, pipe);
+		igt_output_set_crtc(output,
+				    crtc);
 
 		if (!intel_pipe_output_combo_valid(display))
 			continue;
 
-		if (is_preferred_mode_present(output, pipe, display)) {
+		if (is_preferred_mode_present(output, crtc->pipe, display)) {
 			mode_found = true;
 			break;
 		}
+		igt_output_set_crtc(output, NULL);
 	}
 
 	igt_require_f(mode_found, "Not found any 8K@60Hz or 4k@144hz mode on any connected output\n");

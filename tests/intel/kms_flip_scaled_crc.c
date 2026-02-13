@@ -122,6 +122,20 @@
  * @downscaling:        Downscaled
  * @upscaling:          Upscaled
  */
+/**
+ * SUBTEST: flip-32bpp-linear-to-32bpp-linear-reflect-x
+ * Description: Flip from 32bpp non scaled fb to 32bpp non scaled x mirrored fb
+ *
+ * SUBTEST: flip-32bpp-yuv-linear-to-32bpp-yuv-linear-reflect-x
+ * Description: Flip from 32bpp xyuv non scaled fb to 32bpp xyuv non scaled
+ *              x mirrored fb
+ *
+ * SUBTEST: flip-NV12-linear-to-NV12-linear-reflect-x
+ * Description: Flip from NV12 non scaled fb to NV12 non scaled x mirrored fb
+ *
+ * SUBTEST: flip-P016-linear-to-P016-linear-reflect-x
+ * Description: Flip from P016 non scaled fb to P016 non scaled x mirrored fb
+ */
 
 IGT_TEST_DESCRIPTION("Test flipping between scaled/nonscaled framebuffers");
 
@@ -148,6 +162,8 @@ const struct {
 	const uint32_t secondformat;
 	const double firstmultiplier;
 	const double secondmultiplier;
+	const igt_rotation_t firstrotation;
+	const igt_rotation_t secondrotation;
 } flip_scenario_test[] = {
 	{
 		"flip-32bpp-ytile-to-64bpp-ytile-downscaling",
@@ -156,6 +172,8 @@ const struct {
 		I915_FORMAT_MOD_Y_TILED, DRM_FORMAT_XRGB16161616F,
 		1.0,
 		2.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-32bpp-yftile-to-64bpp-yftile-downscaling",
@@ -164,6 +182,8 @@ const struct {
 		I915_FORMAT_MOD_Yf_TILED, DRM_FORMAT_XRGB16161616F,
 		1.0,
 		2.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-32bpp-xtile-to-64bpp-xtile-downscaling",
@@ -172,6 +192,8 @@ const struct {
 		I915_FORMAT_MOD_X_TILED, DRM_FORMAT_XRGB16161616F,
 		1.0,
 		2.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-32bpp-4tile-to-64bpp-4tile-downscaling",
@@ -180,6 +202,8 @@ const struct {
 		I915_FORMAT_MOD_4_TILED, DRM_FORMAT_XRGB16161616F,
 		1.0,
 		2.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-32bpp-linear-to-64bpp-linear-downscaling",
@@ -188,6 +212,8 @@ const struct {
 		DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_XRGB16161616F,
 		1.0,
 		2.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-64bpp-ytile-to-32bpp-ytile-downscaling",
@@ -196,6 +222,8 @@ const struct {
 		I915_FORMAT_MOD_Y_TILED, DRM_FORMAT_XRGB8888,
 		1.0,
 		2.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-64bpp-yftile-to-32bpp-yftile-downscaling",
@@ -204,6 +232,8 @@ const struct {
 		I915_FORMAT_MOD_Yf_TILED, DRM_FORMAT_XRGB8888,
 		1.0,
 		2.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-64bpp-xtile-to-32bpp-xtile-downscaling",
@@ -212,6 +242,8 @@ const struct {
 		I915_FORMAT_MOD_X_TILED, DRM_FORMAT_XRGB8888,
 		1.0,
 		2.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-64bpp-4tile-to-32bpp-4tile-downscaling",
@@ -220,6 +252,8 @@ const struct {
 		I915_FORMAT_MOD_4_TILED, DRM_FORMAT_XRGB8888,
 		1.0,
 		2.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-64bpp-linear-to-32bpp-linear-downscaling",
@@ -228,6 +262,8 @@ const struct {
 		DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_XRGB8888,
 		1.0,
 		2.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-64bpp-ytile-to-16bpp-ytile-downscaling",
@@ -236,6 +272,8 @@ const struct {
 		I915_FORMAT_MOD_Y_TILED, DRM_FORMAT_RGB565,
 		1.0,
 		2.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-64bpp-yftile-to-16bpp-yftile-downscaling",
@@ -244,6 +282,8 @@ const struct {
 		I915_FORMAT_MOD_Yf_TILED, DRM_FORMAT_RGB565,
 		1.0,
 		2.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-64bpp-xtile-to-16bpp-xtile-downscaling",
@@ -252,6 +292,8 @@ const struct {
 		I915_FORMAT_MOD_X_TILED, DRM_FORMAT_RGB565,
 		1.0,
 		2.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-64bpp-4tile-to-16bpp-4tile-downscaling",
@@ -260,6 +302,8 @@ const struct {
 		I915_FORMAT_MOD_4_TILED, DRM_FORMAT_RGB565,
 		1.0,
 		2.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-64bpp-linear-to-16bpp-linear-downscaling",
@@ -268,6 +312,8 @@ const struct {
 		DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_RGB565,
 		1.0,
 		2.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-32bpp-ytileccs-to-64bpp-ytile-downscaling",
@@ -276,6 +322,8 @@ const struct {
 		I915_FORMAT_MOD_Y_TILED, DRM_FORMAT_XRGB16161616F,
 		1.0,
 		2.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-32bpp-yftileccs-to-64bpp-yftile-downscaling",
@@ -284,6 +332,8 @@ const struct {
 		I915_FORMAT_MOD_Yf_TILED, DRM_FORMAT_XRGB16161616F,
 		1.0,
 		2.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-32bpp-ytile-to-32bpp-ytilegen12rcccs-downscaling",
@@ -292,6 +342,8 @@ const struct {
 		I915_FORMAT_MOD_Y_TILED_GEN12_RC_CCS, DRM_FORMAT_XRGB8888,
 		1.0,
 		2.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-32bpp-4tile-to-32bpp-4tiledg2rcccs-downscaling",
@@ -300,6 +352,8 @@ const struct {
 		I915_FORMAT_MOD_4_TILED_DG2_RC_CCS, DRM_FORMAT_XRGB8888,
 		1.0,
 		2.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-32bpp-ytile-to-32bpp-ytileccs-downscaling",
@@ -308,6 +362,8 @@ const struct {
 		I915_FORMAT_MOD_Y_TILED_CCS, DRM_FORMAT_XRGB8888,
 		1.0,
 		2.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-32bpp-yftile-to-32bpp-yftileccs-downscaling",
@@ -316,6 +372,8 @@ const struct {
 		I915_FORMAT_MOD_Yf_TILED_CCS, DRM_FORMAT_XRGB8888,
 		1.0,
 		2.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-64bpp-ytile-to-32bpp-ytilercccs-downscaling",
@@ -324,6 +382,8 @@ const struct {
 		I915_FORMAT_MOD_Y_TILED_GEN12_RC_CCS, DRM_FORMAT_XRGB8888,
 		1.0,
 		2.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-64bpp-4tile-to-32bpp-4tiledg2rcccs-downscaling",
@@ -332,6 +392,8 @@ const struct {
 		I915_FORMAT_MOD_4_TILED_DG2_RC_CCS, DRM_FORMAT_XRGB8888,
 		1.0,
 		2.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-32bpp-ytile-to-64bpp-ytile-upscaling",
@@ -340,6 +402,8 @@ const struct {
 		I915_FORMAT_MOD_Y_TILED, DRM_FORMAT_XRGB16161616F,
 		0.5,
 		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-32bpp-yftile-to-64bpp-yftile-upscaling",
@@ -348,6 +412,8 @@ const struct {
 		I915_FORMAT_MOD_Yf_TILED, DRM_FORMAT_XRGB16161616F,
 		0.5,
 		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-32bpp-xtile-to-64bpp-xtile-upscaling",
@@ -356,6 +422,8 @@ const struct {
 		I915_FORMAT_MOD_X_TILED, DRM_FORMAT_XRGB16161616F,
 		0.5,
 		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-32bpp-4tile-to-64bpp-4tile-upscaling",
@@ -364,6 +432,8 @@ const struct {
 		I915_FORMAT_MOD_4_TILED, DRM_FORMAT_XRGB16161616F,
 		0.5,
 		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-32bpp-linear-to-64bpp-linear-upscaling",
@@ -372,6 +442,8 @@ const struct {
 		DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_XRGB16161616F,
 		0.5,
 		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-64bpp-ytile-to-32bpp-ytile-upscaling",
@@ -380,6 +452,8 @@ const struct {
 		I915_FORMAT_MOD_Y_TILED, DRM_FORMAT_XRGB8888,
 		0.5,
 		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-64bpp-yftile-to-32bpp-yftile-upscaling",
@@ -388,6 +462,8 @@ const struct {
 		I915_FORMAT_MOD_Yf_TILED, DRM_FORMAT_XRGB8888,
 		0.5,
 		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-64bpp-xtile-to-32bpp-xtile-upscaling",
@@ -396,6 +472,8 @@ const struct {
 		I915_FORMAT_MOD_X_TILED, DRM_FORMAT_XRGB8888,
 		0.5,
 		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-64bpp-4tile-to-32bpp-4tile-upscaling",
@@ -404,6 +482,8 @@ const struct {
 		I915_FORMAT_MOD_4_TILED, DRM_FORMAT_XRGB8888,
 		0.5,
 		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-64bpp-linear-to-32bpp-linear-upscaling",
@@ -412,6 +492,8 @@ const struct {
 		DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_XRGB8888,
 		0.5,
 		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-64bpp-ytile-to-16bpp-ytile-upscaling",
@@ -420,6 +502,8 @@ const struct {
 		I915_FORMAT_MOD_Y_TILED, DRM_FORMAT_RGB565,
 		0.5,
 		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-64bpp-yftile-to-16bpp-yftile-upscaling",
@@ -428,6 +512,8 @@ const struct {
 		I915_FORMAT_MOD_Yf_TILED, DRM_FORMAT_RGB565,
 		0.5,
 		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-64bpp-xtile-to-16bpp-xtile-upscaling",
@@ -436,6 +522,8 @@ const struct {
 		I915_FORMAT_MOD_X_TILED, DRM_FORMAT_RGB565,
 		0.5,
 		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-64bpp-4tile-to-16bpp-4tile-upscaling",
@@ -444,6 +532,8 @@ const struct {
 		I915_FORMAT_MOD_4_TILED, DRM_FORMAT_RGB565,
 		0.5,
 		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-64bpp-linear-to-16bpp-linear-upscaling",
@@ -452,6 +542,8 @@ const struct {
 		DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_RGB565,
 		0.5,
 		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-32bpp-ytileccs-to-64bpp-ytile-upscaling",
@@ -460,6 +552,8 @@ const struct {
 		I915_FORMAT_MOD_Y_TILED, DRM_FORMAT_XRGB16161616F,
 		0.5,
 		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-32bpp-yftileccs-to-64bpp-yftile-upscaling",
@@ -468,6 +562,8 @@ const struct {
 		I915_FORMAT_MOD_Yf_TILED, DRM_FORMAT_XRGB16161616F,
 		0.5,
 		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-32bpp-ytile-to-32bpp-ytilegen12rcccs-upscaling",
@@ -476,6 +572,8 @@ const struct {
 		I915_FORMAT_MOD_Y_TILED_GEN12_RC_CCS, DRM_FORMAT_XRGB8888,
 		0.5,
 		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-32bpp-4tile-to-32bpp-4tiledg2rcccs-upscaling",
@@ -484,6 +582,8 @@ const struct {
 		I915_FORMAT_MOD_4_TILED_DG2_RC_CCS, DRM_FORMAT_XRGB8888,
 		0.5,
 		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-32bpp-ytile-to-32bpp-ytileccs-upscaling",
@@ -492,6 +592,8 @@ const struct {
 		I915_FORMAT_MOD_Y_TILED_CCS, DRM_FORMAT_XRGB8888,
 		0.5,
 		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-32bpp-yftile-to-32bpp-yftileccs-upscaling",
@@ -500,6 +602,8 @@ const struct {
 		I915_FORMAT_MOD_Yf_TILED_CCS, DRM_FORMAT_XRGB8888,
 		0.5,
 		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-64bpp-ytile-to-32bpp-ytilegen12rcccs-upscaling",
@@ -508,6 +612,8 @@ const struct {
 		I915_FORMAT_MOD_Y_TILED_GEN12_RC_CCS, DRM_FORMAT_XRGB8888,
 		0.5,
 		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
 	},
 	{
 		"flip-64bpp-4tile-to-32bpp-4tiledg2rcccs-upscaling",
@@ -516,15 +622,54 @@ const struct {
 		I915_FORMAT_MOD_4_TILED_DG2_RC_CCS, DRM_FORMAT_XRGB8888,
 		0.5,
 		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0,
+	},
+	{
+		"flip-32bpp-linear-to-32bpp-linear-reflect-x",
+		"Flip from 32bpp non scaled fb to 32bpp non scaled x mirrored fb",
+		DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_XRGB8888,
+		DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_XRGB8888,
+		1.0,
+		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0 | IGT_REFLECT_X,
+	},
+	{
+		"flip-32bpp-yuv-linear-to-32bpp-yuv-linear-reflect-x",
+		"Flip from 32bpp xyuv non scaled fb to 32bpp xyuv non scaled x mirrored fb",
+		DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_XYUV8888,
+		DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_XYUV8888,
+		1.0,
+		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0 | IGT_REFLECT_X,
+	},
+	{
+		"flip-NV12-linear-to-NV12-linear-reflect-x",
+		"Flip from NV12 non scaled fb to NV12 non scaled x mirrored fb",
+		DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_NV12,
+		DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_NV12,
+		1.0,
+		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0 | IGT_REFLECT_X,
+	},
+	{
+		"flip-P016-linear-to-P016-linear-reflect-x",
+		"Flip from P016 non scaled fb to P016 non scaled x mirrored fb",
+		DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_P016,
+		DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_P016,
+		1.0,
+		1.0,
+		IGT_ROTATION_0,
+		IGT_ROTATION_0 | IGT_REFLECT_X,
 	},
 };
 
 static void setup_fb(data_t *data, struct igt_fb *newfb, uint32_t width,
 		     uint32_t height, uint64_t format, uint64_t modifier)
 {
-	igt_require(igt_display_has_format_mod(&data->display, format,
-					       modifier));
-
 	igt_create_color_fb(data->drm_fd, width, height,
 			    format, modifier, 0, 1, 0, newfb);
 }
@@ -537,12 +682,13 @@ static void free_fbs(data_t *data)
 
 static void set_lut(data_t *data, enum pipe pipe)
 {
-	igt_pipe_t *pipe_obj = &data->display.pipes[pipe];
+	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
 	struct drm_color_lut *lut;
 	drmModeCrtc *drm_crtc;
 	int i, lut_size;
 
-	drm_crtc = drmModeGetCrtc(data->drm_fd, pipe_obj->crtc_id);
+	drm_crtc = drmModeGetCrtc(data->drm_fd, crtc->crtc_id);
 	lut_size = drm_crtc->gamma_size;
 	drmModeFreeCrtc(drm_crtc);
 
@@ -561,7 +707,7 @@ static void set_lut(data_t *data, enum pipe pipe)
 		lut[i].blue = v;
 	}
 
-	igt_pipe_obj_replace_prop_blob(pipe_obj, IGT_CRTC_GAMMA_LUT,
+	igt_crtc_replace_prop_blob(crtc, IGT_CRTC_GAMMA_LUT,
 				       lut, sizeof(lut[0]) * lut_size);
 
 	free(lut);
@@ -569,15 +715,18 @@ static void set_lut(data_t *data, enum pipe pipe)
 
 static void clear_lut(data_t *data, enum pipe pipe)
 {
-	igt_pipe_t *pipe_obj = &data->display.pipes[pipe];
+	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
 
-	igt_pipe_obj_set_prop_value(pipe_obj, IGT_CRTC_GAMMA_LUT, 0);
+	igt_crtc_set_prop_value(crtc, IGT_CRTC_GAMMA_LUT, 0);
 }
 
 static void test_flip_to_scaled(data_t *data, uint32_t index,
 				enum pipe pipe, igt_output_t *output,
 				drmModeModeInfoPtr modetoset, int flags)
 {
+	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
 	igt_plane_t *primary;
 	igt_crc_t small_crc, big_crc;
 	struct drm_event_vblank ev;
@@ -587,7 +736,7 @@ static void test_flip_to_scaled(data_t *data, uint32_t index,
 	igt_display_commit2(&data->display, COMMIT_ATOMIC);
 
 	igt_debug("running on output %s pipe %s\n", output->name,
-		  kmstest_pipe_name(pipe));
+		  igt_crtc_name(crtc));
 
 	if (data->big_fb.fb_id == 0) {
 		setup_fb(data, &data->small_fb,
@@ -611,7 +760,7 @@ static void test_flip_to_scaled(data_t *data, uint32_t index,
 	if (modetoset)
 		igt_output_override_mode(output, modetoset);
 
-	igt_output_set_pipe(output, pipe);
+	igt_output_set_crtc(output, crtc);
 
 	primary = igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY);
 
@@ -626,27 +775,33 @@ static void test_flip_to_scaled(data_t *data, uint32_t index,
 
 	igt_skip_on_f(!igt_plane_has_format_mod(primary, data->small_fb.drm_format, data->small_fb.modifier) ||
 		      !igt_plane_has_format_mod(primary, data->big_fb.drm_format,
-		      data->big_fb.modifier), "No requested format/modifier on pipe %s\n", kmstest_pipe_name(pipe));
+		      data->big_fb.modifier), "No requested format/modifier on pipe %s\n",
+		      igt_crtc_name(crtc));
 
-	set_lut(data, pipe);
+	set_lut(data, crtc->pipe);
 	igt_display_commit_atomic(&data->display, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
 
 	if (data->pipe_crc) {
 		igt_pipe_crc_stop(data->pipe_crc);
 		igt_pipe_crc_free(data->pipe_crc);
 	}
-	data->pipe_crc = igt_pipe_crc_new(data->drm_fd, pipe,
+	data->pipe_crc = igt_crtc_crc_new(crtc,
 					  IGT_PIPE_CRC_SOURCE_AUTO);
 
 	igt_plane_set_position(primary, 0, 0);
 	igt_plane_set_fb(primary, &data->small_fb);
 	igt_plane_set_size(primary, data->attemptmodewidth,
 			   data->attemptmodeheight);
+	igt_plane_set_rotation(primary,
+			       flip_scenario_test[index].firstrotation);
 	ret = igt_display_try_commit_atomic(&data->display, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
 
 	igt_skip_on_f(ret == -ERANGE, "Platform scaling limits exceeded, skipping.\n");
 	igt_skip_on_f((ret == -EINVAL) && (!modetoset || modetoset->vrefresh > 90),
 		      "Valid/default mode too big, cdclk limits exceeded. Check next connector\n");
+	igt_skip_on_f((ret == -EINVAL) &&
+		      (flip_scenario_test[index].firstrotation != IGT_ROTATION_0),
+		      "Unsupported rotation\n");
 	igt_assert_eq(ret, 0);
 
 	igt_pipe_crc_start(data->pipe_crc);
@@ -655,6 +810,8 @@ static void test_flip_to_scaled(data_t *data, uint32_t index,
 	igt_plane_set_fb(primary, &data->big_fb);
 	igt_plane_set_size(primary, data->attemptmodewidth,
 			   data->attemptmodeheight);
+	igt_plane_set_rotation(primary,
+			       flip_scenario_test[index].secondrotation);
 	ret = igt_display_try_commit_atomic(&data->display,
 					    DRM_MODE_ATOMIC_ALLOW_MODESET  |
 					    DRM_MODE_PAGE_FLIP_EVENT, NULL);
@@ -662,6 +819,9 @@ static void test_flip_to_scaled(data_t *data, uint32_t index,
 	igt_skip_on_f(ret == -ERANGE, "Platform scaling limits exceeded, skipping.\n");
 	igt_skip_on_f((ret == -EINVAL) && (!modetoset || modetoset->vrefresh > 90),
 		      "Valid/default mode too big, cdclk limits exceeded. Check next connector\n");
+	igt_skip_on_f((ret == -EINVAL) &&
+		      (flip_scenario_test[index].secondrotation != IGT_ROTATION_0),
+		      "Unsupported rotation\n");
 	igt_assert_eq(ret, 0);
 
 	igt_assert(read(data->drm_fd, &ev, sizeof(ev)) == sizeof(ev));
@@ -673,10 +833,10 @@ static void test_flip_to_scaled(data_t *data, uint32_t index,
 	igt_pipe_crc_free(data->pipe_crc);
 	data->pipe_crc = NULL;
 
-	clear_lut(data, pipe);
+	clear_lut(data, crtc->pipe);
 
 	modetoset = NULL;
-	igt_output_set_pipe(output, PIPE_NONE);
+	igt_output_set_crtc(output, NULL);
 	igt_plane_set_fb(primary, NULL);
 	igt_display_commit2(&data->display, COMMIT_ATOMIC);
 }
@@ -716,7 +876,7 @@ static void run_tests(data_t *data, uint32_t index, enum pipe pipe,
 
 int igt_main()
 {
-	enum pipe pipe;
+	igt_crtc_t *crtc;
 	data_t data = {};
 	igt_output_t *output;
 	drmModeModeInfoPtr modetoset = NULL;
@@ -743,34 +903,60 @@ int igt_main()
 	for (int index = 0; index < ARRAY_SIZE(flip_scenario_test); index++) {
 		igt_describe(flip_scenario_test[index].describe);
 		igt_subtest_with_dynamic(flip_scenario_test[index].name) {
+			igt_require(igt_display_has_format_mod(&data.display,
+							       flip_scenario_test[index].firstformat,
+							       flip_scenario_test[index].firstmodifier));
+			igt_require(igt_display_has_format_mod(&data.display,
+							       flip_scenario_test[index].secondformat,
+							       flip_scenario_test[index].secondmodifier));
+
+			if (flip_scenario_test[index].secondmodifier == DRM_FORMAT_MOD_LINEAR &&
+			    flip_scenario_test[index].secondrotation & IGT_REFLECT_X)
+				igt_require_f(data.gen >= 35,
+					      "Linear fb with REFLECT_X unsupported\n");
+
 			free_fbs(&data);
-			for_each_pipe(&data.display, pipe) {
+			for_each_crtc(&data.display, crtc) {
 				bool found = false;
-				for_each_valid_output_on_pipe(&data.display, pipe, output) {
+				for_each_valid_output_on_pipe(&data.display,
+							      crtc->pipe,
+							      output) {
 					igt_display_reset(&data.display);
 
 					modetoset = find_mode(&data, output);
-					igt_output_set_pipe(output, pipe);
+					igt_output_set_crtc(output,
+							    crtc);
 					igt_output_override_mode(output, modetoset);
 
 					if (modetoset && intel_pipe_output_combo_valid(&data.display)) {
 						found = true;
-						igt_dynamic_f("pipe-%s-valid-mode", kmstest_pipe_name(pipe))
-							run_tests(&data, index, pipe, output, modetoset);
+						igt_dynamic_f("pipe-%s-valid-mode",
+							      igt_crtc_name(crtc))
+							run_tests(&data, index,
+								  crtc->pipe,
+								  output,
+								  modetoset);
 						break;
 					}
 				}
 				if (!found) {
-					for_each_valid_output_on_pipe(&data.display, pipe, output) {
+					for_each_valid_output_on_pipe(&data.display,
+								      crtc->pipe,
+								      output) {
 						igt_display_reset(&data.display);
 
-						igt_output_set_pipe(output, pipe);
+						igt_output_set_crtc(output,
+								    crtc);
 						if (!intel_pipe_output_combo_valid(&data.display))
 							continue;
 
 						modetoset = NULL;
-						igt_dynamic_f("pipe-%s-default-mode", kmstest_pipe_name(pipe))
-							run_tests(&data, index, pipe, output, modetoset);
+						igt_dynamic_f("pipe-%s-default-mode",
+							      igt_crtc_name(crtc))
+							run_tests(&data, index,
+								  crtc->pipe,
+								  output,
+								  modetoset);
 					}
 				}
 				break;

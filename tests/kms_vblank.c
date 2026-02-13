@@ -129,7 +129,8 @@ static void prepare_crtc(data_t *data, int fd, igt_output_t *output)
 	igt_display_reset(display);
 
 	/* select the pipe we want to use */
-	igt_output_set_pipe(output, data->pipe);
+	igt_output_set_crtc(output,
+			    igt_crtc_for_pipe(display, data->pipe));
 
 	/* create and set the primary plane fb */
 	mode = igt_output_get_mode(output);
@@ -143,13 +144,12 @@ static void prepare_crtc(data_t *data, int fd, igt_output_t *output)
 
 	igt_display_commit(display);
 
-	igt_wait_for_vblank(fd,
-			display->pipes[data->pipe].crtc_offset);
+	igt_wait_for_vblank(igt_crtc_for_pipe(display, data->pipe));
 }
 
 static void cleanup_crtc(data_t *data, int fd, igt_output_t *output)
 {
-	igt_output_set_pipe(output, PIPE_NONE);
+	igt_output_set_crtc(output, NULL);
 	igt_display_commit(&data->display);
 	igt_remove_fb(fd, &data->primary_fb);
 }
@@ -232,10 +232,10 @@ pipe_output_combo_valid(igt_display_t *display,
 
 	igt_display_reset(display);
 
-	igt_output_set_pipe(output, pipe);
+	igt_output_set_crtc(output, igt_crtc_for_pipe(display, pipe));
 	if (!intel_pipe_output_combo_valid(display))
 		ret = false;
-	igt_output_set_pipe(output, PIPE_NONE);
+	igt_output_set_crtc(output, NULL);
 
 	return ret;
 }
@@ -251,7 +251,7 @@ static void crtc_id_subtest(data_t *data, int fd)
 	uint64_t val;
 	union drm_wait_vblank vbl;
 
-	crtc_id = display->pipes[p].crtc_id;
+	crtc_id = igt_crtc_for_pipe(display, p)->crtc_id;
 	if (drmGetCap(display->drm_fd, DRM_CAP_CRTC_IN_VBLANK_EVENT, &val) == 0)
 		expected_crtc_id = crtc_id;
 	else
@@ -421,7 +421,7 @@ static void vblank_ts_cont(data_t *data, int fd, int nchildren)
 	}
 
 	if (data->flags & MODESET) {
-		igt_output_set_pipe(output, PIPE_NONE);
+		igt_output_set_crtc(output, NULL);
 		igt_display_commit2(display, display->is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY);
 	}
 
@@ -446,7 +446,8 @@ static void vblank_ts_cont(data_t *data, int fd, int nchildren)
 	}
 
 	if (data->flags & MODESET) {
-		igt_output_set_pipe(output, data->pipe);
+		igt_output_set_crtc(output,
+				    igt_crtc_for_pipe(display, data->pipe));
 		igt_display_commit2(display, display->is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY);
 	}
 
@@ -475,6 +476,7 @@ static void vblank_ts_cont(data_t *data, int fd, int nchildren)
 
 static void run_subtests(data_t *data)
 {
+	igt_crtc_t *crtc;
 	const struct {
 		const char *name;
 		void (*func)(data_t *, int, int);
@@ -514,17 +516,23 @@ static void run_subtests(data_t *data)
 
 			igt_describe("Check if test run while hanging by introducing NOHANG flag.");
 			igt_subtest_with_dynamic_f("%s-%s", f->name, m->name) {
-				for_each_pipe_with_valid_output(&data->display, data->pipe, data->output) {
-					if (!pipe_output_combo_valid(&data->display, data->pipe, data->output))
+				for_each_crtc_with_valid_output(&data->display,
+								crtc,
+								data->output) {
+					data->pipe = crtc->pipe;
+					if (!pipe_output_combo_valid(&data->display, crtc->pipe, data->output))
 						continue;
 
-					if (!all_pipes && data->pipe != active_pipes[0] &&
-					    data->pipe != active_pipes[last_pipe]) {
-						igt_info("Skipping pipe %s\n", kmstest_pipe_name(data->pipe));
+					if (!all_pipes && crtc->pipe != active_pipes[0] &&
+					    crtc->pipe != active_pipes[last_pipe]) {
+						igt_info("Skipping pipe %s\n",
+							 igt_crtc_name(crtc));
 						continue;
 					}
 
-					igt_dynamic_f("pipe-%s-%s", kmstest_pipe_name(data->pipe), data->output->name) {
+					igt_dynamic_f("pipe-%s-%s",
+						      igt_crtc_name(crtc),
+						      data->output->name) {
 						data->flags = m->flags | NOHANG;
 						run_test(data, f->func);
 					}
@@ -540,17 +548,23 @@ static void run_subtests(data_t *data)
 				igt_hang_t hang;
 
 				hang = igt_allow_hang(data->display.drm_fd, 0, 0);
-				for_each_pipe_with_valid_output(&data->display, data->pipe, data->output) {
-					if (!pipe_output_combo_valid(&data->display, data->pipe, data->output))
+				for_each_crtc_with_valid_output(&data->display,
+								crtc,
+								data->output) {
+					data->pipe = crtc->pipe;
+					if (!pipe_output_combo_valid(&data->display, crtc->pipe, data->output))
 						continue;
 
-					if (!all_pipes && data->pipe != active_pipes[0] &&
-					    data->pipe != active_pipes[last_pipe]) {
-						igt_info("Skipping pipe %s\n", kmstest_pipe_name(data->pipe));
+					if (!all_pipes && crtc->pipe != active_pipes[0] &&
+					    crtc->pipe != active_pipes[last_pipe]) {
+						igt_info("Skipping pipe %s\n",
+							 igt_crtc_name(crtc));
 						continue;
 					}
 
-					igt_dynamic_f("pipe-%s-%s", kmstest_pipe_name(data->pipe), data->output->name) {
+					igt_dynamic_f("pipe-%s-%s",
+						      igt_crtc_name(crtc),
+						      data->output->name) {
 						data->flags = m->flags;
 						run_test(data, f->func);
 					}
@@ -624,6 +638,7 @@ const char *help_str =
 
 int igt_main_args("e", NULL, help_str, opt_handler, NULL)
 {
+	igt_crtc_t *crtc;
 	int fd;
 	data_t data;
 
@@ -634,18 +649,23 @@ int igt_main_args("e", NULL, help_str, opt_handler, NULL)
 		igt_display_require_output(&data.display);
 
 		/* Get active pipes. */
-		for_each_pipe(&data.display, data.pipe)
-			active_pipes[last_pipe++] = data.pipe;
+		for_each_crtc(&data.display, crtc) {
+			data.pipe = crtc->pipe;
+			active_pipes[last_pipe++] = crtc->pipe;
+		}
 		last_pipe--;
 	}
 
 	igt_describe("Negative test for vblank request.");
 	igt_subtest_with_dynamic("invalid") {
-		for_each_pipe_with_valid_output(&data.display, data.pipe, data.output) {
-			if (!pipe_output_combo_valid(&data.display, data.pipe, data.output))
+		for_each_crtc_with_valid_output(&data.display, crtc,
+						data.output) {
+			data.pipe = crtc->pipe;
+			if (!pipe_output_combo_valid(&data.display, crtc->pipe, data.output))
 				continue;
 
-			igt_dynamic_f("pipe-%s-%s", kmstest_pipe_name(data.pipe), data.output->name)
+			igt_dynamic_f("pipe-%s-%s", igt_crtc_name(crtc),
+				      data.output->name)
 				invalid_subtest(&data, fd);
 			/* one pipe/output combination is enough */
 				break;
@@ -654,17 +674,21 @@ int igt_main_args("e", NULL, help_str, opt_handler, NULL)
 
 	igt_describe("Check the vblank and flip events works with given crtc id.");
 	igt_subtest_with_dynamic("crtc-id") {
-		for_each_pipe_with_valid_output(&data.display, data.pipe, data.output) {
-			if (!pipe_output_combo_valid(&data.display, data.pipe, data.output))
+		for_each_crtc_with_valid_output(&data.display, crtc,
+						data.output) {
+			data.pipe = crtc->pipe;
+			if (!pipe_output_combo_valid(&data.display, crtc->pipe, data.output))
 				continue;
 
-			if (!all_pipes && data.pipe != active_pipes[0] &&
-					  data.pipe != active_pipes[last_pipe]) {
-				igt_info("Skipping pipe %s\n", kmstest_pipe_name(data.pipe));
+			if (!all_pipes && crtc->pipe != active_pipes[0] &&
+					  crtc->pipe != active_pipes[last_pipe]) {
+				igt_info("Skipping pipe %s\n",
+					 igt_crtc_name(crtc));
 				continue;
 			}
 
-			igt_dynamic_f("pipe-%s-%s", kmstest_pipe_name(data.pipe), data.output->name)
+			igt_dynamic_f("pipe-%s-%s", igt_crtc_name(crtc),
+				      data.output->name)
 				crtc_id_subtest(&data, fd);
 		}
 	}

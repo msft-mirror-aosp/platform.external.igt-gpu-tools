@@ -694,17 +694,18 @@ static void setup_test_plane(data_t *data, int test_plane)
 static enum pipe get_pipe_for_output(igt_display_t *display,
 				     igt_output_t *output)
 {
-	enum pipe pipe;
+	igt_crtc_t *crtc;
 
-	for_each_pipe(display, pipe) {
-		igt_output_set_pipe(output, pipe);
+	for_each_crtc(display, crtc) {
+		igt_output_set_crtc(output,
+				    crtc);
 
 		if (!intel_pipe_output_combo_valid(display)) {
-			igt_output_set_pipe(output, PIPE_NONE);
+			igt_output_set_crtc(output, NULL);
 			continue;
 		}
 
-		return pipe;
+		return crtc->pipe;
 	}
 
 	igt_assert_f(false, "No pipe found for output %s\n",

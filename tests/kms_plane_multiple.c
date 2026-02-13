@@ -107,8 +107,9 @@ struct {
  */
 static void test_init(data_t *data, enum pipe pipe, int n_planes)
 {
-	data->pipe_crc1 = igt_pipe_crc_new(data->drm_fd, pipe,
-					  IGT_PIPE_CRC_SOURCE_AUTO);
+	igt_display_t *display = &data->display;
+	data->pipe_crc1 = igt_crtc_crc_new(igt_crtc_for_pipe(display, pipe),
+					   IGT_PIPE_CRC_SOURCE_AUTO);
 
 	data->plane1 = calloc(n_planes, sizeof(*data->plane1));
 	igt_assert_f(data->plane1 != NULL, "Failed to allocate memory for planes\n");
@@ -120,7 +121,7 @@ static void test_init(data_t *data, enum pipe pipe, int n_planes)
 static void test_fini(data_t *data, igt_output_t *output, int n_planes)
 {
 	/* reset the constraint on the pipe */
-	igt_output_set_pipe(output, PIPE_NONE);
+	igt_output_set_crtc(output, NULL);
 
 	igt_pipe_crc_free(data->pipe_crc1);
 	data->pipe_crc1 = NULL;
@@ -138,12 +139,13 @@ static void
 get_reference_crc(data_t *data, igt_output_t *output, enum pipe pipe, igt_pipe_crc_t *pipe_crc,
 	      color_t *color, igt_plane_t **plane, uint64_t modifier, igt_crc_t *ref_crc)
 {
+	igt_display_t *display = &data->display;
 	drmModeModeInfo *mode;
 	igt_plane_t *primary;
 	int ret;
 
 	igt_display_reset(&data->display);
-	igt_output_set_pipe(output, pipe);
+	igt_output_set_crtc(output, igt_crtc_for_pipe(display, pipe));
 
 	primary = igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY);
 	plane[primary->index] = primary;
@@ -203,8 +205,9 @@ static void
 prepare_planes(data_t *data, enum pipe pipe_id, color_t *color, igt_plane_t **plane,
 	       uint64_t modifier, int max_planes, igt_output_t *output, igt_fb_t *fb)
 {
+	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe_id);
 	drmModeModeInfo *mode;
-	igt_pipe_t *pipe;
 	igt_plane_t *primary;
 	int *x;
 	int *y;
@@ -212,20 +215,24 @@ prepare_planes(data_t *data, enum pipe pipe_id, color_t *color, igt_plane_t **pl
 	int i;
 	int* suffle;
 
-	igt_output_set_pipe(output, pipe_id);
+	igt_output_set_crtc(output,
+			    crtc);
 	primary = igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY);
-	pipe = primary->pipe;
 
-	x = malloc(pipe->n_planes * sizeof(*x));
-	igt_assert_f(x, "Failed to allocate %ld bytes for variable x\n", (long int) (pipe->n_planes * sizeof(*x)));
-	y = malloc(pipe->n_planes * sizeof(*y));
-	igt_assert_f(y, "Failed to allocate %ld bytes for variable y\n", (long int) (pipe->n_planes * sizeof(*y)));
-	size = malloc(pipe->n_planes * sizeof(*size));
-	igt_assert_f(size, "Failed to allocate %ld bytes for variable size\n", (long int) (pipe->n_planes * sizeof(*size)));
-	suffle = malloc(pipe->n_planes * sizeof(*suffle));
-	igt_assert_f(suffle, "Failed to allocate %ld bytes for variable size\n", (long int) (pipe->n_planes * sizeof(*suffle)));
+	x = malloc(crtc->n_planes * sizeof(*x));
+	igt_assert_f(x, "Failed to allocate %ld bytes for variable x\n",
+		     (long int) (crtc->n_planes * sizeof(*x)));
+	y = malloc(crtc->n_planes * sizeof(*y));
+	igt_assert_f(y, "Failed to allocate %ld bytes for variable y\n",
+		     (long int) (crtc->n_planes * sizeof(*y)));
+	size = malloc(crtc->n_planes * sizeof(*size));
+	igt_assert_f(size, "Failed to allocate %ld bytes for variable size\n",
+		     (long int) (crtc->n_planes * sizeof(*size)));
+	suffle = malloc(crtc->n_planes * sizeof(*suffle));
+	igt_assert_f(suffle, "Failed to allocate %ld bytes for variable size\n",
+		     (long int) (crtc->n_planes * sizeof(*suffle)));
 
-	for (i = 0; i < pipe->n_planes; i++)
+	for (i = 0; i < crtc->n_planes; i++)
 		suffle[i] = i;
 
 	/*
@@ -236,8 +243,8 @@ prepare_planes(data_t *data, enum pipe pipe_id, color_t *color, igt_plane_t **pl
 		int n, m;
 		int a, b;
 
-		n = rand() % (pipe->n_planes-1);
-		m = rand() % (pipe->n_planes-1);
+		n = rand() % (crtc->n_planes-1);
+		m = rand() % (crtc->n_planes-1);
 
 		/*
 		 * keep primary plane at its place for test's sake.
@@ -357,7 +364,7 @@ test_plane_position_with_output(data_t *data, enum pipe pipe,
 		for_each_plane_on_pipe(&data->display, pipe, plane)
 			igt_plane_set_fb(plane, NULL);
 
-		igt_output_set_pipe(output, PIPE_NONE);
+		igt_output_set_crtc(output, NULL);
 		igt_display_commit2(&data->display, COMMIT_ATOMIC);
 
 		for (int x = 0; x < c; x++)
@@ -387,7 +394,7 @@ test_plane_position_with_output(data_t *data, enum pipe pipe,
 		for_each_plane_on_pipe(&data->display, pipe, plane)
 			igt_plane_set_fb(plane, NULL);
 
-		igt_output_set_pipe(output, PIPE_NONE);
+		igt_output_set_crtc(output, NULL);
 		igt_display_commit2(&data->display, COMMIT_ATOMIC);
 
 		for (int x = 0; x < c; x++)
@@ -402,8 +409,9 @@ test_plane_position_with_output(data_t *data, enum pipe pipe,
 static void
 test_plane_position(data_t *data, enum pipe pipe, igt_output_t *output, uint64_t modifier)
 {
+	igt_display_t *display = &data->display;
 	int n_planes = opt.all_planes ?
-			data->display.pipes[pipe].n_planes : DEFAULT_N_PLANES;
+			igt_crtc_for_pipe(display, pipe)->n_planes : DEFAULT_N_PLANES;
 
 	if (!opt.user_seed)
 		opt.seed = time(NULL);
@@ -416,9 +424,10 @@ test_plane_position(data_t *data, enum pipe pipe, igt_output_t *output, uint64_t
 
 static void test_init_2_display(data_t *data, enum pipe pipe1, enum pipe pipe2, int n_planes)
 {
-	data->pipe_crc1 = igt_pipe_crc_new(data->drm_fd, pipe1,
+	igt_display_t *display = &data->display;
+	data->pipe_crc1 = igt_crtc_crc_new(igt_crtc_for_pipe(display, pipe1),
 					   IGT_PIPE_CRC_SOURCE_AUTO);
-	data->pipe_crc2 = igt_pipe_crc_new(data->drm_fd, pipe2,
+	data->pipe_crc2 = igt_crtc_crc_new(igt_crtc_for_pipe(display, pipe2),
 					   IGT_PIPE_CRC_SOURCE_AUTO);
 
 	data->plane1 = calloc(n_planes, sizeof(*data->plane1));
@@ -461,10 +470,11 @@ static void test_plane_position_2_display(data_t *data, enum pipe pipe1, enum pi
 					  igt_output_t *output1, igt_output_t *output2,
 					  uint64_t modifier)
 {
+	igt_display_t *display = &data->display;
 	color_t blue  = { 0.0f, 0.0f, 1.0f };
 	igt_crc_t crc1, crc2;
 	int n_planes = opt.all_planes ?
-		       data->display.pipes[0].n_planes : DEFAULT_N_PLANES;
+		       igt_crtc_for_pipe(display, 0)->n_planes : DEFAULT_N_PLANES;
 
 	/*
 	 * Note: We could use the dynamic way of calculating the maximum planes here
@@ -506,7 +516,8 @@ static void test_plane_position_2_display(data_t *data, enum pipe pipe1, enum pi
 
 static void run_2_display_test(data_t *data, uint64_t modifier, const char *name)
 {
-	enum pipe pipe1, pipe2;
+	igt_crtc_t *crtc2;
+	igt_crtc_t *crtc;
 	igt_output_t *output1, *output2;
 	igt_display_t *display = &data->display;
 
@@ -515,28 +526,36 @@ static void run_2_display_test(data_t *data, uint64_t modifier, const char *name
 
 	igt_display_reset(display);
 
-	for_each_pipe(display, pipe1) {
-		for_each_valid_output_on_pipe(display, pipe1, output1) {
-			for_each_pipe(display, pipe2) {
-				if (pipe1 == pipe2)
+	for_each_crtc(display, crtc) {
+		for_each_valid_output_on_pipe(display, crtc->pipe, output1) {
+			for_each_crtc(display, crtc2) {
+				if (crtc->pipe == crtc2->pipe)
 					continue;
 
-				for_each_valid_output_on_pipe_local(display, pipe2, output2) {
+				for_each_valid_output_on_pipe_local(display,
+								    crtc2->pipe,
+								    output2) {
 					if (output1 == output2)
 						continue;
 
 					igt_display_reset(display);
 
-					igt_output_set_pipe(output1, pipe1);
-					igt_output_set_pipe(output2, pipe2);
+					igt_output_set_crtc(output1,
+							    crtc);
+					igt_output_set_crtc(output2,
+							    crtc2);
 
 					if (!intel_pipe_output_combo_valid(display))
 						continue;
 
 					igt_dynamic_f("pipe-%s-%s-pipe-%s-%s",
-						       kmstest_pipe_name(pipe1), output1->name,
-						       kmstest_pipe_name(pipe2), output2->name)
-						test_plane_position_2_display(data, pipe1, pipe2,
+						       igt_crtc_name(crtc),
+						       output1->name,
+						       igt_crtc_name(crtc2),
+						       output2->name)
+						test_plane_position_2_display(data,
+									      crtc->pipe,
+									      crtc2->pipe,
 									      output1, output2,
 									      modifier);
 
@@ -549,22 +568,24 @@ static void run_2_display_test(data_t *data, uint64_t modifier, const char *name
 
 static void run_test(data_t *data, uint64_t modifier, const char *name)
 {
-	enum pipe pipe;
+	igt_crtc_t *crtc;
 	igt_output_t *output;
 	igt_display_t *display = &data->display;
 
 	igt_skip_on_f(!igt_display_has_format_mod(display, DRM_FORMAT_XRGB8888, modifier),
 		      "%s modifier is not supported\n", name);
 
-	for_each_pipe_with_valid_output(display, pipe, output) {
+	for_each_crtc_with_valid_output(display, crtc, output) {
 		igt_display_reset(display);
 
-		igt_output_set_pipe(output, pipe);
+		igt_output_set_crtc(output,
+				    crtc);
 		if (!intel_pipe_output_combo_valid(display))
 			continue;
 
-		igt_dynamic_f("pipe-%s-%s", kmstest_pipe_name(pipe), output->name)
-			test_plane_position(data, pipe, output, modifier);
+		igt_dynamic_f("pipe-%s-%s", igt_crtc_name(crtc), output->name)
+			test_plane_position(data, crtc->pipe, output,
+					    modifier);
 	}
 }
 

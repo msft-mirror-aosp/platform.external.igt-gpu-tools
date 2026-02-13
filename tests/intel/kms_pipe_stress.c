@@ -340,10 +340,12 @@ static unsigned get_vblank(int fd, enum pipe pipe, unsigned flags)
 static int commit_mode(struct data *data, igt_output_t *output,
 		       enum pipe pipe, drmModeModeInfo *mode)
 {
+	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
 	int ret;
 
 	igt_output_override_mode(output, mode);
-	igt_output_set_pipe(output, pipe);
+	igt_output_set_crtc(output, crtc);
 
 	ret = igt_display_try_commit_atomic(&data->display,
 					    DRM_MODE_ATOMIC_TEST_ONLY |
@@ -578,6 +580,7 @@ static void release_connectors(drmModeConnectorPtr *connectors)
 static void stress_pipes(struct data *data, struct timespec *start,
 			 struct timespec *end)
 {
+	igt_display_t *display = &data->display;
 	int pipe = 0;
 	int ret = 0;
 	igt_output_t *output;
@@ -588,8 +591,8 @@ static void stress_pipes(struct data *data, struct timespec *start,
 		if (!data->highest_mode[pipe])
 			continue;
 
-		igt_assert_f(data->display.pipes[pipe].n_planes < MAX_PLANES,
-			    "Currently we don't support more than %d planes!",
+		igt_assert_f(igt_crtc_for_pipe(display, pipe)->n_planes < MAX_PLANES,
+			     "Currently we don't support more than %d planes!",
 			     MAX_PLANES);
 
 		ret = pipe_stress(data, output, pipe,
@@ -739,6 +742,7 @@ static void create_framebuffers(struct data *data)
 
 static void destroy_framebuffers(struct data *data)
 {
+	igt_display_t *display = &data->display;
 	int i, j;
 
 	for (i = 0; i < IGT_MAX_PIPES; i++) {
@@ -748,7 +752,8 @@ static void destroy_framebuffers(struct data *data)
 
 		for (j = 0; j < MAX_PLANES; j++) {
 			if (data->fb[i * MAX_PLANES + j].fb_id) {
-				igt_plane_set_fb(&data->display.pipes[i].planes[j], NULL);
+				igt_plane_set_fb(&igt_crtc_for_pipe(display, i)->planes[j],
+						 NULL);
 				igt_remove_fb(data->display.drm_fd, &data->fb[i * MAX_PLANES + j]);
 				data->fb[i * MAX_PLANES + j].fb_id = 0;
 			}
@@ -762,6 +767,7 @@ static void destroy_framebuffers(struct data *data)
 
 static void prepare_test(struct data *data)
 {
+	igt_display_t *display = &data->display;
 	int i, j;
 	int num_connectors;
 	int num_cpus = (int) sysconf(_SC_NPROCESSORS_ONLN);
@@ -806,13 +812,14 @@ static void prepare_test(struct data *data)
 		if (data->highest_mode[i]) {
 			igt_info("Using mode: \n");
 			kmstest_dump_mode(data->highest_mode[i]);
-			data->pipe_crc[i] = igt_pipe_crc_new(data->drm_fd, i,
+			data->pipe_crc[i] = igt_crtc_crc_new(igt_crtc_for_pipe(display, i),
 							     IGT_PIPE_CRC_SOURCE_AUTO);
 		} else
 			data->pipe_crc[i] = NULL;
 
 		if (data->num_planes[i] == -1)
-			data->num_planes[i] = data->display.pipes[i].n_planes;
+			data->num_planes[i] = igt_crtc_for_pipe(display,
+								i)->n_planes;
 
 		igt_info("Max number of planes is %d for pipe %d\n",
 			 data->num_planes[i], i);
@@ -860,11 +867,11 @@ int igt_main() {
 	uint8_t format_idx = 0, tiling_idx = 0;
 
 	igt_fixture() {
-		data.drm_fd = data.display.drm_fd = drm_open_driver_master(DRIVER_INTEL | DRIVER_XE);
+		data.drm_fd = drm_open_driver_master(DRIVER_INTEL | DRIVER_XE);
 
 		kmstest_set_vt_graphics_mode();
 
-		igt_display_require(&data.display, data.display.drm_fd);
+		igt_display_require(&data.display, data.drm_fd);
 		igt_require(data.display.is_atomic);
 		igt_display_require_output(&data.display);
 		data.devid = intel_get_drm_devid(data.drm_fd);

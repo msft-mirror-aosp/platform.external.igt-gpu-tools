@@ -133,15 +133,16 @@ static void free_fence_objs(data_t *data)
 static void run_single_test(data_t *data, enum pipe pipe, igt_output_t *output)
 {
 	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
 	drmModeModeInfo *mode;
 	igt_plane_t *primary;
 	struct igt_fb fb[2];
 	int i;
 
 	igt_info("Using (pipe %s + %s) to run the subtest.\n",
-		 kmstest_pipe_name(pipe), igt_output_name(output));
+		 igt_crtc_name(crtc), igt_output_name(output));
 
-	igt_output_set_pipe(output, pipe);
+	igt_output_set_crtc(output, crtc);
 
 	mode = igt_output_get_mode(output);
 	primary = igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY);
@@ -197,7 +198,7 @@ static void run_single_test(data_t *data, enum pipe pipe, igt_output_t *output)
 	}
 
 	igt_plane_set_fb(primary, NULL);
-	igt_output_set_pipe(output, PIPE_NONE);
+	igt_output_set_crtc(output, NULL);
 	igt_display_commit(display);
 
 	igt_remove_fb(data->drm_fd, &fb[1]);
@@ -210,16 +211,17 @@ static void run_test(data_t *data)
 {
 	igt_display_t *display = &data->display;
 	igt_output_t *output;
-	enum pipe p;
+	igt_crtc_t *crtc;
 
-	for_each_pipe_with_valid_output(display, p, output) {
+	for_each_crtc_with_valid_output(display, crtc, output) {
 		igt_display_reset(display);
 
-		igt_output_set_pipe(output, p);
+		igt_output_set_crtc(output,
+				    crtc);
 		if (!intel_pipe_output_combo_valid(display))
 			continue;
 
-		run_single_test(data, p, output);
+		run_single_test(data, crtc->pipe, output);
 
 		return; /* one time ought to be enough */
 	}

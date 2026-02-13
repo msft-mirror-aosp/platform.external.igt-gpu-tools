@@ -88,22 +88,26 @@ static void setup_pipe_on_outputs(data_t *data,
 				      igt_output_t *outputs[],
 				      int *output_count)
 {
+	igt_crtc_t *crtc;
 	int i = 0;
 
 	igt_require_f(data->n_pipes >= *output_count,
 		      "Need %d pipes to assign to %d outputs\n",
 		      data->n_pipes, *output_count);
 
-	for_each_pipe(&data->display, data->pipe) {
+	for_each_crtc(&data->display, crtc) {
+		data->pipe = crtc->pipe;
 		if (i >= *output_count)
 			break;
 		/*
 		 * TODO: add support for modes requiring joined pipes
 		 */
 		igt_info("Setting pipe %s on output %s\n",
-			 kmstest_pipe_name(data->pipe),
+			 igt_crtc_name(crtc),
 			 igt_output_name(outputs[i]));
-		igt_output_set_pipe(outputs[i++], data->pipe);
+		igt_output_set_crtc(outputs[i],
+				    crtc);
+		i++;
 	}
 }
 
@@ -455,6 +459,7 @@ static bool run_lt_fallback_test(data_t *data)
 
 static void test_dsc_sst_fallback(data_t *data)
 {
+	igt_display_t *display = &data->display;
 	bool non_dsc_mode_found = false;
 	bool dsc_fallback_successful = false;
 	int ret;
@@ -478,7 +483,8 @@ static void test_dsc_sst_fallback(data_t *data)
 				    DRM_FORMAT_MOD_LINEAR, 0.0, 1.0, 0.0,
 				    &data->fb);
 		igt_output_override_mode(data->output, data->mode);
-		igt_output_set_pipe(data->output, data->pipe);
+		igt_output_set_crtc(data->output,
+				    igt_crtc_for_pipe(display, data->pipe));
 		data->primary = igt_output_get_plane_type(data->output,
 						DRM_PLANE_TYPE_PRIMARY);
 		igt_plane_set_fb(data->primary, &data->fb);
@@ -599,6 +605,7 @@ static bool run_dsc_sst_fallaback_test(data_t *data)
 
 int igt_main()
 {
+	igt_crtc_t *crtc;
 	data_t data = {};
 
 	igt_fixture() {
@@ -608,8 +615,10 @@ int igt_main()
 		kmstest_set_vt_graphics_mode();
 		igt_display_require(&data.display, data.drm_fd);
 		igt_display_require_output(&data.display);
-		for_each_pipe(&data.display, data.pipe)
+		for_each_crtc(&data.display, crtc) {
+			data.pipe = crtc->pipe;
 			data.n_pipes++;
+		}
 		igt_install_exit_handler(igt_drm_debug_mask_reset_exit_handler);
 		update_debug_mask_if_ci(debug_mask_if_ci);
 

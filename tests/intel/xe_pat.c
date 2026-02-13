@@ -18,6 +18,7 @@
 #include "intel_blt.h"
 #include "intel_mocs.h"
 #include "intel_pat.h"
+#include "linux_scaffold.h"
 
 #include "xe/xe_ioctl.h"
 #include "xe/xe_query.h"
@@ -76,6 +77,81 @@ static void userptr_coh_none(int fd)
 	munmap(data, size);
 	xe_vm_destroy(fd, vm);
 }
+#define REG_FIELD_GET(__mask, __val) \
+	((uint32_t)FIELD_GET(__mask, __val))
+
+#define XE2_NO_PROMOTE	REG_BIT(10)
+#define XE2_COMP_EN	REG_BIT(9)
+#define XE2_L3_CLOS	GENMASK(7, 6)
+#define XE2_L3_POLICY	GENMASK(5, 4)
+#define XE2_L4_POLICY	GENMASK(3, 2)
+#define XE2_COH_MODE	GENMASK(1, 0)
+
+#define L3_CLOS1		1
+#define L3_CLOS2		2
+#define L3_CLOS3		3
+
+#define L3_CACHE_POLICY_WB	0
+#define L3_CACHE_POLICY_XD	1
+#define L3_CACHE_POLICY_UC	3
+
+#define L4_CACHE_POLICY_WB	0
+#define L4_CACHE_POLICY_WT	1
+#define L4_CACHE_POLICY_UC	3
+
+#define COH_MODE_NONE	  	0
+#define COH_MODE_1WAY		2
+#define COH_MODE_2WAY		3
+
+static int xe_fetch_pat_sw_config(int fd, struct intel_pat_cache *pat_sw_config)
+{
+	int32_t parsed = xe_get_pat_sw_config(fd, pat_sw_config);
+
+	igt_assert_f(parsed > 0, "Couldn't get Xe PAT software configuration\n");
+
+	return parsed;
+}
+
+/**
+ * SUBTEST: pat-sanity
+ * Test category: functionality test
+ * Description: Test debugfs PAT config vs getters
+ */
+static void pat_sanity(int fd)
+{
+	uint16_t dev_id = intel_get_drm_devid(fd);
+	struct intel_pat_cache pat_sw_config = {};
+	int32_t parsed;
+	bool has_uc_comp = false, has_wt = false;
+
+	parsed = xe_fetch_pat_sw_config(fd, &pat_sw_config);
+
+	if (intel_graphics_ver(dev_id) >= IP_VER(20, 0)) {
+		for (int i = 0; i < parsed; i++) {
+			uint32_t pat = pat_sw_config.entries[i].pat;
+			if (pat_sw_config.entries[i].rsvd)
+				continue;
+			if (!!(pat & XE2_COMP_EN) &&
+			    REG_FIELD_GET(XE2_L3_POLICY, pat) == L3_CACHE_POLICY_UC &&
+			    REG_FIELD_GET(XE2_L4_POLICY, pat) == L4_CACHE_POLICY_UC) {
+				has_uc_comp = true;
+			}
+			if (REG_FIELD_GET(XE2_L3_POLICY, pat) == L3_CACHE_POLICY_XD &&
+			    REG_FIELD_GET(XE2_L4_POLICY, pat) == L4_CACHE_POLICY_WT) {
+				has_wt = true;
+			}
+		}
+	} else {
+		has_wt = true;
+	}
+	igt_assert_eq(pat_sw_config.max_index, intel_get_max_pat_index(fd));
+	igt_assert_eq(pat_sw_config.uc, intel_get_pat_idx_uc(fd));
+	igt_assert_eq(pat_sw_config.wb, intel_get_pat_idx_wb(fd));
+	if (has_wt)
+		igt_assert_eq(pat_sw_config.wt, intel_get_pat_idx_wt(fd));
+	if (has_uc_comp)
+		igt_assert_eq(pat_sw_config.uc_comp, intel_get_pat_idx_uc_comp(fd));
+}
 
 /**
  * SUBTEST: pat-index-all
@@ -84,8 +160,8 @@ static void userptr_coh_none(int fd)
  */
 static void pat_index_all(int fd)
 {
-	uint16_t dev_id = intel_get_drm_devid(fd);
 	size_t size = xe_get_default_alignment(fd);
+	struct intel_pat_cache pat_sw_config = {};
 	uint32_t vm, bo;
 	uint8_t pat_index;
 
@@ -114,10 +190,12 @@ static void pat_index_all(int fd)
 
 	igt_assert(intel_get_max_pat_index(fd));
 
+	xe_fetch_pat_sw_config(fd, &pat_sw_config);
+
 	for (pat_index = 0; pat_index <= intel_get_max_pat_index(fd);
 	     pat_index++) {
-		if (intel_get_device_info(dev_id)->graphics_ver >= 20 &&
-		    pat_index >= 16 && pat_index <= 19) { /* hw reserved */
+
+		if (pat_sw_config.entries[pat_index].rsvd) {
 			igt_assert_eq(__xe_vm_bind(fd, vm, 0, bo, 0, 0x40000,
 						   size, DRM_XE_VM_BIND_OP_MAP, 0, NULL, 0, 0,
 						   pat_index, 0),
@@ -832,7 +910,7 @@ static void display_vs_wb_transient(int fd)
 	struct buf_ops *bops;
 	struct igt_fb src_fb, dst_fb;
 	struct intel_buf src, dst;
-	enum pipe pipe;
+	igt_crtc_t *crtc;
 	int bpp = 32;
 	int i;
 
@@ -849,15 +927,17 @@ static void display_vs_wb_transient(int fd)
 	bops = buf_ops_create(fd);
 	ibb = intel_bb_create(fd, SZ_4K);
 
-	for_each_pipe_with_valid_output(&display, pipe, output) {
+	for_each_crtc_with_valid_output(&display, crtc, output) {
 		igt_display_reset(&display);
 
-		igt_output_set_pipe(output, pipe);
+		igt_output_set_crtc(output,
+				    crtc);
 		if (!intel_pipe_output_combo_valid(&display))
 			continue;
 
 		mode = igt_output_get_mode(output);
-		pipe_crc = igt_pipe_crc_new(fd, pipe, IGT_PIPE_CRC_SOURCE_AUTO);
+		pipe_crc = igt_crtc_crc_new(crtc,
+					    IGT_PIPE_CRC_SOURCE_AUTO);
 		break;
 	}
 
@@ -1228,6 +1308,9 @@ int igt_main_args("V", NULL, help_str, opt_handler, NULL)
 
 		xe_device_get(fd);
 	}
+
+	igt_subtest("pat-sanity")
+		pat_sanity(fd);
 
 	igt_subtest("pat-index-all")
 		pat_index_all(fd);

@@ -72,9 +72,10 @@ static void prepare_crtc(data_t *data, igt_output_t *output, enum pipe pipe,
 			igt_plane_t *plane, drmModeModeInfo *mode, enum igt_commit_style s)
 {
 	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
 
 	igt_output_override_mode(output, mode);
-	igt_output_set_pipe(output, pipe);
+	igt_output_set_crtc(output, crtc);
 
 	/* before allocating, free if any older fb */
 	igt_remove_fb(data->drm_fd, &data->fb1);
@@ -109,7 +110,7 @@ test_panel_fitting_legacy(data_t *d, igt_display_t *display,
 	drmModeModeInfo *mode, native_mode;
 	bool is_plane_scaling_active = true;
 
-	igt_output_set_pipe(output, pipe);
+	igt_output_set_crtc(output, igt_crtc_for_pipe(display, pipe));
 
 	mode = igt_output_get_mode(output);
 	native_mode = *mode;
@@ -202,7 +203,7 @@ test_panel_fitting_fastset(igt_display_t *display, const enum pipe pipe, igt_out
 
 	mode = *igt_output_get_mode(output);
 
-	igt_output_set_pipe(output, pipe);
+	igt_output_set_crtc(output, igt_crtc_for_pipe(display, pipe));
 
 	primary = igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY);
 	sprite = igt_output_get_plane_type(output, DRM_PLANE_TYPE_OVERLAY);
@@ -246,7 +247,7 @@ static void test_panel_fitting(data_t *data, enum test_type type)
 {
 	igt_display_t *display = &data->display;
 	igt_output_t *output;
-	enum pipe pipe;
+	igt_crtc_t *crtc;
 	struct stat sb;
 
 	if (type == TEST_ATOMIC) {
@@ -265,18 +266,20 @@ static void test_panel_fitting(data_t *data, enum test_type type)
 
 	}
 
-	for_each_pipe_with_valid_output(display, pipe, output) {
+	for_each_crtc_with_valid_output(display, crtc, output) {
 		/* Check that the "scaling mode" property has been set. */
 		if (!igt_output_has_prop(output, IGT_CONNECTOR_SCALING_MODE))
 			continue;
 
 		cleanup_crtc(data);
 
-		igt_dynamic_f("pipe-%s-%s", kmstest_pipe_name(pipe), output->name) {
+		igt_dynamic_f("pipe-%s-%s", igt_crtc_name(crtc), output->name) {
 			if (type == TEST_ATOMIC)
-				test_panel_fitting_fastset(display, pipe, output);
+				test_panel_fitting_fastset(display,
+							   crtc->pipe, output);
 			if (type == TEST_LEGACY)
-				test_panel_fitting_legacy(data, display, pipe, output);
+				test_panel_fitting_legacy(data, display,
+							  crtc->pipe, output);
 		}
 	}
 }

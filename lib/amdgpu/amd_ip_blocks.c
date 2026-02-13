@@ -582,16 +582,62 @@ int amdgpu_timeline_syncobj_wait(amdgpu_device_handle device_handle,
 	return r;
 }
 
+static
+int wait_for_packet_consumption(struct amdgpu_ring_context *ring_context)
+{
+	uint64_t count = 0;
+
+	while (*ring_context->rptr_cpu == *ring_context->wptr_cpu) {
+		if (count > 2000) {
+			igt_warn("Timeout waiting for bad packet consumption\n");
+			return -ETIMEDOUT;
+		}
+		count++;
+		usleep(1000);
+	}
+	return 0;
+}
+
+static
+int create_sync_signal(amdgpu_device_handle device,
+                             struct amdgpu_ring_context *ring_context,
+                             uint64_t timeout)
+{
+	uint32_t syncarray[1];
+	struct drm_amdgpu_userq_signal signal_data;
+	int r;
+
+	syncarray[0] = ring_context->timeline_syncobj_handle;
+	signal_data.queue_id = ring_context->queue_id;
+	signal_data.syncobj_handles = (uintptr_t)syncarray;
+	signal_data.num_syncobj_handles = 1;
+	signal_data.bo_read_handles = 0;
+	signal_data.bo_write_handles = 0;
+	signal_data.num_bo_read_handles = 0;
+	signal_data.num_bo_write_handles = 0;
+
+	r = amdgpu_userq_signal(device, &signal_data);
+	if (r)
+		return r;
+
+	return amdgpu_cs_syncobj_wait(device, &ring_context->timeline_syncobj_handle,
+				  1, timeout, DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL, NULL);
+}
+
 static int
 user_queue_submit(amdgpu_device_handle device, struct amdgpu_ring_context *ring_context,
 			      unsigned int ip_type, uint64_t mc_address)
 {
 	int r;
 	uint32_t control = ring_context->pm4_dw;
-	uint32_t syncarray[1];
-	struct drm_amdgpu_userq_signal signal_data;
-	uint64_t timeout = ring_context->time_out ? ring_context->time_out : INT64_MAX;
+	uint64_t timeout;
 	unsigned int nop_count;
+	struct timespec ts;
+	uint64_t current_ns;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	current_ns = (uint64_t)ts.tv_sec * NSEC_PER_SEC + ts.tv_nsec;
+	timeout = current_ns + (60 * NSEC_PER_SEC);
 
 	if (ip_type == AMD_IP_DMA) {
 		amdgpu_sdma_pkt_begin();
@@ -640,21 +686,17 @@ user_queue_submit(amdgpu_device_handle device, struct amdgpu_ring_context *ring_
 #endif
 	ring_context->doorbell_cpu[DOORBELL_INDEX] = *ring_context->wptr_cpu;
 
-	/* Add a fence packet for signal */
-	syncarray[0] = ring_context->timeline_syncobj_handle;
-	signal_data.queue_id = ring_context->queue_id;
-	signal_data.syncobj_handles = (uintptr_t)syncarray;
-	signal_data.num_syncobj_handles = 1;
-	signal_data.bo_read_handles = 0;
-	signal_data.bo_write_handles = 0;
-	signal_data.num_bo_read_handles = 0;
-	signal_data.num_bo_write_handles = 0;
-
-	r = amdgpu_userq_signal(device, &signal_data);
-	igt_assert_eq(r, 0);
-
-	r = amdgpu_cs_syncobj_wait(device, &ring_context->timeline_syncobj_handle, 1, timeout,
-				DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL, NULL);
+	switch (ring_context->submit_mode) {
+	case UQ_SUBMIT_NO_SYNC:
+		/* Error injection: wait for packet consumption without sync */
+		r = wait_for_packet_consumption(ring_context);
+		break;
+	case UQ_SUBMIT_NORMAL:
+	default:
+		/* Standard submission with full synchronization */
+		r = create_sync_signal(device, ring_context, timeout);
+		break;
+	}
 	return r;
 }
 
@@ -1830,4 +1872,88 @@ const char *cmd_get_ip_name(enum amd_ip_block_type ip_type)
 	default:
 		return "Unknown";
 	}
+}
+
+bool is_spx_mode(const struct pci_addr *pci)
+{
+	char path[256];
+	char buffer[16] = {0};
+	FILE *fp;
+
+	snprintf(path, sizeof(path), "/sys/bus/pci/devices/%04x:%02x:%02x.%01x/current_compute_partition",
+		 pci->domain, pci->bus, pci->device, pci->function);
+
+	/* If file doesn't exist, assume SPX or non-partitioned capable */
+	if (access(path, R_OK) != 0)
+		return true;
+
+	fp = fopen(path, "r");
+	if (!fp)
+		return true;
+
+	if (fgets(buffer, sizeof(buffer), fp)) {
+		if (strstr(buffer, "SPX")) {
+			fclose(fp);
+			return true;
+		}
+	}
+	fclose(fp);
+	return false;
+}
+
+long amdgpu_get_ip_schedule_mask(const struct pci_addr *pci, enum amd_ip_block_type ip_type, char *sysfs_path)
+{
+	char sysfs_local[256];
+	char *sysfs = sysfs_path ? sysfs_path : sysfs_local;
+	char cmd[512];
+	char buffer[128];
+	FILE *fp;
+	long sched_mask = 0;
+	int dri_id;
+	const char *mask_name = NULL;
+
+	switch (ip_type) {
+	case AMD_IP_GFX:
+		mask_name = "amdgpu_gfx_sched_mask";
+		break;
+	case AMD_IP_COMPUTE:
+		mask_name = "amdgpu_compute_sched_mask";
+		break;
+	case AMD_IP_DMA:
+		mask_name = "amdgpu_sdma_sched_mask";
+		break;
+	case AMD_IP_VCN_UNIFIED:
+		mask_name = "amdgpu_vcn_sched_mask";
+		break;
+	case AMD_IP_VCN_JPEG:
+		mask_name = "amdgpu_jpeg_sched_mask";
+		break;
+	default:
+		return 0;
+	}
+
+	snprintf(sysfs, 256, "/sys/kernel/debug/dri/%04x:%02x:%02x.%01x/%s",
+		 pci->domain, pci->bus, pci->device, pci->function, mask_name);
+
+	if (access(sysfs, F_OK) != 0) {
+		dri_id = find_dri_id_by_pci(pci);
+		if (dri_id < 0)
+			dri_id = 0;
+
+		snprintf(sysfs, 256, "/sys/kernel/debug/dri/%d/%s", dri_id, mask_name);
+	}
+
+	if (access(sysfs, R_OK) != 0)
+		return 1;
+
+	snprintf(cmd, sizeof(cmd) - 1, "sudo cat %s", sysfs);
+
+	fp = popen(cmd, "r");
+	if (fp) {
+		if (fgets(buffer, sizeof(buffer), fp))
+			sched_mask = strtol(buffer, NULL, 16);
+		pclose(fp);
+	}
+
+	return sched_mask;
 }

@@ -22,6 +22,7 @@
 
 #include "igt.h"
 #include "igt_amd.h"
+#include "igt_kmod.h"
 #include <fcntl.h>
 #include "lib/amdgpu/amd_mem_leak.h"
 
@@ -32,7 +33,7 @@ typedef struct data {
 	igt_display_t display;
 	igt_plane_t *primary;
 	igt_output_t *output;
-	igt_pipe_t *pipe;
+	igt_crtc_t *crtc;
 	drmModeModeInfo *mode;
 	enum pipe pipe_id;
 	int fd;
@@ -47,7 +48,7 @@ static void test_init(data_t *data)
 
 	/* It doesn't matter which pipe we choose on amdpgu. */
 	data->pipe_id = PIPE_A;
-	data->pipe = &data->display.pipes[data->pipe_id];
+	data->crtc = igt_crtc_for_pipe(display, data->pipe_id);
 
 	igt_display_reset(display);
 
@@ -65,9 +66,10 @@ static void test_init(data_t *data)
 	igt_assert(data->mode);
 
 	data->primary =
-		igt_pipe_get_plane_type(data->pipe, DRM_PLANE_TYPE_PRIMARY);
+		igt_crtc_get_plane_type(data->crtc, DRM_PLANE_TYPE_PRIMARY);
 
-	igt_output_set_pipe(data->output, data->pipe_id);
+	igt_output_set_crtc(data->output,
+			    data->crtc);
 
 	data->w = data->mode->hdisplay;
 	data->h = data->mode->vdisplay;
@@ -127,6 +129,25 @@ static void test_hotplug(data_t *data)
 	test_fini(data);
 }
 
+static void test_driver_unload(data_t *data)
+{
+	bool unload_leak = false;
+
+	if (!clear_memleak(true))
+		igt_skip("kmemleak is not enabled for this kernel\n");
+
+	drm_close_driver(data->fd);
+
+	/* Scan memory leak for unloading amdgpu */
+	igt_assert_eq(igt_amdgpu_driver_unload(), 0);
+	unload_leak = !is_no_memleak();
+	igt_assert_eq(igt_amdgpu_driver_load(NULL), 0);
+
+	data->fd = drm_open_driver_master(DRIVER_AMDGPU);
+
+	igt_assert_f(!unload_leak, "memory leak detected during driver unload\n");
+}
+
 int igt_main()
 {
 	data_t data;
@@ -150,6 +171,8 @@ int igt_main()
 	igt_subtest("connector-suspend-resume") test_suspend_resume(&data);
 	igt_describe("Test memroy leaks after connector hotplug");
 	igt_subtest("connector-hotplug") test_hotplug(&data);
+	igt_describe("Test memory leaks with driver unload");
+	igt_subtest("driver-unload") test_driver_unload(&data);
 
 	igt_fixture()
 	{

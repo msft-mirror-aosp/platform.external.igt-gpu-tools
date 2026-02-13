@@ -124,7 +124,8 @@ static void prepare_crtc(data_t *data)
 	drmModeModeInfo *mode;
 
 	/* select the pipe we want to use */
-	igt_output_set_pipe(output, data->pipe);
+	igt_output_set_crtc(output,
+			    igt_crtc_for_pipe(display, data->pipe));
 
 	mode = igt_output_get_mode(output);
 
@@ -141,7 +142,7 @@ static void prepare_crtc(data_t *data)
 	if (data->pipe_crc)
 		igt_pipe_crc_free(data->pipe_crc);
 
-	data->pipe_crc = igt_pipe_crc_new(data->drm_fd, data->pipe,
+	data->pipe_crc = igt_crtc_crc_new(igt_crtc_for_pipe(display, data->pipe),
 					  IGT_PIPE_CRC_SOURCE_AUTO);
 
 	/* get reference crc for the white fb */
@@ -158,7 +159,7 @@ static void cleanup_crtc(data_t *data)
 
 	igt_plane_set_fb(data->primary, NULL);
 
-	igt_output_set_pipe(output, PIPE_NONE);
+	igt_output_set_crtc(output, NULL);
 	igt_display_commit(display);
 
 	igt_remove_fb(data->drm_fd, &data->fb[0]);
@@ -168,12 +169,15 @@ static void cleanup_crtc(data_t *data)
 
 static void run_test(data_t *data)
 {
+	igt_crtc_t *crtc;
 	igt_display_t *display = &data->display;
 
-	for_each_pipe_with_valid_output(display, data->pipe, data->output) {
+	for_each_crtc_with_valid_output(display, crtc, data->output) {
+		data->pipe = crtc->pipe;
 		igt_display_reset(display);
 
-		igt_output_set_pipe(data->output, data->pipe);
+		igt_output_set_crtc(data->output,
+				    crtc);
 		if (!intel_pipe_output_combo_valid(display))
 			continue;
 

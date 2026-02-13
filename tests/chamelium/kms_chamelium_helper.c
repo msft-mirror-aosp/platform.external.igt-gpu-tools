@@ -150,10 +150,10 @@ igt_output_t *chamelium_prepare_output(chamelium_data_t *data,
 	output = chamelium_get_output_for_port(data, port);
 
 	/* Refresh pipe to update connected status */
-	igt_output_set_pipe(output, PIPE_NONE);
+	igt_output_set_crtc(output, NULL);
 
 	pipe = chamelium_get_pipe_for_output(display, output);
-	igt_output_set_pipe(output, pipe);
+	igt_output_set_crtc(output, igt_crtc_for_pipe(display, pipe));
 
 	return output;
 }
@@ -182,14 +182,14 @@ void chamelium_enable_output(chamelium_data_t *data,
 	igt_output_override_mode(output, mode);
 
 	/* Clear any color correction values that might be enabled */
-	if (igt_pipe_obj_has_prop(primary->pipe, IGT_CRTC_DEGAMMA_LUT))
-		igt_pipe_obj_replace_prop_blob(primary->pipe,
+	if (igt_crtc_has_prop(primary->crtc, IGT_CRTC_DEGAMMA_LUT))
+		igt_crtc_replace_prop_blob(primary->crtc,
 					       IGT_CRTC_DEGAMMA_LUT, NULL, 0);
-	if (igt_pipe_obj_has_prop(primary->pipe, IGT_CRTC_GAMMA_LUT))
-		igt_pipe_obj_replace_prop_blob(primary->pipe,
+	if (igt_crtc_has_prop(primary->crtc, IGT_CRTC_GAMMA_LUT))
+		igt_crtc_replace_prop_blob(primary->crtc,
 					       IGT_CRTC_GAMMA_LUT, NULL, 0);
-	if (igt_pipe_obj_has_prop(primary->pipe, IGT_CRTC_CTM))
-		igt_pipe_obj_replace_prop_blob(primary->pipe, IGT_CRTC_CTM,
+	if (igt_crtc_has_prop(primary->crtc, IGT_CRTC_CTM))
+		igt_crtc_replace_prop_blob(primary->crtc, IGT_CRTC_CTM,
 					       NULL, 0);
 
 	igt_display_commit2(display, COMMIT_ATOMIC);
@@ -204,18 +204,19 @@ void chamelium_enable_output(chamelium_data_t *data,
 enum pipe chamelium_get_pipe_for_output(igt_display_t *display,
 					igt_output_t *output)
 {
-	enum pipe pipe;
+	igt_crtc_t *crtc;
 
-	for_each_pipe(display, pipe) {
-		igt_output_set_pipe(output, pipe);
+	for_each_crtc(display, crtc) {
+		igt_output_set_crtc(output,
+				    crtc);
 
 		if (!intel_pipe_output_combo_valid(display)) {
-			igt_output_set_pipe(output, PIPE_NONE);
+			igt_output_set_crtc(output, NULL);
 			continue;
 		}
 
-		igt_output_set_pipe(output, PIPE_NONE);
-		return pipe;
+		igt_output_set_crtc(output, NULL);
+		return crtc->pipe;
 	}
 
 	igt_assert_f(false, "No pipe found for output %s\n",

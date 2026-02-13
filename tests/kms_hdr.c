@@ -111,7 +111,7 @@ typedef struct data {
 	igt_display_t display;
 	igt_plane_t *primary;
 	igt_output_t *output;
-	igt_pipe_t *pipe;
+	igt_crtc_t *crtc;
 	igt_pipe_crc_t *pipe_crc;
 	drmModeModeInfo *mode;
 	enum pipe pipe_id;
@@ -146,12 +146,7 @@ static void test_cycle_flags(data_t *data, uint32_t test_flags)
 /* Fills the FB with a test HDR pattern. */
 static void draw_hdr_pattern(igt_fb_t *fb)
 {
-	cairo_t *cr = igt_get_cairo_ctx(fb->fd, fb);
-
-	igt_paint_color(cr, 0, 0, fb->width, fb->height, 1.0, 1.0, 1.0);
-	igt_paint_test_pattern(cr, fb->width, fb->height);
-
-	igt_put_cairo_ctx(cr);
+	igt_paint_test_pattern_color_fb(fb->fd, fb, 1.0, 1.0, 1.0);
 }
 
 /* Converts a double to 861-G spec FP format. */
@@ -160,14 +155,14 @@ static uint16_t calc_hdr_float(double val)
 	return (uint16_t)(val * 50000.0);
 }
 
-/* Fills some test values for ST2048 HDR output metadata.
+/* Fills some test values for ST2084 HDR output metadata.
  *
  * Note: there isn't really a standard for what the metadata is supposed
  * to do on the display side of things. The display is free to ignore it
  * and clip the output, use it to help tonemap to the content range,
  * or do anything they want, really.
  */
-static void fill_hdr_output_metadata_st2048(struct hdr_output_metadata *meta)
+static void fill_hdr_output_metadata_st2084(struct hdr_output_metadata *meta)
 {
 	memset(meta, 0, sizeof(*meta));
 
@@ -211,10 +206,11 @@ static void set_hdr_output_metadata(data_t *data,
 static void prepare_test(data_t *data, igt_output_t *output, enum pipe pipe)
 {
 	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
 
-	data->pipe_id = pipe;
-	data->pipe = &data->display.pipes[data->pipe_id];
-	igt_assert(data->pipe);
+	data->pipe_id = crtc->pipe;
+	data->crtc = igt_crtc_for_pipe(display, data->pipe_id);
+	igt_assert(data->crtc);
 
 	igt_display_reset(display);
 
@@ -225,12 +221,13 @@ static void prepare_test(data_t *data, igt_output_t *output, enum pipe pipe)
 	igt_assert(data->mode);
 
 	data->primary =
-		igt_pipe_get_plane_type(data->pipe, DRM_PLANE_TYPE_PRIMARY);
+		igt_crtc_get_plane_type(data->crtc, DRM_PLANE_TYPE_PRIMARY);
 
-	data->pipe_crc = igt_pipe_crc_new(data->fd, data->pipe_id,
+	data->pipe_crc = igt_crtc_crc_new(data->crtc,
 					  IGT_PIPE_CRC_SOURCE_AUTO);
 
-	igt_output_set_pipe(data->output, data->pipe_id);
+	igt_output_set_crtc(data->output,
+			    data->crtc);
 	igt_output_set_prop_value(data->output, IGT_CONNECTOR_MAX_BPC, 10);
 
 	data->w = data->mode->hdisplay;
@@ -242,6 +239,7 @@ static void test_bpc_switch_on_output(data_t *data, enum pipe pipe,
 				      uint32_t flags)
 {
 	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
 	igt_crc_t ref_crc, new_crc;
 	igt_fb_t afb;
 	int afb_id, ret;
@@ -257,7 +255,7 @@ static void test_bpc_switch_on_output(data_t *data, enum pipe pipe,
 	 * smaller plane size in following tests.
 	 */
 	igt_plane_set_fb(data->primary, &afb);
-	if (get_num_scalers(display, pipe) >= 1)
+	if (get_num_scalers(display, crtc->pipe) >= 1)
 		igt_plane_set_size(data->primary, data->w, data->h);
 	else
 		igt_plane_set_size(data->primary, 512, 512);
@@ -271,7 +269,7 @@ static void test_bpc_switch_on_output(data_t *data, enum pipe pipe,
 	/* Start in 8bpc. */
 	igt_output_set_prop_value(data->output, IGT_CONNECTOR_MAX_BPC, 8);
 	igt_display_commit_atomic(display, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
-	igt_assert_output_bpc_equal(data->fd, pipe, output->name, 8);
+	igt_assert_output_bpc_equal(data->fd, crtc->pipe, output->name, 8);
 
 	/*
 	 * amdgpu requires a primary plane when the CRTC is enabled.
@@ -285,7 +283,7 @@ static void test_bpc_switch_on_output(data_t *data, enum pipe pipe,
 	/* Switch to 10bpc. */
 	igt_output_set_prop_value(data->output, IGT_CONNECTOR_MAX_BPC, 10);
 	igt_display_commit_atomic(display, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
-	igt_assert_output_bpc_equal(data->fd, pipe, output->name, 10);
+	igt_assert_output_bpc_equal(data->fd, crtc->pipe, output->name, 10);
 
 	/* Verify that the CRC are equal after DPMS or suspend. */
 	igt_pipe_crc_collect_crc(data->pipe_crc, &ref_crc);
@@ -295,7 +293,7 @@ static void test_bpc_switch_on_output(data_t *data, enum pipe pipe,
 	/* Drop back to 8bpc. */
 	igt_output_set_prop_value(data->output, IGT_CONNECTOR_MAX_BPC, 8);
 	igt_display_commit_atomic(display, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
-	igt_assert_output_bpc_equal(data->fd, pipe, output->name, 8);
+	igt_assert_output_bpc_equal(data->fd, crtc->pipe, output->name, 8);
 
 	/* CRC capture is clamped to 8bpc, so capture should match. */
 	igt_assert_crc_equal(&ref_crc, &new_crc);
@@ -319,7 +317,7 @@ static void test_bpc_switch(data_t *data, uint32_t flags)
 	igt_display_reset(display);
 
 	for_each_connected_output(display, output) {
-		enum pipe pipe;
+		igt_crtc_t *crtc;
 
 		if (!has_max_bpc(output)) {
 			igt_info("%s: Doesn't support IGT_CONNECTOR_MAX_BPC.\n",
@@ -332,17 +330,18 @@ static void test_bpc_switch(data_t *data, uint32_t flags)
 			continue;
 		}
 
-		for_each_pipe(display, pipe) {
-			igt_output_set_pipe(output, pipe);
+		for_each_crtc(display, crtc) {
+			igt_output_set_crtc(output,
+					    crtc);
 			if (!intel_pipe_output_combo_valid(display)) {
-				igt_output_set_pipe(output, PIPE_NONE);
+				igt_output_set_crtc(output, NULL);
 				continue;
 			}
 
-			prepare_test(data, output, pipe);
+			prepare_test(data, output, crtc->pipe);
 
 			if (is_intel_device(data->fd) &&
-			    !igt_max_bpc_constraint(display, pipe, output, 10)) {
+			    !igt_max_bpc_constraint(display, crtc->pipe, output, 10)) {
 				igt_info("%s: No suitable mode found to use 10 bpc.\n",
 					 igt_output_name(output));
 
@@ -355,8 +354,9 @@ static void test_bpc_switch(data_t *data, uint32_t flags)
 			data->h = data->mode->vdisplay;
 
 			igt_dynamic_f("pipe-%s-%s",
-				      kmstest_pipe_name(pipe), output->name)
-				test_bpc_switch_on_output(data, pipe, output, flags);
+				      igt_crtc_name(crtc), output->name)
+				test_bpc_switch_on_output(data, crtc->pipe,
+							  output, flags);
 
 			/* One pipe is enough */
 			break;
@@ -477,6 +477,7 @@ static void test_static_toggle(data_t *data, enum pipe pipe,
 			       uint32_t flags)
 {
 	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
 	struct hdr_output_metadata hdr;
 	igt_crc_t ref_crc, new_crc;
 	igt_fb_t afb;
@@ -489,7 +490,7 @@ static void test_static_toggle(data_t *data, enum pipe pipe,
 
 	draw_hdr_pattern(&afb);
 
-	fill_hdr_output_metadata_st2048(&hdr);
+	fill_hdr_output_metadata_st2084(&hdr);
 
 	/* Start with no metadata. */
 	igt_plane_set_fb(data->primary, &afb);
@@ -503,7 +504,7 @@ static void test_static_toggle(data_t *data, enum pipe pipe,
 	}
 
 	igt_display_commit_atomic(display, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
-	igt_assert_output_bpc_equal(data->fd, pipe, output->name, 8);
+	igt_assert_output_bpc_equal(data->fd, crtc->pipe, output->name, 8);
 
 	if (flags & TEST_NEEDS_DSC) {
 		igt_force_dsc_disable(data->fd, output->name);
@@ -524,7 +525,7 @@ static void test_static_toggle(data_t *data, enum pipe pipe,
 		adjust_brightness(data, flags);
 	}
 
-	igt_assert_output_bpc_equal(data->fd, pipe, output->name, 10);
+	igt_assert_output_bpc_equal(data->fd, crtc->pipe, output->name, 10);
 
 	/* Verify that the CRC are equal after DPMS or suspend. */
 	igt_pipe_crc_collect_crc(data->pipe_crc, &ref_crc);
@@ -541,7 +542,7 @@ static void test_static_toggle(data_t *data, enum pipe pipe,
 	}
 
 	igt_display_commit_atomic(display, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
-	igt_assert_output_bpc_equal(data->fd, pipe, output->name, 8);
+	igt_assert_output_bpc_equal(data->fd, crtc->pipe, output->name, 8);
 
 	igt_assert_crc_equal(&ref_crc, &new_crc);
 
@@ -588,6 +589,7 @@ static void fill_hdr_output_metadata_sdr(struct hdr_output_metadata *meta)
 static void test_static_swap(data_t *data, enum pipe pipe, igt_output_t *output, uint32_t flags)
 {
 	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
 	igt_crc_t ref_crc, new_crc;
 	igt_fb_t afb;
 	int afb_id;
@@ -611,7 +613,7 @@ static void test_static_swap(data_t *data, enum pipe pipe, igt_output_t *output,
 	}
 
 	igt_display_commit_atomic(display, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
-	igt_assert_output_bpc_equal(data->fd, pipe, output->name, 8);
+	igt_assert_output_bpc_equal(data->fd, crtc->pipe, output->name, 8);
 
 	if (flags & TEST_NEEDS_DSC) {
 		igt_force_dsc_disable(data->fd, output->name);
@@ -619,11 +621,11 @@ static void test_static_swap(data_t *data, enum pipe pipe, igt_output_t *output,
 	}
 
 	/* Enter HDR, a modeset is allowed here. */
-	fill_hdr_output_metadata_st2048(&hdr);
+	fill_hdr_output_metadata_st2084(&hdr);
 	set_hdr_output_metadata(data, &hdr);
 	igt_output_set_prop_value(data->output, IGT_CONNECTOR_MAX_BPC, 10);
 	igt_display_commit_atomic(display, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
-	igt_assert_output_bpc_equal(data->fd, pipe, output->name, 10);
+	igt_assert_output_bpc_equal(data->fd, crtc->pipe, output->name, 10);
 
 	igt_pipe_crc_collect_crc(data->pipe_crc, &ref_crc);
 
@@ -660,7 +662,7 @@ static void test_static_swap(data_t *data, enum pipe pipe, igt_output_t *output,
 	set_hdr_output_metadata(data, NULL);
 	igt_output_set_prop_value(data->output, IGT_CONNECTOR_MAX_BPC, 8);
 	igt_display_commit_atomic(display, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
-	igt_assert_output_bpc_equal(data->fd, pipe, output->name, 8);
+	igt_assert_output_bpc_equal(data->fd, crtc->pipe, output->name, 8);
 
 	/* Verify that the CRC didn't change while cycling metadata. */
 	igt_assert_crc_equal(&ref_crc, &new_crc);
@@ -679,7 +681,7 @@ static void test_invalid_metadata_sizes(data_t *data, igt_output_t *output)
 	struct hdr_output_metadata hdr;
 	size_t metadata_size = sizeof(hdr);
 
-	fill_hdr_output_metadata_st2048(&hdr);
+	fill_hdr_output_metadata_st2084(&hdr);
 
 	igt_assert_eq(set_invalid_hdr_output_metadata(data, &hdr, 1), -EINVAL);
 	igt_assert_eq(set_invalid_hdr_output_metadata(data, &hdr, metadata_size + 1), -EINVAL);
@@ -704,7 +706,7 @@ static void test_hdr(data_t *data, uint32_t flags)
 	igt_display_reset(display);
 
 	for_each_connected_output(display, output) {
-		enum pipe pipe;
+		igt_crtc_t *crtc;
 
 		/* To test HDR, 10 bpc is required, so we need to
 		 * set MAX_BPC property to 10bpc prior to setting
@@ -740,17 +742,18 @@ static void test_hdr(data_t *data, uint32_t flags)
 			continue;
 		}
 
-		for_each_pipe(display, pipe) {
-			igt_output_set_pipe(output, pipe);
+		for_each_crtc(display, crtc) {
+			igt_output_set_crtc(output,
+					    crtc);
 			if (!intel_pipe_output_combo_valid(display)) {
-				igt_output_set_pipe(output, PIPE_NONE);
+				igt_output_set_crtc(output, NULL);
 				continue;
 			}
 
-			prepare_test(data, output, pipe);
+			prepare_test(data, output, crtc->pipe);
 
 			/* Signal HDR requirement via metadata */
-			fill_hdr_output_metadata_st2048(&hdr);
+			fill_hdr_output_metadata_st2084(&hdr);
 			set_hdr_output_metadata(data, &hdr);
 			if (igt_display_try_commit2(display, display->is_atomic ?
 						    COMMIT_ATOMIC : COMMIT_LEGACY)) {
@@ -761,7 +764,7 @@ static void test_hdr(data_t *data, uint32_t flags)
 			}
 
 			if (is_intel_device(data->fd) &&
-			    !igt_max_bpc_constraint(display, pipe, output, 10)) {
+			    !igt_max_bpc_constraint(display, crtc->pipe, output, 10)) {
 				igt_info("%s: No suitable mode found to use 10 bpc.\n",
 					 igt_output_name(output));
 
@@ -783,12 +786,14 @@ static void test_hdr(data_t *data, uint32_t flags)
 			data->h = data->mode->vdisplay;
 
 			igt_dynamic_f("pipe-%s-%s",
-				      kmstest_pipe_name(pipe), output->name) {
+				      igt_crtc_name(crtc), output->name) {
 				if (flags & (TEST_NONE | TEST_DPMS | TEST_SUSPEND |
 					     TEST_INVALID_HDR | TEST_BRIGHTNESS))
-					test_static_toggle(data, pipe, output, flags);
+					test_static_toggle(data, crtc->pipe,
+							   output, flags);
 				if (flags & TEST_SWAP)
-					test_static_swap(data, pipe, output, flags);
+					test_static_swap(data, crtc->pipe,
+							 output, flags);
 				if (flags & TEST_INVALID_METADATA_SIZES)
 					test_invalid_metadata_sizes(data, output);
 			}

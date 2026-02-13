@@ -90,7 +90,6 @@ enum pipe {
         IGT_MAX_PIPES
 };
 const char *kmstest_pipe_name(enum pipe pipe);
-int kmstest_pipe_to_index(char pipe);
 const char *kmstest_plane_type_name(int plane_type);
 
 enum port {
@@ -148,7 +147,8 @@ void kmstest_dump_mode(drmModeModeInfo *mode);
 #define HDISPLAY_6K_PER_PIPE 6144
 #define HDISPLAY_5K_PER_PIPE 5120
 
-int kmstest_get_pipe_from_crtc_id(int fd, int crtc_id);
+int __intel_get_pipe_from_crtc_index(int fd, int crtc_index);
+int kmstest_get_crtc_index_from_id(int fd, int crtc_id);
 void kmstest_set_vt_graphics_mode(void);
 void kmstest_restore_vt_mode(void);
 void kmstest_set_vt_text_mode(void);
@@ -208,8 +208,8 @@ struct kmstest_connector_config {
 	drmModeEncoder *encoder;
 	drmModeModeInfo default_mode;
 
-	int pipe;
-	unsigned valid_crtc_idx_mask;
+	int crtc_index;
+	unsigned int valid_crtc_index_mask;
 	char *connector_path;
 };
 
@@ -293,7 +293,7 @@ void *kmstest_dumb_map_buffer(int fd, uint32_t handle, uint64_t size,
 void kmstest_dumb_destroy(int fd, uint32_t handle);
 void kmstest_wait_for_pageflip(int fd);
 void kmstest_wait_for_pageflip_timeout(int fd, uint64_t timeout_us);
-unsigned int kmstest_get_vblank(int fd, int pipe, unsigned int flags);
+unsigned int kmstest_get_vblank(int fd, int crtc_index, unsigned int flags);
 
 bool kms_has_vblank(int fd);
 
@@ -379,7 +379,7 @@ extern const char * const igt_plane_prop_names[];
 extern const char * const igt_colorop_prop_names[];
 
 typedef struct igt_display igt_display_t;
-typedef struct igt_pipe igt_pipe_t;
+typedef struct igt_crtc igt_crtc_t;
 typedef uint32_t igt_fixed_t;			/* 16.16 fixed point */
 
 #define IGT_NUM_PLANE_COLOR_PIPELINES 4
@@ -425,7 +425,7 @@ typedef struct igt_colorop {
 
 typedef struct igt_plane {
 	/*< private >*/
-	igt_pipe_t *pipe;
+	igt_crtc_t *crtc;
 	struct igt_plane *ref;
 	int index;
 	/* capabilities */
@@ -469,11 +469,8 @@ typedef struct igt_plane {
 
 /*
  * This struct represents a hardware pipe
- *
- * DRM_IOCTL_WAIT_VBLANK notion of pipe is confusing and we are using
- * crtc_offset instead (refer people to #igt_wait_for_vblank_count)
  */
-struct igt_pipe {
+struct igt_crtc {
 	igt_display_t *display;
 	/* ID of a hardware pipe */
 	enum pipe pipe;
@@ -489,8 +486,6 @@ struct igt_pipe {
 
 	int n_planes;
 	int num_primary_planes;
-	int plane_cursor;
-	int plane_primary;
 	igt_plane_t *planes;
 
 	uint64_t changed;
@@ -499,8 +494,8 @@ struct igt_pipe {
 
 	/* ID of KMS CRTC object */
 	uint32_t crtc_id;
-	/* offset of a pipe in drmModeRes.crtcs */
-	uint32_t crtc_offset;
+	/* CRTC index in drmModeRes.crtcs */
+	uint32_t crtc_index;
 
 	int32_t out_fence_fd;
 };
@@ -528,14 +523,14 @@ typedef struct {
 struct igt_display {
 	int drm_fd;
 	int log_shift;
-	int n_pipes;
+	int n_crtcs;
 	int n_planes;
 	int n_colorops;
 	int n_outputs;
 	igt_output_t *outputs;
 	igt_plane_t *planes;
 	igt_colorop_t *colorops;
-	igt_pipe_t *pipes;
+	igt_crtc_t *crtcs;
 	bool has_cursor_plane;
 	bool is_atomic;
 	bool has_virt_cursor_plane;
@@ -574,17 +569,33 @@ int  igt_display_try_commit_atomic(igt_display_t *display, uint32_t flags, void 
 void igt_display_commit_atomic(igt_display_t *display, uint32_t flags, void *user_data);
 int  igt_display_try_commit2(igt_display_t *display, enum igt_commit_style s);
 int  igt_display_drop_events(igt_display_t *display);
-int  igt_display_get_n_pipes(igt_display_t *display);
 void igt_display_require_output(igt_display_t *display);
 void igt_display_require_output_on_pipe(igt_display_t *display, enum pipe pipe);
+int igt_display_n_crtcs(igt_display_t *display);
 
+const char *igt_crtc_name(igt_crtc_t *crtc);
+
+static inline igt_crtc_t *igt_crtc_for_pipe(igt_display_t *display, enum pipe pipe)
+{
+	if (pipe == PIPE_NONE)
+		return NULL;
+
+	return &display->crtcs[pipe];
+}
+
+typedef struct _igt_pipe_crc igt_pipe_crc_t;
+igt_pipe_crc_t *igt_crtc_crc_new(igt_crtc_t *crtc, const char *source);
+igt_pipe_crc_t *igt_crtc_crc_new_nonblock(igt_crtc_t *crtc, const char *source);
+
+igt_crtc_t *igt_output_get_driving_crtc(igt_output_t *output);
 const char *igt_output_name(igt_output_t *output);
+bool kmstest_mode_is_valid(const drmModeModeInfo *mode);
 drmModeModeInfo *igt_output_get_mode(igt_output_t *output);
 drmModeModeInfo *igt_output_get_highres_mode(igt_output_t *output);
 drmModeModeInfo *igt_output_get_lowres_mode(igt_output_t *output);
 void igt_output_override_mode(igt_output_t *output, const drmModeModeInfo *mode);
 int igt_output_preferred_vrefresh(igt_output_t *output);
-void igt_output_set_pipe(igt_output_t *output, enum pipe pipe);
+void igt_output_set_crtc(igt_output_t *output, igt_crtc_t *crtc);
 igt_plane_t *igt_output_get_plane(igt_output_t *output, int plane_idx);
 igt_plane_t *igt_output_get_plane_type(igt_output_t *output, int plane_type);
 int igt_output_count_plane_type(igt_output_t *output, int plane_type);
@@ -597,18 +608,18 @@ drmModeModeInfo *igt_std_1024_mode_get(int vrefresh);
 void igt_output_set_writeback_fb(igt_output_t *output, struct igt_fb *fb);
 void igt_modeset_disable_all_outputs(igt_display_t *display);
 
-igt_plane_t *igt_pipe_get_plane_type(igt_pipe_t *pipe, int plane_type);
-int igt_pipe_count_plane_type(igt_pipe_t *pipe, int plane_type);
-igt_plane_t *igt_pipe_get_plane_type_index(igt_pipe_t *pipe, int plane_type,
+igt_plane_t *igt_crtc_get_plane_type(igt_crtc_t *crtc, int plane_type);
+int igt_crtc_count_plane_type(igt_crtc_t *crtc, int plane_type);
+igt_plane_t *igt_crtc_get_plane_type_index(igt_crtc_t *crtc, int plane_type,
 					   int index);
 bool output_is_internal_panel(igt_output_t *output);
 igt_output_t *igt_get_single_output_for_pipe(igt_display_t *display, enum pipe pipe);
 
-void igt_pipe_request_out_fence(igt_pipe_t *pipe);
+void igt_crtc_request_out_fence(igt_crtc_t *crtc);
 
 void igt_plane_set_fb(igt_plane_t *plane, struct igt_fb *fb);
 void igt_plane_set_fence_fd(igt_plane_t *plane, int fence_fd);
-void igt_plane_set_pipe(igt_plane_t *plane, igt_pipe_t *pipe);
+void igt_plane_set_crtc(igt_plane_t *plane, igt_crtc_t *crtc);
 void igt_plane_set_position(igt_plane_t *plane, int x, int y);
 void igt_plane_set_size(igt_plane_t *plane, int w, int h);
 void igt_plane_set_rotation(igt_plane_t *plane, igt_rotation_t rotation);
@@ -632,8 +643,8 @@ static inline bool igt_plane_has_rotation(igt_plane_t *plane, igt_rotation_t rot
 }
 const char *igt_plane_rotation_name(igt_rotation_t rotation);
 
-void igt_wait_for_vblank(int drm_fd, int crtc_offset);
-void igt_wait_for_vblank_count(int drm_fd, int crtc_offset, int count);
+void igt_wait_for_vblank(igt_crtc_t *crtc);
+void igt_wait_for_vblank_count(igt_crtc_t *crtc, int count);
 
 /**
  * igt_output_is_connected:
@@ -662,9 +673,24 @@ static inline bool igt_output_is_connected(igt_output_t *output)
  *
  * Checks whether the given pipe and output can be used together.
  */
-#define igt_pipe_connector_valid(pipe, output) \
-	(igt_output_is_connected((output)) && \
-	       (output->config.valid_crtc_idx_mask & (1 << (pipe))))
+static inline bool igt_pipe_connector_valid(enum pipe pipe, igt_output_t *output)
+{
+	return igt_output_is_connected(output) &&
+		output->config.valid_crtc_index_mask & (1 << (pipe));
+}
+
+/**
+ * igt_crtc_connector_valid:
+ * @crtc: CRTC to check.
+ * @output: #igt_output_t to check.
+ *
+ * Checks whether the given CRTC and output can be used together.
+ */
+static inline bool igt_crtc_connector_valid(igt_crtc_t *crtc, igt_output_t *output)
+{
+	return igt_output_is_connected(output) &&
+		output->config.valid_crtc_index_mask & (1 << crtc->pipe);
+}
 
 #define for_each_if(condition) if (!(condition)) {} else
 
@@ -714,60 +740,62 @@ static inline bool igt_output_is_connected(igt_output_t *output)
 	for (pipe = 0; pipe < IGT_MAX_PIPES; pipe++)
 
 /**
- * for_each_pipe:
+ * for_each_crtc:
  * @display: a pointer to an #igt_display_t structure
- * @pipe: The pipe to iterate.
+ * @crtc: The CRTC
  *
- * This for loop iterates over all pipes.
+ * This for loop iterates over all CRTCs.
  *
- * Note that this cannot be used to enumerate per-pipe subtest names since it
+ * Note that this cannot be used to enumerate per-CRTC subtest names since it
  * depends upon runtime probing of the actual kms driver that is being tested.
  * Use #for_each_pipe_static instead.
  */
-#define for_each_pipe(display, pipe) \
-	for_each_pipe_static(pipe) \
-		for_each_if((display)->pipes[(pipe)].valid)
+#define for_each_crtc(display, crtc) \
+	for ((crtc) = &(display)->crtcs[0]; \
+	     (crtc) < &(display)->crtcs[(display)->n_crtcs]; \
+	     (crtc)++) \
+		for_each_if ((crtc)->valid)
 
 /**
- * for_each_pipe_with_valid_output:
+ * for_each_crtc_with_valid_output:
  * @display: a pointer to an #igt_display_t structure
- * @pipe: The pipe for which this @pipe / @output combination is valid.
- * @output: The output for which this @pipe / @output combination is valid.
+ * @crtc: CRTC for which this @crtc / @output combination is valid.
+ * @output: The output for which this @crtc / @output combination is valid.
  *
  * This for loop is called over all connected outputs. This function
- * will try every combination of @pipe and @output.
+ * will try every combination of @crtc and @output.
  *
  * If you only need to test a single output for each pipe, use
- * for_each_pipe_with_single_output(), if you only need an
- * output for a single pipe, use igt_get_single_output_for_pipe().
+ * for_each_crtc_with_single_output(), if you only need an
+ * output for a single CRTC, use igt_get_single_output_for_pipe().
  */
-#define for_each_pipe_with_valid_output(display, pipe, output) \
-	for (int con__ = (pipe) = 0; \
-	     assert(igt_can_fail()), (pipe) < igt_display_get_n_pipes((display)) && con__ < (display)->n_outputs; \
-	     con__ = (con__ + 1 < (display)->n_outputs) ? con__ + 1 : (pipe = pipe + 1, 0)) \
-		 for_each_if((display)->pipes[pipe].valid) \
-			for_each_if ((((output) = &(display)->outputs[con__]), \
-						igt_pipe_connector_valid((pipe), (output))))
+#define for_each_crtc_with_valid_output(display, crtc, output) \
+	for ((output) = &(display)->outputs[0], (crtc) = &(display)->crtcs[0]; \
+	     assert(igt_can_fail()), (crtc) < &(display)->crtcs[(display)->n_crtcs] && \
+		     (output) < &(display)->outputs[(display)->n_outputs]; \
+	     (output) = (output) + 1 < &(display)->outputs[(display)->n_outputs] ? \
+		     (output) + 1 : ((crtc)++, &(display)->outputs[0])) \
+		for_each_if ((crtc)->valid && igt_crtc_connector_valid((crtc), (output)))
 
 igt_output_t **__igt_pipe_populate_outputs(igt_display_t *display,
 					   igt_output_t **chosen_outputs);
 
 /**
- * for_each_pipe_with_single_output:
+ * for_each_crtc_with_single_output:
  * @display: a pointer to an #igt_display_t structure
- * @pipe: The pipe for which this @pipe / @output combination is valid.
- * @output: The output for which this @pipe / @output combination is valid.
+ * @crtc: The CRTC for which this @crtc / @output combination is valid.
+ * @output: The output for which this @crtc / @output combination is valid.
  *
- * This loop is called over all pipes, and will try to find a compatible output
- * for each pipe. Unlike for_each_pipe_with_valid_output(), this function will
+ * This loop is called over all CRTCs, and will try to find a compatible output
+ * for each CRTC. Unlike for_each_pipe_with_valid_output(), this function will
  * be called at most once for each pipe.
  */
-#define for_each_pipe_with_single_output(display, pipe, output) \
-	for (igt_output_t *__outputs[(display)->n_pipes], \
+#define for_each_crtc_with_single_output(display, crtc, output) \
+	for (igt_output_t *__outputs[igt_display_n_crtcs(display)], \
 	     **__output = __igt_pipe_populate_outputs((display), __outputs); \
-		 __output < &__outputs[(display)->n_pipes]; __output++) \
+		 __output < &__outputs[igt_display_n_crtcs(display)]; __output++) \
 		for_each_if (*__output && \
-			     ((pipe) = (__output - __outputs), (output) = *__output, 1))
+			     ((crtc) = igt_crtc_for_pipe((display), (__output - __outputs)), (output) = *__output, 1))
 
 /**
  * for_each_valid_output_on_pipe:
@@ -793,8 +821,9 @@ igt_output_t **__igt_pipe_populate_outputs(igt_display_t *display,
  * If there are no valid planes for this pipe, nothing happens.
  */
 #define for_each_plane_on_pipe(display, pipe, plane)			\
-	for (int j__ = 0; assert(igt_can_fail()), (plane) = &(display)->pipes[(pipe)].planes[j__], \
-		     j__ < (display)->pipes[(pipe)].n_planes; j__++)
+	for (int j__ = 0; assert(igt_can_fail()), \
+		     (plane) = &igt_crtc_for_pipe((display), (pipe))->planes[j__], \
+		     j__ < igt_crtc_for_pipe((display), (pipe))->n_planes; j__++)
 
 /**
  * for_each_connector_mode:
@@ -1028,123 +1057,94 @@ extern void igt_output_replace_prop_blob(igt_output_t *output,
 					 enum igt_atomic_connector_properties prop,
 					 const void *ptr, size_t length);
 /**
- * igt_pipe_obj_has_prop:
- * @pipe: Pipe to check.
+ * igt_crtc_has_prop:
+ * @crtc: CRTC to check.
  * @prop: Property to check.
  *
- * Check whether pipe supports a given property.
+ * Check whether CRTC supports a given property.
  *
  * Returns: True if the property is supported, otherwise false.
  */
 static inline bool
-igt_pipe_obj_has_prop(igt_pipe_t *pipe, enum igt_atomic_crtc_properties prop)
+igt_crtc_has_prop(igt_crtc_t *crtc, enum igt_atomic_crtc_properties prop)
 {
-	return pipe->props[prop];
+	return crtc->props[prop];
 }
 
-uint64_t igt_pipe_obj_get_prop(igt_pipe_t *pipe, enum igt_atomic_crtc_properties prop);
+uint64_t igt_crtc_get_prop(igt_crtc_t *crtc,
+			   enum igt_atomic_crtc_properties prop);
 
 /**
- * igt_pipe_obj_is_prop_changed:
- * @pipe_obj: Pipe object to check.
+ * igt_crtc_is_prop_changed:
+ * @crtc: CRTC to check.
  * @prop: Property to check.
  *
- * Check whether a given @prop changed for the @pipe_obj.
+ * Check whether a given @prop changed for the @crtc.
  */
-static inline bool igt_pipe_obj_is_prop_changed(igt_pipe_t *pipe_obj,
+static inline bool igt_crtc_is_prop_changed(igt_crtc_t *crtc,
 						enum igt_atomic_crtc_properties prop)
 {
-	return pipe_obj->changed & (1 << prop);
+	return crtc->changed & (1 << prop);
 }
 
 /**
- * igt_pipe_is_prop_changed:
- * @pipe: Pipe object to check.
+ * igt_crtc_set_prop_changed:
+ * @crtc: CRTC to check.
  * @prop: Property to check.
  *
- * Check whether a given @prop changed for the @pipe.
+ * Sets the given @prop for the @crtc.
  */
-static inline bool igt_pipe_is_prop_changed(igt_display_t *display,
-					    enum pipe pipe,
-					    enum igt_atomic_crtc_properties prop)
-{
-	return igt_pipe_obj_is_prop_changed(&display->pipes[pipe], prop);
-}
-
-/**
- * igt_pipe_obj_set_prop_changed:
- * @pipe_obj: Pipe object to check.
- * @prop: Property to check.
- *
- * Sets the given @prop for the @pipe_obj.
- */
-static inline void igt_pipe_obj_set_prop_changed(igt_pipe_t *pipe_obj,
+static inline void igt_crtc_set_prop_changed(igt_crtc_t *crtc,
 						 enum igt_atomic_crtc_properties prop)
 {
-	pipe_obj->changed |= 1 << prop;
+	crtc->changed |= 1 << prop;
 }
 
 /**
- * igt_pipe_obj_clear_prop_changed:
- * @pipe_obj: Pipe object to check.
+ * igt_crtc_clear_prop_changed:
+ * @crtc: CRTC to check.
  * @prop: Property to check.
  *
- * Clears the given @prop for the @pipe_obj.
+ * Clears the given @prop for the @crtc.
  */
-static inline void igt_pipe_obj_clear_prop_changed(igt_pipe_t *pipe_obj,
+static inline void igt_crtc_clear_prop_changed(igt_crtc_t *crtc,
 						   enum igt_atomic_crtc_properties prop)
 {
-	pipe_obj->changed &= ~(1 << prop);
+	crtc->changed &= ~(1 << prop);
 }
 
 /**
- * igt_pipe_obj_set_prop_value:
- * @pipe_obj: Pipe object to check.
+ * igt_crtc_set_prop_value:
+ * @crtc: CRTC to check.
  * @prop: Property to check.
  * @value: Value to set.
  *
- * Sets the given @prop with the @value for the @pipe_obj.
+ * Sets the given @prop with the @value for the @crtc.
  */
-static inline void igt_pipe_obj_set_prop_value(igt_pipe_t *pipe_obj,
+static inline void igt_crtc_set_prop_value(igt_crtc_t *crtc,
 					       enum igt_atomic_crtc_properties prop,
 					       uint64_t value)
 {
-	pipe_obj->values[prop] = value;
-	igt_pipe_obj_set_prop_changed(pipe_obj, prop);
+	crtc->values[prop] = value;
+	igt_crtc_set_prop_changed(crtc, prop);
 }
 
-/**
- * igt_pipe_set_prop_value:
- * @pipe: Pipe to check.
- * @prop: Property to check.
- * @value: Value to set.
- *
- * Sets the given @prop with the @value for the @pipe.
- */
-static inline void igt_pipe_set_prop_value(igt_display_t *display,
-					   enum pipe pipe,
-					   enum igt_atomic_crtc_properties prop,
-					   uint64_t value)
-{
-	igt_pipe_obj_set_prop_value(&display->pipes[pipe], prop, value);
-}
-
-extern bool igt_pipe_obj_try_prop_enum(igt_pipe_t *pipe,
+extern bool igt_crtc_try_prop_enum(igt_crtc_t *crtc,
 				       enum igt_atomic_crtc_properties prop,
 				       const char *val);
 
-extern void igt_pipe_obj_set_prop_enum(igt_pipe_t *pipe,
+extern void igt_crtc_set_prop_enum(igt_crtc_t *crtc,
 				       enum igt_atomic_crtc_properties prop,
 				       const char *val);
-extern void igt_pipe_obj_replace_prop_blob(igt_pipe_t *pipe,
+extern void igt_crtc_replace_prop_blob(igt_crtc_t *crtc,
 					   enum igt_atomic_crtc_properties prop,
 					   const void *ptr, size_t length);
-void igt_pipe_refresh(igt_display_t *display, enum pipe pipe, bool force);
+void igt_crtc_refresh(igt_crtc_t *crtc, bool force);
 
 void igt_enable_connectors(int drm_fd);
 void igt_reset_connectors(void);
 
-uint32_t kmstest_get_vbl_flag(int crtc_offset);
+uint32_t kmstest_get_vbl_flag(int crtc_index);
 
 const struct edid *igt_kms_get_base_edid(void);
 const struct edid *igt_kms_get_full_edid(void);

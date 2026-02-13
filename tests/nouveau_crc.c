@@ -105,6 +105,7 @@ static void destroy_crc_colors(data_t *data, struct color_fb *colors, size_t len
  */
 static void test_ctx_flip_detection(data_t *data)
 {
+	igt_display_t *display = &data->display;
 	struct color_fb colors[] = {
 		HEX_COLOR(0xFF, 0x00, 0x18),
 		HEX_COLOR(0xFF, 0xA5, 0x2C),
@@ -122,7 +123,7 @@ static void test_ctx_flip_detection(data_t *data)
 	int start = -1, frame, start_color = -1, i;
 	bool found_skip = false;
 
-	pipe_crc = igt_pipe_crc_new(data->drm_fd, data->pipe,
+	pipe_crc = igt_crtc_crc_new(igt_crtc_for_pipe(display, data->pipe),
 				    IGT_PIPE_CRC_SOURCE_AUTO);
 
 	create_crc_colors(data, colors, n_colors, pipe_crc);
@@ -221,6 +222,7 @@ static void test_ctx_flip_detection(data_t *data)
  */
 static void test_ctx_flip_skip_current_frame(data_t *data)
 {
+	igt_display_t *display = &data->display;
 	struct color_fb colors[] = {
 		{ .r = 1.0, .g = 0.0, .b = 0.0 },
 		{ .r = 0.0, .g = 1.0, .b = 0.0 },
@@ -233,7 +235,8 @@ static void test_ctx_flip_skip_current_frame(data_t *data)
 	const int n_colors = ARRAY_SIZE(colors);
 	const int n_crcs = 30;
 
-	pipe_crc = igt_pipe_crc_new(fd, data->pipe, IGT_PIPE_CRC_SOURCE_AUTO);
+	pipe_crc = igt_crtc_crc_new(igt_crtc_for_pipe(display, data->pipe),
+				    IGT_PIPE_CRC_SOURCE_AUTO);
 	create_crc_colors(data, colors, n_colors, pipe_crc);
 
 	set_crc_flip_threshold(data, 5);
@@ -262,11 +265,12 @@ static void test_ctx_flip_skip_current_frame(data_t *data)
 
 static void test_ctx_flip_threshold_reset_after_capture(data_t *data)
 {
+	igt_display_t *display = &data->display;
 	igt_pipe_crc_t *pipe_crc;
-	const int fd = data->drm_fd;
 	uint32_t value = 0;
 
-	pipe_crc = igt_pipe_crc_new(fd, data->pipe, IGT_PIPE_CRC_SOURCE_AUTO);
+	pipe_crc = igt_crtc_crc_new(igt_crtc_for_pipe(display, data->pipe),
+				    IGT_PIPE_CRC_SOURCE_AUTO);
 
 	set_crc_flip_threshold(data, 5);
 	igt_pipe_crc_start(pipe_crc);
@@ -281,7 +285,9 @@ static void test_ctx_flip_threshold_reset_after_capture(data_t *data)
 
 static void test_source(data_t *data, const char *source)
 {
-	igt_pipe_crc_t *pipe_crc = igt_pipe_crc_new(data->drm_fd, data->pipe, source);
+	igt_display_t *display = &data->display;
+	igt_pipe_crc_t *pipe_crc = igt_crtc_crc_new(igt_crtc_for_pipe(display, data->pipe),
+						    source);
 	igt_crc_t *crcs;
 
 	igt_pipe_crc_start(pipe_crc);
@@ -297,15 +303,16 @@ static void test_source(data_t *data, const char *source)
 
 static void test_source_outp_inactive(data_t *data)
 {
+	igt_display_t *display = &data->display;
 	struct color_fb colors[] = {
 		{ .r = 1.0, .g = 0.0, .b = 0.0 },
 		{ .r = 0.0, .g = 1.0, .b = 0.0 },
 	};
 	igt_pipe_crc_t *pipe_crc;
-	const int fd = data->drm_fd;
 	const int n_colors = ARRAY_SIZE(colors);
 
-	pipe_crc = igt_pipe_crc_new(fd, data->pipe, "outp-inactive");
+	pipe_crc = igt_crtc_crc_new(igt_crtc_for_pipe(display, data->pipe),
+				    "outp-inactive");
 	create_crc_colors(data, colors, n_colors, pipe_crc);
 
 	/* Changing the color should not change what's outside the active raster */
@@ -344,7 +351,7 @@ int igt_main()
 			 * one
 			 */
 			if (data.output) {
-				igt_output_set_pipe(data.output, PIPE_NONE);
+				igt_output_set_crtc(data.output, NULL);
 				igt_display_commit(&data.display);
 			}
 
@@ -354,7 +361,8 @@ int igt_main()
 			/* None of these tests need to perform modesets, just page flips. So running
 			 * display setup here is fine
 			 */
-			igt_output_set_pipe(data.output, pipe);
+			igt_output_set_crtc(data.output,
+					    igt_crtc_for_pipe(data.output->display, pipe));
 			data.primary = igt_output_get_plane(data.output, 0);
 			igt_create_color_fb(data.drm_fd,
 					    data.mode->hdisplay,
@@ -366,7 +374,7 @@ int igt_main()
 			igt_plane_set_fb(data.primary, &data.default_fb);
 			igt_display_commit(&data.display);
 
-			dir = igt_debugfs_pipe_dir(data.drm_fd, pipe, O_DIRECTORY);
+			dir = igt_debugfs_crtc_dir(data.drm_fd, pipe, O_DIRECTORY);
 			igt_require_fd(dir);
 			data.nv_crc_dir = openat(dir, "nv_crc", O_DIRECTORY);
 			close(dir);

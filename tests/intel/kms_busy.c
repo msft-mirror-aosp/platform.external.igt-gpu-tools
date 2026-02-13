@@ -79,7 +79,7 @@ set_fb_on_crtc(igt_display_t *dpy, int pipe,
 	drmModeModeInfoPtr mode;
 	igt_plane_t *primary;
 
-	igt_output_set_pipe(output, pipe);
+	igt_output_set_crtc(output, igt_crtc_for_pipe(dpy, pipe));
 	mode = igt_output_get_mode(output);
 
 	igt_create_pattern_fb(dpy->drm_fd, mode->hdisplay, mode->vdisplay,
@@ -92,16 +92,16 @@ set_fb_on_crtc(igt_display_t *dpy, int pipe,
 
 static void do_cleanup_display(igt_display_t *dpy)
 {
-	enum pipe pipe;
+	igt_crtc_t *crtc;
 	igt_output_t *output;
 	igt_plane_t *plane;
 
-	for_each_pipe(dpy, pipe)
-		for_each_plane_on_pipe(dpy, pipe, plane)
+	for_each_crtc(dpy, crtc)
+		for_each_plane_on_pipe(dpy, crtc->pipe, plane)
 			igt_plane_set_fb(plane, NULL);
 
 	for_each_connected_output(dpy, output)
-		igt_output_set_pipe(output, PIPE_NONE);
+		igt_output_set_crtc(output, NULL);
 
 	igt_display_commit2(dpy, dpy->is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY);
 }
@@ -130,11 +130,11 @@ static void flip_to_fb(igt_display_t *dpy, int pipe,
 		igt_assert(gem_bo_busy(dpy->drm_fd, fb->gem_handle));
 		if (!modeset)
 			do_or_die(drmModePageFlip(dpy->drm_fd,
-						  dpy->pipes[pipe].crtc_id, fb->fb_id,
+						  igt_crtc_for_pipe(dpy, pipe)->crtc_id, fb->fb_id,
 						  DRM_MODE_PAGE_FLIP_EVENT, fb));
 		else {
 			igt_plane_set_fb(igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY), fb);
-			igt_output_set_pipe(output, PIPE_NONE);
+			igt_output_set_crtc(output, NULL);
 			igt_display_commit_atomic(dpy,
 						  DRM_MODE_ATOMIC_NONBLOCK |
 						  DRM_MODE_PAGE_FLIP_EVENT |
@@ -161,9 +161,10 @@ static void flip_to_fb(igt_display_t *dpy, int pipe,
 		gem_quiescent_gpu(dpy->drm_fd);
 
 		/* Clear old mode blob. */
-		igt_pipe_refresh(dpy, pipe, true);
+		igt_crtc_refresh(igt_crtc_for_pipe(dpy, pipe), true);
 
-		igt_output_set_pipe(output, pipe);
+		igt_output_set_crtc(output,
+				    igt_crtc_for_pipe(dpy, pipe));
 		igt_display_commit2(dpy, COMMIT_ATOMIC);
 	}
 
@@ -204,7 +205,7 @@ static void test_flip(igt_display_t *dpy, int pipe,
 		struct drm_event_vblank ev;
 
 		do_or_die(drmModePageFlip(dpy->drm_fd,
-					  dpy->pipes[pipe].crtc_id,
+					  igt_crtc_for_pipe(dpy, pipe)->crtc_id,
 					  fb[warmup[i]].fb_id,
 					  DRM_MODE_PAGE_FLIP_EVENT,
 					  &fb[warmup[i]]));
@@ -287,13 +288,14 @@ static void test_hang(igt_display_t *dpy,
 
 	if (modeset) {
 		/* Test modeset disable with hang */
-		igt_output_set_pipe(output, PIPE_NONE);
+		igt_output_set_crtc(output, NULL);
 		igt_plane_set_fb(primary, &fb[1]);
 		test_atomic_commit_hang(dpy, primary, &fb[hang_newfb]);
 
 		/* Test modeset enable with hang */
 		igt_plane_set_fb(primary, &fb[0]);
-		igt_output_set_pipe(output, pipe);
+		igt_output_set_crtc(output,
+				    igt_crtc_for_pipe(dpy, pipe));
 		test_atomic_commit_hang(dpy, primary, &fb[!hang_newfb]);
 	} else {
 		/*
@@ -335,11 +337,11 @@ test_pageflip_modeset_hang(igt_display_t *dpy,
 			 .dependency = fb.gem_handle,
 			 .flags = IGT_SPIN_NO_PREEMPTION);
 
-	do_or_die(drmModePageFlip(dpy->drm_fd, dpy->pipes[pipe].crtc_id, fb.fb_id, DRM_MODE_PAGE_FLIP_EVENT, &fb));
+	do_or_die(drmModePageFlip(dpy->drm_fd, igt_crtc_for_pipe(dpy, pipe)->crtc_id, fb.fb_id, DRM_MODE_PAGE_FLIP_EVENT, &fb));
 
 	/* Kill crtc with hung fb */
 	igt_plane_set_fb(primary, NULL);
-	igt_output_set_pipe(output, PIPE_NONE);
+	igt_output_set_crtc(output, NULL);
 	igt_display_commit2(dpy, dpy->is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY);
 
 	igt_assert(read(dpy->drm_fd, &ev, sizeof(ev)) == sizeof(ev));
@@ -357,10 +359,10 @@ pipe_output_combo_valid(igt_display_t *dpy,
 
 	igt_display_reset(dpy);
 
-	igt_output_set_pipe(output, pipe);
+	igt_output_set_crtc(output, igt_crtc_for_pipe(dpy, pipe));
 	if (!intel_pipe_output_combo_valid(dpy))
 		ret = false;
-	igt_output_set_pipe(output, PIPE_NONE);
+	igt_output_set_crtc(output, NULL);
 
 	return ret;
 }
@@ -410,11 +412,11 @@ const char *help_str =
 
 int igt_main_args("e", NULL, help_str, opt_handler, NULL)
 {
-	igt_display_t display = { .drm_fd = -1, .n_pipes = IGT_MAX_PIPES };
-
-	enum pipe pipe, active_pipes[IGT_MAX_PIPES];
+	igt_display_t display = { .drm_fd = -1, .n_crtcs = IGT_MAX_PIPES };
+	enum pipe active_pipes[IGT_MAX_PIPES];
 	igt_output_t *output;
 	uint32_t last_pipe = 0;
+	igt_crtc_t *crtc;
 	int i;
 	struct {
 		const char *name;
@@ -443,8 +445,8 @@ int igt_main_args("e", NULL, help_str, opt_handler, NULL)
 		igt_display_require_output(&display);
 
 		/* Get active pipes. */
-		for_each_pipe(&display, pipe)
-			active_pipes[last_pipe++] = pipe;
+		for_each_crtc(&display, crtc)
+			active_pipes[last_pipe++] = crtc->pipe;
 		last_pipe--;
 	}
 
@@ -452,14 +454,14 @@ int igt_main_args("e", NULL, help_str, opt_handler, NULL)
 
 	igt_describe("Test for basic check of KMS ABI with busy framebuffers.");
 	igt_subtest_with_dynamic("basic") { /* just run on the first pipe */
-		for_each_pipe_with_single_output(&display, pipe, output) {
-			if (!pipe_output_combo_valid(&display, output, pipe))
+		for_each_crtc_with_single_output(&display, crtc, output) {
+			if (!pipe_output_combo_valid(&display, output, crtc->pipe))
 				continue;
 
 			igt_dynamic("flip")
-				test_flip(&display, pipe, output, false);
+				test_flip(&display, crtc->pipe, output, false);
 			igt_dynamic("modeset")
-				test_flip(&display, pipe, output, true);
+				test_flip(&display, crtc->pipe, output, true);
 			break;
 		}
 	}
@@ -468,18 +470,18 @@ int igt_main_args("e", NULL, help_str, opt_handler, NULL)
 		igt_hang_t hang = igt_allow_hang(display.drm_fd, 0, 0);
 		errno = 0;
 
-		for_each_pipe_with_single_output(&display, pipe, output) {
-			if (!pipe_output_combo_valid(&display, output, pipe))
+		for_each_crtc_with_single_output(&display, crtc, output) {
+			if (!pipe_output_combo_valid(&display, output, crtc->pipe))
 				continue;
 
-			if (!all_pipes && pipe != active_pipes[0] &&
-					  pipe != active_pipes[last_pipe])
+			if (!all_pipes && crtc->pipe != active_pipes[0] &&
+					  crtc->pipe != active_pipes[last_pipe])
 				continue;
 
-			igt_dynamic_f("flip-pipe-%s", kmstest_pipe_name(pipe))
-				test_flip(&display, pipe, output, false);
-			igt_dynamic_f("modeset-pipe-%s", kmstest_pipe_name(pipe))
-				test_flip(&display, pipe, output, true);
+			igt_dynamic_f("flip-pipe-%s", igt_crtc_name(crtc))
+				test_flip(&display, crtc->pipe, output, false);
+			igt_dynamic_f("modeset-pipe-%s", igt_crtc_name(crtc))
+				test_flip(&display, crtc->pipe, output, true);
 		}
 
 		igt_disallow_hang(display.drm_fd, hang);
@@ -489,16 +491,17 @@ int igt_main_args("e", NULL, help_str, opt_handler, NULL)
 		igt_hang_t hang = igt_allow_hang(display.drm_fd, 0, 0);
 		errno = 0;
 
-		for_each_pipe_with_single_output(&display, pipe, output) {
-			if (!pipe_output_combo_valid(&display, output, pipe))
+		for_each_crtc_with_single_output(&display, crtc, output) {
+			if (!pipe_output_combo_valid(&display, output, crtc->pipe))
 				continue;
 
-			if (!all_pipes && pipe != active_pipes[0] &&
-					  pipe != active_pipes[last_pipe])
+			if (!all_pipes && crtc->pipe != active_pipes[0] &&
+					  crtc->pipe != active_pipes[last_pipe])
 				continue;
 
-			igt_dynamic_f("pipe-%s", kmstest_pipe_name(pipe))
-				test_pageflip_modeset_hang(&display, output, pipe);
+			igt_dynamic_f("pipe-%s", igt_crtc_name(crtc))
+				test_pageflip_modeset_hang(&display, output,
+							   crtc->pipe);
 		}
 
 		igt_disallow_hang(display.drm_fd, hang);
@@ -522,19 +525,21 @@ int igt_main_args("e", NULL, help_str, opt_handler, NULL)
 
 			hang = igt_allow_hang(display.drm_fd, 0, 0);
 
-			for_each_pipe_with_single_output(&display, pipe, output) {
-				if (!pipe_output_combo_valid(&display, output, pipe))
+			for_each_crtc_with_single_output(&display, crtc,
+							 output) {
+				if (!pipe_output_combo_valid(&display, output, crtc->pipe))
 					continue;
 
-				if (!all_pipes && pipe != active_pipes[0] &&
-						  pipe != active_pipes[last_pipe])
+				if (!all_pipes && crtc->pipe != active_pipes[0] &&
+						  crtc->pipe != active_pipes[last_pipe])
 					continue;
 
-				igt_dynamic_f("pipe-%s", kmstest_pipe_name(pipe)) {
+				igt_dynamic_f("pipe-%s", igt_crtc_name(crtc)) {
 					if (tests[i].reset)
 						igt_set_module_param_int(display.drm_fd, "force_reset_modeset_test", 1);
 
-					test_hang(&display, pipe, output,
+					test_hang(&display, crtc->pipe,
+						  output,
 						  tests[i].modeset, tests[i].hang_newfb);
 
 					if (tests[i].reset)

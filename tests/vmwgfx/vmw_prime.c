@@ -185,7 +185,7 @@ static void cleanup_crtc(struct gpu_process_t *gpu)
 
 	igt_plane_set_fb(gpu->primary, NULL);
 
-	igt_output_set_pipe(output, PIPE_NONE);
+	igt_output_set_crtc(output, NULL);
 	igt_display_commit(display);
 
 	igt_remove_fb(gpu->mdevice.drm_fd, &gpu->fb);
@@ -203,7 +203,8 @@ static void prepare_crtc(struct gpu_process_t *gpu)
 	int ret;
 
 	/* select the pipe we want to use */
-	igt_output_set_pipe(output, gpu->pipe);
+	igt_output_set_crtc(output,
+			    igt_crtc_for_pipe(display, gpu->pipe));
 
 	mode = igt_output_get_mode(output);
 
@@ -229,7 +230,8 @@ static void prepare_crtc_surface(struct gpu_process_t *gpu)
 	int prime_fd;
 
 	/* select the pipe we want to use */
-	igt_output_set_pipe(output, gpu->pipe);
+	igt_output_set_crtc(output,
+			    igt_crtc_for_pipe(display, gpu->pipe));
 
 	mode = igt_output_get_mode(output);
 
@@ -285,20 +287,20 @@ static void draw_triangle_3d(struct gpu_process_t *gpu, uint32_t draw_flags)
 {
 	igt_display_t *display = &gpu->display;
 	igt_output_t *output;
-	enum pipe pipe;
+	igt_crtc_t *crtc;
 	igt_pipe_crc_t *pipe_crc;
 	igt_crc_t blank_crc, tri_crc;
 	char *blank_crc_str, *tri_crc_str;
 	bool crc_equal;
 
-	for_each_pipe_with_valid_output(display, pipe, output) {
+	for_each_crtc_with_valid_output(display, crtc, output) {
 		int prime_fd;
 
 		gpu->output = output;
-		gpu->pipe = pipe;
+		gpu->pipe = crtc->pipe;
 
 		prepare_crtc(gpu);
-		pipe_crc = igt_pipe_crc_new(gpu->mdevice.drm_fd, pipe,
+		pipe_crc = igt_pipe_crc_new(gpu->mdevice.drm_fd, crtc->pipe,
 					    IGT_PIPE_CRC_SOURCE_AUTO);
 		igt_pipe_crc_collect_crc(pipe_crc, &blank_crc);
 
@@ -350,7 +352,7 @@ static void draw_dumb_buffer(struct gpu_process_t *gpu)
 {
 	igt_display_t *display = &gpu->display;
 	igt_output_t *output;
-	enum pipe pipe;
+	igt_crtc_t *crtc;
 	igt_pipe_crc_t *pipe_crc;
 	igt_crc_t blank_crc, red_crc, blue_crc, tri_crc, red2_crc;
 	char *blank_crc_str, *red_crc_str, *red2_crc_str, *blue_crc_str,
@@ -360,12 +362,12 @@ static void draw_dumb_buffer(struct gpu_process_t *gpu)
 	struct vmw_default_objects objects = { 0 };
 	int32_t cid = vmw_ioctl_context_create(gpu->mdevice.drm_fd);
 
-	for_each_pipe_with_valid_output(display, pipe, output) {
+	for_each_crtc_with_valid_output(display, crtc, output) {
 		gpu->output = output;
-		gpu->pipe = pipe;
+		gpu->pipe = crtc->pipe;
 
 		prepare_crtc_surface(gpu);
-		pipe_crc = igt_pipe_crc_new(gpu->mdevice.drm_fd, pipe,
+		pipe_crc = igt_pipe_crc_new(gpu->mdevice.drm_fd, crtc->pipe,
 					    IGT_PIPE_CRC_SOURCE_AUTO);
 		igt_pipe_crc_collect_crc(pipe_crc, &blank_crc);
 

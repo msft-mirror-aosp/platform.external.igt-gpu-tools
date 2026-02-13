@@ -105,7 +105,7 @@ void igt_set_all_master_pipes_for_platform(igt_display_t *display, uint32_t *mas
 
 	*master_pipes = 0;
 	for (pipe = PIPE_A; pipe < IGT_MAX_PIPES - 1; pipe++) {
-		if (display->pipes[pipe].valid && display->pipes[pipe + 1].valid) {
+		if (igt_crtc_for_pipe(display, pipe)->valid && igt_crtc_for_pipe(display, pipe + 1)->valid) {
 			*master_pipes |= BIT(pipe);
 			igt_info("Found master pipe %s\n", kmstest_pipe_name(pipe));
 		}
@@ -168,11 +168,13 @@ bool igt_assign_pipes_for_outputs(int drm_fd,
 						out->name);
 				return false;
 			}
-			igt_output_set_pipe(out, start);
+			igt_output_set_crtc(out,
+					    igt_crtc_for_pipe(out->display, start));
 			igt_debug("Using pipe %s as master.\n",
 					kmstest_pipe_name(start));
 		} else
-			igt_output_set_pipe(out, start);
+			igt_output_set_crtc(out,
+					    igt_crtc_for_pipe(out->display, start));
 
 		for (i = 0; i < needed; i++)
 			*used_pipes_mask |= BIT(start + i);

@@ -382,7 +382,7 @@ static struct intel_xe_perf_metric_set *oa_unit_metric_set(const struct drm_xe_o
 		  oau->oa_unit_type == DRM_XE_OA_UNIT_TYPE_OAM_SAG))
 		test_set_name = "MediaSet1";
 	else
-		igt_assert(!"reached");
+		igt_assert_f(!"reached", "Unknown oa_unit_type %d\n", oau->oa_unit_type);
 
 	igt_list_for_each_entry(metric_set_iter, &intel_xe_perf->metric_sets, link) {
 		if (strcmp(metric_set_iter->symbol_name, test_set_name) == 0) {
@@ -4026,6 +4026,21 @@ static struct xe_oa_regs __oam_regs(u32 base)
 	};
 }
 
+static struct xe_oa_regs __oamert_regs(void)
+{
+	return (struct xe_oa_regs) {
+		.base		= 0,
+		.oa_head_ptr	= 0x1453ac,
+		.oa_tail_ptr	= 0x1453b0,
+		.oa_buffer	= 0x1453b4,
+		.oa_ctx_ctrl	= 0x1453c8,
+		.oa_ctrl	= 0x1453a0,
+		.oa_debug	= 0x1453a4,
+		.oa_status	= 0x1453a8,
+		.oa_mmio_trg	= 0x1453cc,
+	};
+}
+
 static struct xe_oa_regs oa_unit_regs(const struct drm_xe_oa_unit *oau)
 {
 	switch (oau->oa_unit_type) {
@@ -4041,6 +4056,8 @@ static struct xe_oa_regs oa_unit_regs(const struct drm_xe_oa_unit *oau)
 	}
 	case DRM_XE_OA_UNIT_TYPE_OAM_SAG:
 		return __oam_regs(XE_OAM_SAG_BASE_ADJ);
+	case DRM_XE_OA_UNIT_TYPE_MERT:
+		return __oamert_regs();
 	case DRM_XE_OA_UNIT_TYPE_OAG:
 		return __oag_regs();
 	default:

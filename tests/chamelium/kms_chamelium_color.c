@@ -80,11 +80,11 @@ static bool test_pipe_degamma(data_t *data,
 	};
 	bool ret;
 
-	igt_require(igt_pipe_obj_has_prop(primary->pipe, IGT_CRTC_DEGAMMA_LUT));
+	igt_require(igt_crtc_has_prop(primary->crtc, IGT_CRTC_DEGAMMA_LUT));
 
 	degamma_full = generate_table_max(data->degamma_lut_size);
 
-	igt_output_set_pipe(output, primary->pipe->pipe);
+	igt_output_set_crtc(output, primary->crtc);
 
 	/* Create a framebuffer at the size of the output. */
 	fb_id = igt_create_fb(data->drm_fd,
@@ -112,8 +112,8 @@ static bool test_pipe_degamma(data_t *data,
 	igt_assert(fbref_id);
 
 	igt_plane_set_fb(primary, &fb_modeset);
-	disable_ctm(primary->pipe);
-	disable_gamma(primary->pipe);
+	disable_ctm(primary->crtc);
+	disable_gamma(primary->crtc);
 	igt_display_commit(&data->display);
 
 	/* Draw solid colors with linear degamma transformation. */
@@ -124,7 +124,7 @@ static bool test_pipe_degamma(data_t *data,
 	 */
 	paint_gradient_rectangles(data, mode, red_green_blue, &fb);
 	igt_plane_set_fb(primary, &fb);
-	set_degamma(data, primary->pipe, degamma_full);
+	set_degamma(data, primary->crtc, degamma_full);
 	igt_display_commit(&data->display);
 	chamelium_capture(data->chamelium, port, 0, 0, 0, 0, 1);
 	frame_fullcolors =
@@ -138,9 +138,9 @@ static bool test_pipe_degamma(data_t *data,
 					    frame_fullcolors, &fbref,
 					    CHAMELIUM_CHECK_ANALOG);
 
-	disable_degamma(primary->pipe);
+	disable_degamma(primary->crtc);
 	igt_plane_set_fb(primary, NULL);
-	igt_output_set_pipe(output, PIPE_NONE);
+	igt_output_set_crtc(output, NULL);
 	igt_display_commit(&data->display);
 	free_lut(degamma_full);
 
@@ -169,11 +169,11 @@ static bool test_pipe_gamma(data_t *data,
 	};
 	bool ret;
 
-	igt_require(igt_pipe_obj_has_prop(primary->pipe, IGT_CRTC_GAMMA_LUT));
+	igt_require(igt_crtc_has_prop(primary->crtc, IGT_CRTC_GAMMA_LUT));
 
 	gamma_full = generate_table_max(data->gamma_lut_size);
 
-	igt_output_set_pipe(output, primary->pipe->pipe);
+	igt_output_set_crtc(output, primary->crtc);
 
 	/* Create a framebuffer at the size of the output. */
 	fb_id = igt_create_fb(data->drm_fd,
@@ -201,9 +201,9 @@ static bool test_pipe_gamma(data_t *data,
 	igt_assert(fbref_id);
 
 	igt_plane_set_fb(primary, &fbref);
-	disable_ctm(primary->pipe);
-	disable_degamma(primary->pipe);
-	set_gamma(data, primary->pipe, gamma_full);
+	disable_ctm(primary->crtc);
+	disable_degamma(primary->crtc);
+	set_gamma(data, primary->crtc, gamma_full);
 	igt_display_commit(&data->display);
 
 	/* Draw solid colors with no gamma transformation. */
@@ -227,9 +227,9 @@ static bool test_pipe_gamma(data_t *data,
 					    frame_fullcolors, &fbref,
 					    CHAMELIUM_CHECK_ANALOG);
 
-	disable_gamma(primary->pipe);
+	disable_gamma(primary->crtc);
 	igt_plane_set_fb(primary, NULL);
-	igt_output_set_pipe(output, PIPE_NONE);
+	igt_output_set_crtc(output, NULL);
 	igt_display_commit(&data->display);
 	free_lut(gamma_full);
 
@@ -255,12 +255,12 @@ static bool test_pipe_ctm(data_t *data,
 	int fb_id, fb_modeset_id, fbref_id;
 	bool ret = true;
 
-	igt_require(igt_pipe_obj_has_prop(primary->pipe, IGT_CRTC_CTM));
+	igt_require(igt_crtc_has_prop(primary->crtc, IGT_CRTC_CTM));
 
 	degamma_linear = generate_table(data->degamma_lut_size, 1.0);
 	gamma_linear = generate_table(data->gamma_lut_size, 1.0);
 
-	igt_output_set_pipe(output, primary->pipe->pipe);
+	igt_output_set_crtc(output, primary->crtc);
 
 	/* Create a framebuffer at the size of the output. */
 	fb_id = igt_create_fb(data->drm_fd,
@@ -290,15 +290,15 @@ static bool test_pipe_ctm(data_t *data,
 	igt_plane_set_fb(primary, &fb_modeset);
 
 	if (memcmp(before, after, sizeof(color_t))) {
-		set_degamma(data, primary->pipe, degamma_linear);
-		set_gamma(data, primary->pipe, gamma_linear);
+		set_degamma(data, primary->crtc, degamma_linear);
+		set_gamma(data, primary->crtc, gamma_linear);
 	} else {
 		/* Disable Degamma and Gamma for ctm max test */
-		disable_degamma(primary->pipe);
-		disable_gamma(primary->pipe);
+		disable_degamma(primary->crtc);
+		disable_gamma(primary->crtc);
 	}
 
-	disable_ctm(primary->pipe);
+	disable_ctm(primary->crtc);
 	igt_display_commit(&data->display);
 
 	paint_rectangles(data, mode, after, &fbref);
@@ -306,7 +306,7 @@ static bool test_pipe_ctm(data_t *data,
 	/* With CTM transformation. */
 	paint_rectangles(data, mode, before, &fb);
 	igt_plane_set_fb(primary, &fb);
-	set_ctm(primary->pipe, ctm_matrix);
+	set_ctm(primary->crtc, ctm_matrix);
 	igt_display_commit(&data->display);
 	chamelium_capture(data->chamelium, port, 0, 0, 0, 0, 1);
 	frame_hardware =
@@ -322,9 +322,9 @@ static bool test_pipe_ctm(data_t *data,
 					     CHAMELIUM_CHECK_ANALOG);
 
 	igt_plane_set_fb(primary, NULL);
-	disable_degamma(primary->pipe);
-	disable_gamma(primary->pipe);
-	igt_output_set_pipe(output, PIPE_NONE);
+	disable_degamma(primary->crtc);
+	disable_gamma(primary->crtc);
+	igt_output_set_crtc(output, NULL);
 	igt_display_commit(&data->display);
 	free_lut(degamma_linear);
 	free_lut(gamma_linear);
@@ -358,12 +358,12 @@ static bool test_pipe_limited_range_ctm(data_t *data,
 	int fb_id0, fb_id1;
 	bool ret = false;
 
-	igt_require(igt_pipe_obj_has_prop(primary->pipe, IGT_CRTC_CTM));
+	igt_require(igt_crtc_has_prop(primary->crtc, IGT_CRTC_CTM));
 
 	degamma_linear = generate_table(data->degamma_lut_size, 1.0);
 	gamma_linear = generate_table(data->gamma_lut_size, 1.0);
 
-	igt_output_set_pipe(output, primary->pipe->pipe);
+	igt_output_set_crtc(output, primary->crtc);
 
 	/* Create a framebuffer at the size of the output. */
 	fb_id0 = igt_create_fb(data->drm_fd,
@@ -382,9 +382,9 @@ static bool test_pipe_limited_range_ctm(data_t *data,
 			       &fb1);
 	igt_assert(fb_id1);
 
-	set_degamma(data, primary->pipe, degamma_linear);
-	set_gamma(data, primary->pipe, gamma_linear);
-	set_ctm(primary->pipe, ctm);
+	set_degamma(data, primary->crtc, degamma_linear);
+	set_gamma(data, primary->crtc, gamma_linear);
+	set_ctm(primary->crtc, ctm);
 
 	/* Set the output into full range. */
 	igt_output_set_prop_value(output,
@@ -415,7 +415,7 @@ static bool test_pipe_limited_range_ctm(data_t *data,
 				  IGT_CONNECTOR_BROADCAST_RGB,
 				  BROADCAST_RGB_FULL);
 	igt_plane_set_fb(primary, NULL);
-	igt_output_set_pipe(output, PIPE_NONE);
+	igt_output_set_crtc(output, NULL);
 
 	/* Verify frame dumps are equal. */
 	ret = chamelium_frame_match_or_dump_frame_pair(data->chamelium, port,
@@ -431,18 +431,20 @@ static bool test_pipe_limited_range_ctm(data_t *data,
 static void
 prep_pipe(data_t *data, enum pipe p)
 {
-	igt_require_pipe(&data->display, p);
+	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, p);
+	igt_require_pipe(&data->display, crtc->pipe);
 
-	if (igt_pipe_obj_has_prop(&data->display.pipes[p], IGT_CRTC_DEGAMMA_LUT_SIZE)) {
+	if (igt_crtc_has_prop(crtc, IGT_CRTC_DEGAMMA_LUT_SIZE)) {
 		data->degamma_lut_size =
-			igt_pipe_obj_get_prop(&data->display.pipes[p],
+			igt_crtc_get_prop(crtc,
 					      IGT_CRTC_DEGAMMA_LUT_SIZE);
 		igt_assert_lt(0, data->degamma_lut_size);
 	}
 
-	if (igt_pipe_obj_has_prop(&data->display.pipes[p], IGT_CRTC_GAMMA_LUT_SIZE)) {
+	if (igt_crtc_has_prop(crtc, IGT_CRTC_GAMMA_LUT_SIZE)) {
 		data->gamma_lut_size =
-			igt_pipe_obj_get_prop(&data->display.pipes[p],
+			igt_crtc_get_prop(crtc,
 					      IGT_CRTC_GAMMA_LUT_SIZE);
 		igt_assert_lt(0, data->gamma_lut_size);
 	}
@@ -450,22 +452,22 @@ prep_pipe(data_t *data, enum pipe p)
 
 static int test_setup(data_t *data, enum pipe p)
 {
-	igt_pipe_t *pipe;
+	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, p);
 	int i = 0;
 
 	igt_display_reset(&data->display);
-	prep_pipe(data, p);
+	prep_pipe(data, crtc->pipe);
+	igt_require(crtc->n_planes >= 0);
 
-	pipe = &data->display.pipes[p];
-	igt_require(pipe->n_planes >= 0);
-
-	data->primary = igt_pipe_get_plane_type(pipe, DRM_PLANE_TYPE_PRIMARY);
+	data->primary = igt_crtc_get_plane_type(crtc, DRM_PLANE_TYPE_PRIMARY);
 
 	/*
 	 * Prefer to run this test on HDMI connector if its connected, since on DP we
 	 * sometimes face DP FSM issue
 	 */
-        for_each_valid_output_on_pipe(&data->display, p, data->output) {
+        for_each_valid_output_on_pipe(&data->display, crtc->pipe,
+				      data->output) {
                 for (i = 0; i < data->port_count; i++) {
                         if ((data->output->config.connector->connector_type == DRM_MODE_CONNECTOR_HDMIA ||
 			    data->output->config.connector->connector_type == DRM_MODE_CONNECTOR_HDMIB) &&
@@ -474,7 +476,8 @@ static int test_setup(data_t *data, enum pipe p)
                 }
         }
 
-	for_each_valid_output_on_pipe(&data->display, p, data->output) {
+	for_each_valid_output_on_pipe(&data->display, crtc->pipe,
+				      data->output) {
 		for (i = 0; i < data->port_count; i++) {
 			if (strcmp(data->output->name,
 				   chamelium_port_get_name(data->ports[i])) == 0)
@@ -593,7 +596,7 @@ run_limited_range_ctm_test_for_pipe(data_t *data, enum pipe p,
 static void
 run_tests_for_pipe(data_t *data)
 {
-	enum pipe pipe;
+	igt_crtc_t *crtc;
 	struct {
 		const char *name;
 		bool (*test_t)(data_t*, igt_plane_t*, struct chamelium_port*);
@@ -684,8 +687,9 @@ run_tests_for_pipe(data_t *data)
 	for (i = 0; i < ARRAY_SIZE(gamma_degamma_tests); i++) {
 		igt_describe_f("%s", gamma_degamma_tests[i].desc);
 		igt_subtest_with_dynamic_f("%s", gamma_degamma_tests[i].name) {
-			for_each_pipe(&data->display, pipe) {
-				run_gamma_degamma_tests_for_pipe(data, pipe,
+			for_each_crtc(&data->display, crtc) {
+				run_gamma_degamma_tests_for_pipe(data,
+								 crtc->pipe,
 								 gamma_degamma_tests[i].test_t);
 			}
 		}
@@ -694,8 +698,8 @@ run_tests_for_pipe(data_t *data)
 	for (i = 0; i < ARRAY_SIZE(ctm_tests); i++) {
 		igt_describe_f("%s", ctm_tests[i].desc);
 		igt_subtest_with_dynamic_f("%s", ctm_tests[i].name) {
-			for_each_pipe(&data->display, pipe) {
-				run_ctm_tests_for_pipe(data, pipe,
+			for_each_crtc(&data->display, crtc) {
+				run_ctm_tests_for_pipe(data, crtc->pipe,
 						       ctm_tests[i].colors,
 						       ctm_tests[i].ctm,
 						       ctm_tests[i].iter);
@@ -705,8 +709,8 @@ run_tests_for_pipe(data_t *data)
 
 	igt_describe("Compare after applying ctm matrix & identity matrix");
 	igt_subtest_with_dynamic("ctm-limited-range") {
-		for_each_pipe(&data->display, pipe) {
-			run_limited_range_ctm_test_for_pipe(data, pipe,
+		for_each_crtc(&data->display, crtc) {
+			run_limited_range_ctm_test_for_pipe(data, crtc->pipe,
 							    test_pipe_limited_range_ctm);
 		}
 	}

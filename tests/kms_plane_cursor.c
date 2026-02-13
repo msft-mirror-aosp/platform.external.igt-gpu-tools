@@ -75,7 +75,7 @@ typedef struct data {
 	igt_plane_t *overlay;
 	igt_plane_t *cursor;
 	igt_output_t *output;
-	igt_pipe_t *pipe;
+	igt_crtc_t *crtc;
 	igt_pipe_crc_t *pipe_crc;
 	drmModeModeInfo *mode;
 	igt_fb_t ref_fb;
@@ -84,7 +84,7 @@ typedef struct data {
 	igt_fb_t cfb;
 	enum pipe pipe_id;
 	int drm_fd;
-	rect_t or;
+	rect_t rect;
 	uint64_t max_curw;
 	uint64_t max_curh;
 } data_t;
@@ -93,29 +93,34 @@ typedef struct data {
 static void test_init(data_t *data, enum pipe pipe_id, igt_output_t *output,
 		      unsigned int flags)
 {
-	data->pipe_id = pipe_id;
-	data->pipe = &data->display.pipes[data->pipe_id];
+	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe_id);
+	data->pipe_id = crtc->pipe;
+	data->crtc = igt_crtc_for_pipe(display, data->pipe_id);
 	data->output = output;
 
 	data->mode = igt_output_get_mode(data->output);
 
-	data->primary = igt_pipe_get_plane_type(data->pipe, DRM_PLANE_TYPE_PRIMARY);
+	data->primary = igt_crtc_get_plane_type(data->crtc,
+						DRM_PLANE_TYPE_PRIMARY);
 	if (flags & TEST_OVERLAY)
-		data->overlay = igt_pipe_get_plane_type(data->pipe, DRM_PLANE_TYPE_OVERLAY);
-	data->cursor = igt_pipe_get_plane_type(data->pipe, DRM_PLANE_TYPE_CURSOR);
+		data->overlay = igt_crtc_get_plane_type(data->crtc,
+							DRM_PLANE_TYPE_OVERLAY);
+	data->cursor = igt_crtc_get_plane_type(data->crtc,
+					       DRM_PLANE_TYPE_CURSOR);
 
 	igt_info("Using (pipe %s + %s) to run the subtest.\n",
 		 kmstest_pipe_name(data->pipe_id), igt_output_name(data->output));
 
 	igt_require_pipe_crc(data->drm_fd);
-	data->pipe_crc = igt_pipe_crc_new(data->drm_fd, data->pipe_id,
+	data->pipe_crc = igt_crtc_crc_new(data->crtc,
 					  IGT_PIPE_CRC_SOURCE_AUTO);
 
 	/* Overlay rectangle for a rect in the center of the screen */
-	data->or.x = data->mode->hdisplay / 4;
-	data->or.y = data->mode->vdisplay / 4;
-	data->or.w = data->mode->hdisplay / 2;
-	data->or.h = data->mode->vdisplay / 2;
+	data->rect.x = data->mode->hdisplay / 4;
+	data->rect.y = data->mode->vdisplay / 4;
+	data->rect.w = data->mode->hdisplay / 2;
+	data->rect.h = data->mode->vdisplay / 2;
 }
 
 /* Common test cleanup. */
@@ -141,6 +146,7 @@ static void test_fini(data_t *data)
  */
 static void test_cursor_pos(data_t *data, int x, int y, unsigned int flags)
 {
+	igt_display_t *display = &data->display;
 	igt_crc_t ref_crc, test_crc;
 	cairo_t *cr;
 	igt_fb_t *ref_fb = &data->ref_fb;
@@ -149,13 +155,13 @@ static void test_cursor_pos(data_t *data, int x, int y, unsigned int flags)
 	igt_fb_t *cfb = &data->cfb;
 	int cw = cfb->width;
 	int ch = cfb->height;
-	const rect_t *or = &data->or;
+	const rect_t *rect = &data->rect;
 
 	cr = igt_get_cairo_ctx(ref_fb->fd, ref_fb);
 	igt_paint_color(cr, 0, 0, ref_fb->width, ref_fb->height, 1.0, 1.0, 1.0);
 
 	if (flags & TEST_OVERLAY)
-		igt_paint_color(cr, or->x, or->y, or->w, or->h, 0.5, 0.5, 0.5);
+		igt_paint_color(cr, rect->x, rect->y, rect->w, rect->h, 0.5, 0.5, 0.5);
 
 	igt_paint_color(cr, x, y, cw, ch, 1.0, 0.0, 1.0);
 	igt_put_cairo_ctx(cr);
@@ -173,12 +179,12 @@ static void test_cursor_pos(data_t *data, int x, int y, unsigned int flags)
 
 	if (flags & TEST_OVERLAY) {
 		igt_plane_set_fb(data->overlay, ofb);
-		igt_plane_set_position(data->overlay, or->x, or->y);
-		igt_plane_set_size(data->overlay, or->w, or->h);
-		igt_fb_set_size(ofb, data->overlay, or->w, or->h);
+		igt_plane_set_position(data->overlay, rect->x, rect->y);
+		igt_plane_set_size(data->overlay, rect->w, rect->h);
+		igt_fb_set_size(ofb, data->overlay, rect->w, rect->h);
 		igt_fb_set_position(ofb, data->overlay,
-				    (ofb->width - or->w) / 2,
-				    (ofb->height - or->h) / 2);
+				    (ofb->width - rect->w) / 2,
+				    (ofb->height - rect->h) / 2);
 	}
 
 	igt_plane_set_fb(data->cursor, cfb);
@@ -188,7 +194,8 @@ static void test_cursor_pos(data_t *data, int x, int y, unsigned int flags)
 	/* Wait for one more vblank since cursor updates are not
 	 * synchronized to the same frame on AMD hw */
 	if(is_amdgpu_device(data->drm_fd))
-		igt_wait_for_vblank_count(data->drm_fd, data->display.pipes[data->pipe_id].crtc_offset, 1);
+		igt_wait_for_vblank_count(igt_crtc_for_pipe(display, data->pipe_id),
+					  1);
 
 	igt_pipe_crc_get_current(data->drm_fd, data->pipe_crc, &test_crc);
 	igt_pipe_crc_stop(data->pipe_crc);
@@ -205,27 +212,27 @@ static void test_cursor_spots(data_t *data, int size, unsigned int flags)
 {
 	int sw = data->mode->hdisplay;
 	int sh = data->mode->vdisplay;
-	const rect_t *or = &data->or;
+	const rect_t *rect = &data->rect;
 	int i;
 	const pos_t pos[] = {
 		/* Test diagonally from top left to bottom right. */
 		{ -size / 3, -size / 3 },
 		{ 0, 0 },
-		{ or->x - size, or->y - size },
-		{ or->x - size / 3, or->y - size / 3 },
-		{ or->x, or->y },
-		{ or->x + size, or->y + size },
+		{ rect->x - size, rect->y - size },
+		{ rect->x - size / 3, rect->y - size / 3 },
+		{ rect->x, rect->y },
+		{ rect->x + size, rect->y + size },
 		{ sw / 2, sh / 2 },
-		{ or->x + or->w - size, or->y + or->h - size },
-		{ or->x + or->w - size / 3, or->y + or->h - size / 3 },
-		{ or->x + or->w + size, or->y + or->h + size },
+		{ rect->x + rect->w - size, rect->y + rect->h - size },
+		{ rect->x + rect->w - size / 3, rect->y + rect->h - size / 3 },
+		{ rect->x + rect->w + size, rect->y + rect->h + size },
 		{ sw - size, sh - size },
 		{ sw - size / 3, sh - size / 3 },
 		/* Test remaining corners. */
 		{ sw - size, 0 },
 		{ 0, sh - size },
-		{ or->x + or->w - size, or->y },
-		{ or->x, or->y + or->h - size }
+		{ rect->x + rect->w - size, rect->y },
+		{ rect->x, rect->y + rect->h - size }
 	};
 
 	for (i = 0; i < ARRAY_SIZE(pos); ++i) {
@@ -247,6 +254,7 @@ static void test_cleanup(data_t *data)
 
 static void test_cursor(data_t *data, int size, unsigned int flags)
 {
+	igt_display_t *display = &data->display;
 	int sw, sh;
 	int pad = 128;
 
@@ -264,8 +272,8 @@ static void test_cursor(data_t *data, int size, unsigned int flags)
 			    DRM_FORMAT_MOD_LINEAR, 1.0, 1.0, 1.0, &data->pfb);
 
 	if (flags & TEST_OVERLAY) {
-		int width = (flags & TEST_VIEWPORT) ? data->or.w + pad : data->or.w;
-		int height = (flags & TEST_VIEWPORT) ? data->or.h + pad : data->or.h;
+		int width = (flags & TEST_VIEWPORT) ? data->rect.w + pad : data->rect.w;
+		int height = (flags & TEST_VIEWPORT) ? data->rect.h + pad : data->rect.h;
 
 		igt_create_color_fb(data->drm_fd, width, height, DRM_FORMAT_XRGB8888,
 				    DRM_FORMAT_MOD_LINEAR, 0.5, 0.5, 0.5, &data->ofb);
@@ -275,7 +283,8 @@ static void test_cursor(data_t *data, int size, unsigned int flags)
 			    DRM_FORMAT_MOD_LINEAR, 1.0, 0.0, 1.0, &data->cfb);
 
 	igt_plane_set_fb(data->primary, &data->pfb);
-	igt_output_set_pipe(data->output, data->pipe_id);
+	igt_output_set_crtc(data->output,
+			    igt_crtc_for_pipe(display, data->pipe_id));
 	igt_display_commit2(&data->display, COMMIT_ATOMIC);
 
 	test_cursor_spots(data, size, flags);
@@ -285,7 +294,7 @@ int igt_main()
 {
 	static const int cursor_sizes[] = { 64, 128, 256 };
 	data_t data = { .max_curw = 64, .max_curh = 64 };
-	enum pipe pipe;
+	igt_crtc_t *crtc;
 	igt_output_t *output;
 	igt_display_t *display;
 	int i, j;
@@ -324,25 +333,28 @@ int igt_main()
 	for (i = 0; i < ARRAY_SIZE(tests); i++) {
 		igt_describe_f("%s", tests[i].desc);
 		igt_subtest_with_dynamic_f("%s", tests[i].name) {
-			for_each_pipe_with_single_output(&data.display, pipe, output) {
+			for_each_crtc_with_single_output(&data.display, crtc,
+							 output) {
 				if ((tests[i].flags & TEST_OVERLAY) &&
-				    !igt_pipe_get_plane_type(&data.display.pipes[pipe],
+				    !igt_crtc_get_plane_type(crtc,
 							     DRM_PLANE_TYPE_OVERLAY))
 					continue;
 
 				igt_display_reset(display);
 
-				igt_output_set_pipe(output, pipe);
+				igt_output_set_crtc(output,
+						    crtc);
 				if (!intel_pipe_output_combo_valid(display))
 					continue;
 
-				test_init(&data, pipe, output, tests[i].flags);
+				test_init(&data, crtc->pipe, output,
+					  tests[i].flags);
 
 				for (j = 0; j < ARRAY_SIZE(cursor_sizes); j++) {
 					int size = cursor_sizes[j];
 
 					igt_dynamic_f("pipe-%s-%s-size-%d",
-						      kmstest_pipe_name(pipe),
+						      igt_crtc_name(crtc),
 						      igt_output_name(output),
 						      size)
 						test_cursor(&data, size, tests[i].flags);

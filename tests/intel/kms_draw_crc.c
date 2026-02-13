@@ -93,17 +93,19 @@ struct base_crc base_crcs[ARRAY_SIZE(formats)];
 
 static void find_modeset_params(void)
 {
-	enum pipe pipe;
+	igt_crtc_t *crtc;
 
-	for_each_pipe_with_valid_output(&display, pipe, output) {
+	for_each_crtc_with_valid_output(&display, crtc, output) {
 		igt_display_reset(&display);
 
-		igt_output_set_pipe(output, pipe);
+		igt_output_set_crtc(output,
+				    crtc);
 		if (!intel_pipe_output_combo_valid(&display))
 			continue;
 
 		mode = igt_output_get_mode(output);
-		pipe_crc = igt_pipe_crc_new(drm_fd, pipe, IGT_PIPE_CRC_SOURCE_AUTO);
+		pipe_crc = igt_crtc_crc_new(crtc,
+					    IGT_PIPE_CRC_SOURCE_AUTO);
 		/*Only one pipe/output is enough*/
 		break;
 	}

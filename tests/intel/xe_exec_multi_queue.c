@@ -5,7 +5,7 @@
 
 /**
  * TEST: Basic tests for exec functionality with multi-queue feature
- * Category: Hardware building block
+ * Category: Core
  * Mega feature: General Core features
  * Sub-category: CMD submission
  * Functionality: multi-queue
@@ -37,12 +37,10 @@
 #define FAULT_MODE		(0x1 << 6)
 #define SMEM			(0x1 << 7)
 #define WAIT_MODE		(0x1 << 8)
-#define KEEP_ACTIVE		(0x1 << 9)
 
 #define MAX_INSTANCE 9
 
-#define XE_MULTI_GROUP_VALID_FLAGS   (DRM_XE_MULTI_GROUP_CREATE |        \
-				      DRM_XE_MULTI_GROUP_KEEP_ACTIVE)
+#define XE_MULTI_GROUP_VALID_FLAGS   (DRM_XE_MULTI_GROUP_CREATE)
 
 #define BASE_ADDRESS	0x1a0000
 
@@ -86,8 +84,7 @@ __test_sanity(int fd, int gt, int class, bool preempt_mode)
 	if (!n)
 		return;
 
-	vm = xe_vm_create(fd, preempt_mode ? DRM_XE_VM_CREATE_FLAG_LR_MODE |
-			  DRM_XE_VM_CREATE_FLAG_FAULT_MODE : 0, 0);
+	vm = xe_vm_create(fd, preempt_mode ? DRM_XE_VM_CREATE_FLAG_LR_MODE : 0, 0);
 
 	/* Invalid flags */
 	while (!invalid_flag)
@@ -121,15 +118,6 @@ __test_sanity(int fd, int gt, int class, bool preempt_mode)
 	/* Specifying multiple MULTI_GROUP property is invalid */
 	multi_queue.base.next_extension = to_user_pointer(&multi_queue);
 	igt_assert_eq(__xe_exec_queue_create(fd, vm, 1, 1, eci, ext, &val), -EINVAL);
-
-	/* KEEP_ACTIVE not supported in preempt mode without fault_mode */
-	if (preempt_mode) {
-		vm2 = xe_vm_create(fd, DRM_XE_VM_CREATE_FLAG_LR_MODE, 0);
-		multi_queue.value |= DRM_XE_MULTI_GROUP_KEEP_ACTIVE;
-		igt_assert_eq(__xe_exec_queue_create(fd, vm2, 1, 1, eci, ext, &val), -EINVAL);
-		multi_queue.value &= ~DRM_XE_MULTI_GROUP_KEEP_ACTIVE;
-		xe_vm_destroy(fd, vm2);
-	}
 
 	/* Setting other queue properties are valid for Q0 */
 	multi_queue.base.next_extension = to_user_pointer(&priority);
@@ -231,21 +219,6 @@ __test_sanity(int fd, int gt, int class, bool preempt_mode)
 	igt_waitchildren();
 
 	xe_vm_destroy(fd, vm);
-
-	/* Validate closing FD while keeping group active */
-	fd = drm_open_driver(DRIVER_XE);
-	vm = xe_vm_create(fd, preempt_mode ? DRM_XE_VM_CREATE_FLAG_LR_MODE |
-			  DRM_XE_VM_CREATE_FLAG_FAULT_MODE : 0, 0);
-
-	multi_queue.value = DRM_XE_MULTI_GROUP_CREATE | DRM_XE_MULTI_GROUP_KEEP_ACTIVE;
-	multi_queue.base.next_extension = 0;
-	exec_queues[0] = xe_exec_queue_create(fd, vm, eci, ext);
-
-	multi_queue.value = exec_queues[0];
-	for (i = 1; i < MAX_N_EXEC_QUEUES; i++)
-		exec_queues[i] = xe_exec_queue_create(fd, vm, eci, ext);
-
-	drm_close_driver(fd);
 }
 
 /**
@@ -282,7 +255,6 @@ __test_exec_sanity(int fd, struct drm_xe_engine_class_instance *eci, unsigned in
 	};
 	uint64_t ext = to_user_pointer(&multi_queue);
 	bool preempt_mode = flags & PREEMPT_MODE;
-	bool keep_active = flags & KEEP_ACTIVE;
 	int i;
 
 	sync.flags = DRM_XE_SYNC_FLAG_SIGNAL;
@@ -294,12 +266,8 @@ __test_exec_sanity(int fd, struct drm_xe_engine_class_instance *eci, unsigned in
 		sync.handle = syncobj_create(fd, 0);
 	}
 
-	vm = xe_vm_create(fd, preempt_mode ? DRM_XE_VM_CREATE_FLAG_LR_MODE |
-			  DRM_XE_VM_CREATE_FLAG_FAULT_MODE : 0, 0);
+	vm = xe_vm_create(fd, preempt_mode ? DRM_XE_VM_CREATE_FLAG_LR_MODE : 0, 0);
 	bo_size = xe_bb_size(fd, sizeof(struct xe_spin));
-
-	if (keep_active)
-		multi_queue.value |= DRM_XE_MULTI_GROUP_KEEP_ACTIVE;
 
 	for (i = 0; i < NUM_QUEUES; i++) {
 		bo[i] = xe_bo_create(fd, vm, bo_size, vram_if_possible(fd, eci[0].gt_id),
@@ -348,27 +316,14 @@ __test_exec_sanity(int fd, struct drm_xe_engine_class_instance *eci, unsigned in
 	/* Destroy primary queue */
 	xe_exec_queue_destroy(fd, exec_queues[0]);
 
-	/* Validate submission on secondary queues after destroying the primary */
+	/* Validate submission on secondary queues fail after destroying the primary */
 	xe_spin_init_opts(spin[1], .addr = addr[1]);
 	if (preempt_mode)
 		sync.addr = addr[1] + (char *)&spin[1]->exec_sync - (char *)spin[1];
 
 	exec.exec_queue_id = exec_queues[1];
 	exec.address = addr[1];
-
-	if (keep_active) {
-		xe_exec(fd, &exec);
-		xe_spin_wait_started(spin[1]);
-		xe_spin_end(spin[1]);
-		if (preempt_mode) {
-			xe_wait_ufence(fd, &spin[1]->exec_sync, USER_FENCE_VALUE, exec_queues[1], fence_timeout);
-		} else {
-			igt_assert(syncobj_wait(fd, &sync.handle, 1, INT64_MAX, 0, NULL));
-			syncobj_reset(fd, &sync.handle, 1);
-		}
-	} else {
-		igt_assert_eq(__xe_exec(fd, &exec), -ECANCELED);
-	}
+	igt_assert_eq(__xe_exec(fd, &exec), -ECANCELED);
 
 	if (preempt_mode)
 		sync.addr = to_user_pointer(&vm_sync);
@@ -408,8 +363,6 @@ test_exec_sanity(int fd, struct drm_xe_engine_class_instance *eci)
 {
 	__test_exec_sanity(fd, eci, 0);
 	__test_exec_sanity(fd, eci, PREEMPT_MODE);
-	__test_exec_sanity(fd, eci, KEEP_ACTIVE);
-	__test_exec_sanity(fd, eci, PREEMPT_MODE | KEEP_ACTIVE);
 }
 
 static void
@@ -1042,7 +995,9 @@ test_exec_virtual(int fd, int gt, int class)
 
 		eci[n++] = *hwe;
 	}
-	igt_assert(n);
+
+	if (!n)
+		return;
 
 	test_exec(fd, eci, n, n, n, 0);
 	test_exec(fd, eci, n, n, n, PREEMPT_MODE);

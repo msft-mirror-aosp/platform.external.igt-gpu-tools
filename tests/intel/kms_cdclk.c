@@ -114,16 +114,16 @@ static drmModeModeInfo *get_lowres_mode(igt_output_t *output)
 
 static void do_cleanup_display(igt_display_t *dpy)
 {
-	enum pipe pipe;
+	igt_crtc_t *crtc;
 	igt_output_t *output;
 	igt_plane_t *plane;
 
-	for_each_pipe(dpy, pipe)
-		for_each_plane_on_pipe(dpy, pipe, plane)
+	for_each_crtc(dpy, crtc)
+		for_each_plane_on_pipe(dpy, crtc->pipe, plane)
 			igt_plane_set_fb(plane, NULL);
 
 	for_each_connected_output(dpy, output)
-		igt_output_set_pipe(output, PIPE_NONE);
+		igt_output_set_crtc(output, NULL);
 
 	igt_display_commit2(dpy, dpy->is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY);
 }
@@ -131,6 +131,7 @@ static void do_cleanup_display(igt_display_t *dpy)
 static void test_plane_scaling(data_t *data, enum pipe pipe, igt_output_t *output)
 {
 	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
 	int cdclk_ref, cdclk_new;
 	struct igt_fb fb;
 	igt_plane_t *primary;
@@ -143,7 +144,8 @@ static void test_plane_scaling(data_t *data, enum pipe pipe, igt_output_t *outpu
 		do_cleanup_display(display);
 		igt_display_reset(display);
 
-		igt_output_set_pipe(output, pipe);
+		igt_output_set_crtc(output,
+				    crtc);
 		mode = *igt_output_get_highres_mode(output);
 		igt_require_f(is_4k(mode), "Mode >= 4K not found on output %s\n",
 			      igt_output_name(output));
@@ -185,6 +187,7 @@ static void test_plane_scaling(data_t *data, enum pipe pipe, igt_output_t *outpu
 static void test_mode_transition(data_t *data, enum pipe pipe, igt_output_t *output)
 {
 	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
 	int cdclk_ref, cdclk_new;
 	struct igt_fb fb;
 	igt_plane_t *primary;
@@ -193,7 +196,7 @@ static void test_mode_transition(data_t *data, enum pipe pipe, igt_output_t *out
 	do_cleanup_display(display);
 	igt_display_reset(display);
 
-	igt_output_set_pipe(output, pipe);
+	igt_output_set_crtc(output, crtc);
 	mode = igt_output_get_mode(output);
 	mode_lo = *get_lowres_mode(output);
 	mode_hi = *igt_output_get_highres_mode(output);
@@ -236,12 +239,12 @@ static void set_mode(data_t *data, int count, drmModeModeInfo *mode,
 		     igt_output_t **valid_outputs, struct igt_fb fb)
 {
 	igt_display_t *display = &data->display;
-	igt_pipe_t *pipe;
+	igt_crtc_t *crtc;
 	igt_plane_t *plane;
 
 	for (int i = 0; i < count; i++) {
-		pipe = &display->pipes[i];
-		plane = igt_pipe_get_plane_type(pipe, DRM_PLANE_TYPE_PRIMARY);
+		crtc = igt_crtc_for_pipe(display, i);
+		plane = igt_crtc_get_plane_type(crtc, DRM_PLANE_TYPE_PRIMARY);
 
 		igt_output_override_mode(valid_outputs[i], &mode[i]);
 
@@ -292,7 +295,8 @@ static void test_mode_transition_on_all_outputs(data_t *data)
 		width = max(width, mode->hdisplay);
 		height = max(height, mode->vdisplay);
 
-		igt_output_set_pipe(valid_outputs[i], i);
+		igt_output_set_crtc(valid_outputs[i],
+				    igt_crtc_for_pipe(display, i));
 		igt_output_override_mode(valid_outputs[i], &mode_highres[i]);
 	}
 
@@ -322,20 +326,21 @@ static void run_cdclk_test(data_t *data, uint32_t flags)
 {
 	igt_display_t *display = &data->display;
 	igt_output_t *output;
-	enum pipe pipe;
+	igt_crtc_t *crtc;
 
-	for_each_pipe_with_valid_output(display, pipe, output) {
-		igt_output_set_pipe(output, pipe);
+	for_each_crtc_with_valid_output(display, crtc, output) {
+		igt_output_set_crtc(output,
+				    crtc);
 		if (!intel_pipe_output_combo_valid(display)) {
-			igt_output_set_pipe(output, PIPE_NONE);
+			igt_output_set_crtc(output, NULL);
 			continue;
 		}
 
-		igt_dynamic_f("pipe-%s-%s", kmstest_pipe_name(pipe), output->name) {
+		igt_dynamic_f("pipe-%s-%s", igt_crtc_name(crtc), output->name) {
 			if (flags & TEST_PLANESCALING)
-				test_plane_scaling(data, pipe, output);
+				test_plane_scaling(data, crtc->pipe, output);
 			if (flags & TEST_MODETRANSITION)
-				test_mode_transition(data, pipe, output);
+				test_mode_transition(data, crtc->pipe, output);
 		}
 	}
 }

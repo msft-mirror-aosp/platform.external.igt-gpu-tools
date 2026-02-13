@@ -118,13 +118,16 @@ static bool has_prime_export(int fd)
 static igt_output_t *setup_display(int importer_fd, igt_display_t *display,
 				   enum pipe *pipe)
 {
+	igt_crtc_t *crtc;
 	igt_output_t *output;
 	bool found = false;
 
-	for_each_pipe_with_valid_output(display, *pipe, output) {
+	for_each_crtc_with_valid_output(display, crtc, output) {
+		*pipe = crtc->pipe;
 		igt_display_reset(display);
 
-		igt_output_set_pipe(output, *pipe);
+		igt_output_set_crtc(output,
+				    crtc);
 		if (intel_pipe_output_combo_valid(display)) {
 			found = true;
 			break;
@@ -400,7 +403,7 @@ static void test_crc(int exporter_fd, int importer_fd)
 	output = setup_display(importer_fd, &display, &pipe);
 
 	mode = igt_output_get_mode(output);
-	pipe_crc = igt_pipe_crc_new(importer_fd, pipe,
+	pipe_crc = igt_crtc_crc_new(igt_crtc_for_pipe(&display, pipe),
 				    IGT_PIPE_CRC_SOURCE_AUTO);
 
 	for (i = 0; i < ARRAY_SIZE(colors); i++) {

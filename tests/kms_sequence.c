@@ -105,7 +105,8 @@ static void prepare_crtc(data_t *data, int fd, igt_output_t *output)
 	igt_display_reset(&data->display);
 
 	/* select the pipe we want to use */
-	igt_output_set_pipe(output, data->pipe);
+	igt_output_set_crtc(output,
+			    igt_crtc_for_pipe(display, data->pipe));
 
 	/* create and set the primary plane fb */
 	mode = igt_output_get_mode(output);
@@ -118,12 +119,11 @@ static void prepare_crtc(data_t *data, int fd, igt_output_t *output)
 	primary = igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY);
 	igt_plane_set_fb(primary, &data->primary_fb);
 
-	data->crtc_id = primary->pipe->crtc_id;
+	data->crtc_id = primary->crtc->crtc_id;
 
 	igt_display_commit(display);
 
-	igt_wait_for_vblank(fd,
-			display->pipes[data->pipe].crtc_offset);
+	igt_wait_for_vblank(igt_crtc_for_pipe(display, data->pipe));
 }
 
 static void cleanup_crtc(data_t *data, int fd, igt_output_t *output)
@@ -136,7 +136,7 @@ static void cleanup_crtc(data_t *data, int fd, igt_output_t *output)
 	primary = igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY);
 	igt_plane_set_fb(primary, NULL);
 
-	igt_output_set_pipe(output, PIPE_NONE);
+	igt_output_set_crtc(output, NULL);
 	igt_display_commit2(display, display->is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY);
 }
 
@@ -272,7 +272,7 @@ int igt_main()
 {
 	int fd;
 	igt_output_t *output;
-	enum pipe p;
+	igt_crtc_t *crtc;
 	data_t data;
 	const struct {
 		const char *name;
@@ -309,15 +309,19 @@ int igt_main()
 			igt_describe("This is a test of drmCrtcGetSequence and "
 				     "drmCrtcQueueSequence");
 			igt_subtest_with_dynamic_f("%s-%s", f->name, m->name) {
-				for_each_pipe_with_valid_output(&data.display, p, output) {
+				for_each_crtc_with_valid_output(&data.display,
+								crtc, output) {
 					igt_display_reset(&data.display);
 
-					igt_output_set_pipe(output, p);
+					igt_output_set_crtc(output,
+							    crtc);
 					if (!intel_pipe_output_combo_valid(&data.display))
 						continue;
 
-					igt_dynamic_f("pipe-%s-%s", kmstest_pipe_name(p), igt_output_name(output)) {
-						data.pipe = p;
+					igt_dynamic_f("pipe-%s-%s",
+						      igt_crtc_name(crtc),
+						      igt_output_name(output)) {
+						data.pipe = crtc->pipe;
 						data.output = output;
 						data.flags = m->flags;
 						run_test(&data, fd, f->func);

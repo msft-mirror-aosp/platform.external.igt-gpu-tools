@@ -41,6 +41,7 @@
 #define REBIND_ERROR	(0x1 << 12)
 #define BIND_EXEC_QUEUE	(0x1 << 13)
 #define MANY_QUEUES	(0x1 << 14)
+#define MULTI_QUEUE		(0x1 << 15)
 
 pthread_barrier_t barrier;
 
@@ -311,8 +312,21 @@ test_compute_mode(int fd, uint32_t vm, uint64_t addr, uint64_t userptr,
 	igt_assert(exec_sync != MAP_FAILED);
 	memset(exec_sync, 0, sync_size);
 
-	for (i = 0; i < n_exec_queues; i++)
-		exec_queues[i] = xe_exec_queue_create(fd, vm, eci, 0);
+	for (i = 0; i < n_exec_queues; i++) {
+		if (flags & MULTI_QUEUE) {
+			struct drm_xe_ext_set_property multi_queue = {
+				.base.next_extension = 0,
+				.base.name = DRM_XE_EXEC_QUEUE_EXTENSION_SET_PROPERTY,
+				.property = DRM_XE_EXEC_QUEUE_SET_PROPERTY_MULTI_GROUP,
+			};
+			uint64_t ext = to_user_pointer(&multi_queue);
+
+			multi_queue.value = i ? exec_queues[0] : DRM_XE_MULTI_GROUP_CREATE;
+			exec_queues[i] = xe_exec_queue_create(fd, vm, eci, ext);
+		} else {
+			exec_queues[i] = xe_exec_queue_create(fd, vm, eci, 0);
+		}
+	}
 
 	pthread_barrier_wait(&barrier);
 
@@ -540,8 +554,22 @@ test_legacy_mode(int fd, uint32_t vm, uint64_t addr, uint64_t userptr,
 
 	memset(sync_all, 0, sizeof(sync_all));
 	for (i = 0; i < n_exec_queues; i++) {
-		if (!(flags & MANY_QUEUES))
-			exec_queues[i] = xe_exec_queue_create(fd, vm, eci, 0);
+		if (flags & MULTI_QUEUE) {
+			struct drm_xe_ext_set_property multi_queue = {
+				.base.next_extension = 0,
+				.base.name = DRM_XE_EXEC_QUEUE_EXTENSION_SET_PROPERTY,
+				.property = DRM_XE_EXEC_QUEUE_SET_PROPERTY_MULTI_GROUP,
+			};
+
+			uint64_t ext = to_user_pointer(&multi_queue);
+
+			multi_queue.value = i ? exec_queues[0] : DRM_XE_MULTI_GROUP_CREATE;
+			exec_queues[i] = xe_exec_queue_create(fd, vm, eci, ext);
+		} else {
+			if (!(flags & MANY_QUEUES))
+				exec_queues[i] = xe_exec_queue_create(fd, vm, eci, 0);
+		}
+
 		if (flags & BIND_EXEC_QUEUE)
 			bind_exec_queues[i] = xe_bind_exec_queue_create(fd, vm,
 									0);
@@ -979,6 +1007,122 @@ static void *thread(void *data)
  *	balancer mixed fd userptr invalidate
  * @bal-mixed-fd-userptr-invalidate-race:
  *	balancer mixed fd userptr invalidate race
+ * @multi-queue-basic:
+ *	multi-queue basic
+ * @multi-queue-userptr:
+ *	multi-queue userptr
+ * @multi-queue-rebind:
+ *	multi-queue rebind
+ * @multi-queue-userptr-rebind:
+ *	multi-queue userptr rebind
+ * @multi-queue-userptr-invalidate:
+ *	multi-queue userptr invalidate
+ * @multi-queue-userptr-invalidate-race:
+ *	multi-queue userptr invalidate race
+ * @multi-queue-shared-vm-basic:
+ *	multi-queue shared vm basic
+ * @multi-queue-shared-vm-userptr:
+ *	multi-queue shared vm userptr
+ * @multi-queue-shared-vm-rebind:
+ *	multi-queue shared vm rebind
+ * @multi-queue-shared-vm-userptr-rebind:
+ *	multi-queue shared vm userptr rebind
+ * @multi-queue-rebind-err:
+ *	multi-queue rebind err
+ * @multi-queue-userptr-rebind-err:
+ *	multi-queue userptr rebind err
+ * @multi-queue-shared-vm-userptr-invalidate:
+ *	multi-queue shared vm userptr invalidate
+ * @multi-queue-shared-vm-userptr-invalidate-race:
+ *	multi-queue shared vm userptr invalidate race
+ * @multi-queue-fd-basic:
+ *	multi-queue fd basic
+ * @multi-queue-fd-userptr:
+ *	multi-queue fd userptr
+ * @multi-queue-fd-rebind:
+ *	multi-queue fd rebind
+ * @multi-queue-fd-userptr-rebind:
+ *	multi-queue fd userptr rebind
+ * @multi-queue-fd-userptr-invalidate:
+ *	multi-queue fd userptr invalidate
+ * @multi-queue-fd-userptr-invalidate-race:
+ *	multi-queue fd userptr invalidate race
+ * @multi-queue-hang-basic:
+ *     multi-queue hang basic
+ * @multi-queue-hang-fd-userptr-invalidate-race:
+ *	multi-queue hang fd userptr invalidate race
+ * @multi-queue-mixed-basic:
+ *	multi-queue mixed basic
+ * @multi-queue-mixed-userptr:
+ *	multi-queue-mixed userptr
+ * @multi-queue-mixed-rebind:
+ *	multi-queue-mixed rebind
+ * @multi-queue-mixed-userptr-rebind:
+ *	multi-queue-mixed userptr rebind
+ * @multi-queue-mixed-userptr-invalidate:
+ *	multi-queue-mixed userptr invalidate
+ * @multi-queue-mixed-userptr-invalidate-race:
+ *	multi-queue-mixed userptr invalidate race
+ * @multi-queue-mixed-shared-vm-basic:
+ *	multi-queue mixed shared vm basic
+ * @multi-queue-mixed-shared-vm-userptr:
+ *	multi-queue-mixed shared vm userptr
+ * @multi-queue-mixed-shared-vm-rebind:
+ *	multi-queue-mixed shared vm rebind
+ * @multi-queue-mixed-shared-vm-userptr-rebind:
+ *	multi-queue-mixed shared vm userptr rebind
+ * @multi-queue-mixed-shared-vm-userptr-invalidate:
+ *	multi-queue-mixed shared vm userptr invalidate
+ * @multi-queue-mixed-shared-vm-userptr-invalidate-race:
+ *	multi-queue-mixed shared vm userptr invalidate race
+ * @multi-queue-mixed-fd-basic:
+ *	multi-queue mixed fd basic
+ * @multi-queue-mixed-fd-userptr:
+ *	multi-queue-mixed fd userptr
+ * @multi-queue-mixed-fd-rebind:
+ *	multi-queue-mixed fd rebind
+ * @multi-queue-mixed-fd-userptr-rebind:
+ *	multi-queue-mixed fd userptr rebind
+ * @multi-queue-mixed-fd-userptr-invalidate:
+ *	multi-queue-mixed fd userptr invalidate
+ * @multi-queue-mixed-fd-userptr-invalidate-race:
+ *	multi-queue-mixed fd userptr invalidate race
+ * @multi-queue-cm-basic:
+ * 	multi-queue cm basic
+ * @multi-queue-cm-fd-basic:
+ * 	multi-queue cm fd basic
+ * @multi-queue-cm-userptr:
+ *	multi-queue compute mode userptr
+ * @multi-queue-cm-rebind:
+ *	multi-queue compute mode rebind
+ * @multi-queue-cm-userptr-rebind:
+ *	multi-queue compute mode userptr rebind
+ * @multi-queue-cm-userptr-invalidate:
+ *	multi-queue compute mode userptr invalidate
+ * @multi-queue-cm-userptr-invalidate-race:
+ *	multi-queue compute mode userptr invalidate race
+ * @multi-queue-cm-shared-vm-basic:
+ *	multi-queue compute mode shared vm basic
+ * @multi-queue-cm-shared-vm-userptr:
+ *	multi-queue compute mode shared vm userptr
+ * @multi-queue-cm-shared-vm-rebind:
+ *	multi-queue compute mode shared vm rebind
+ * @multi-queue-cm-shared-vm-userptr-rebind:
+ *	multi-queue compute mode shared vm userptr rebind
+ * @multi-queue-cm-shared-vm-userptr-invalidate:
+ *	multi-queue compute mode shared vm userptr invalidate
+ * @multi-queue-cm-shared-vm-userptr-invalidate-race:
+ *	multi-queue compute mode shared vm userptr invalidate race
+ * @multi-queue-cm-fd-userptr:
+ *	multi-queue compute mode fd userptr
+ * @multi-queue-cm-fd-rebind:
+ *	multi-queue compute mode fd rebind
+ * @multi-queue-cm-fd-userptr-rebind:
+ *	multi-queue compute mode fd userptr rebind
+ * @multi-queue-cm-fd-userptr-invalidate:
+ *	multi-queue compute mode fd userptr invalidate
+ * @multi-queue-cm-fd-userptr-invalidate-race:
+ *	multi-queue compute mode fd userptr invalidate race
  */
 
 static void threads(int fd, int flags)
@@ -996,8 +1140,11 @@ static void threads(int fd, int flags)
 	int n_threads = 0;
 	int gt;
 
-	xe_for_each_engine(fd, hwe)
+	xe_for_each_engine(fd, hwe) {
+		if ((flags & MULTI_QUEUE) && !xe_engine_class_supports_multi_queue(hwe->engine_class))
+			continue;
 		++n_engines;
+	}
 
 	if (flags & BALANCER) {
 		xe_for_each_gt(fd, gt)
@@ -1023,6 +1170,8 @@ static void threads(int fd, int flags)
 	}
 
 	xe_for_each_engine(fd, hwe) {
+		if ((flags & MULTI_QUEUE) && !xe_engine_class_supports_multi_queue(hwe->engine_class))
+			continue;
 		threads_data[i].mutex = &mutex;
 		threads_data[i].cond = &cond;
 #define ADDRESS_SHIFT	39
@@ -1277,6 +1426,89 @@ int igt_main()
 			FD | USERPTR | INVALIDATE },
 		{ "bal-mixed-fd-userptr-invalidate-race", BALANCER |
 			MIXED_MODE | FD | USERPTR | INVALIDATE | RACE },
+		{ "multi-queue-basic", MULTI_QUEUE | 0 },
+		{ "multi-queue-userptr", MULTI_QUEUE | USERPTR },
+		{ "multi-queue-rebind", MULTI_QUEUE | REBIND },
+		{ "multi-queue-userptr-rebind", MULTI_QUEUE | USERPTR | REBIND },
+		{ "multi-queue-userptr-invalidate", MULTI_QUEUE | USERPTR | INVALIDATE },
+		{ "multi-queue-userptr-invalidate-race", MULTI_QUEUE | USERPTR | INVALIDATE |
+			RACE },
+		{ "multi-queue-shared-vm-basic", MULTI_QUEUE | SHARED_VM },
+		{ "multi-queue-shared-vm-userptr", MULTI_QUEUE | SHARED_VM | USERPTR },
+		{ "multi-queue-shared-vm-rebind", MULTI_QUEUE | SHARED_VM | REBIND },
+		{ "multi-queue-shared-vm-userptr-rebind", MULTI_QUEUE | SHARED_VM | USERPTR |
+			REBIND },
+		{ "multi-queue-rebind-err", MULTI_QUEUE | REBIND | REBIND_ERROR },
+		{ "multi-queue-userptr-rebind-err", MULTI_QUEUE | USERPTR | REBIND |
+			REBIND_ERROR },
+		{ "multi-queue-shared-vm-userptr-invalidate", MULTI_QUEUE | SHARED_VM |
+			USERPTR | INVALIDATE },
+		{ "multi-queue-shared-vm-userptr-invalidate-race", MULTI_QUEUE | SHARED_VM |
+			USERPTR | INVALIDATE | RACE },
+		{ "multi-queue-fd-basic", MULTI_QUEUE | FD },
+		{ "multi-queue-fd-userptr", MULTI_QUEUE | FD | USERPTR },
+		{ "multi-queue-fd-rebind", MULTI_QUEUE | FD | REBIND },
+		{ "multi-queue-fd-userptr-rebind", MULTI_QUEUE | FD | USERPTR | REBIND },
+		{ "multi-queue-fd-userptr-invalidate", MULTI_QUEUE | FD | USERPTR |
+			INVALIDATE },
+		{ "multi-queue-fd-userptr-invalidate-race", MULTI_QUEUE | FD | USERPTR |
+			INVALIDATE | RACE },
+		{ "multi-queue-hang-basic", MULTI_QUEUE | HANG },
+		{ "multi-queue-hang-fd-userptr-invalidate-race", MULTI_QUEUE | HANG | FD | USERPTR |
+			INVALIDATE | RACE },
+		{ "multi-queue-mixed-basic", MULTI_QUEUE | MIXED_MODE },
+		{ "multi-queue-mixed-userptr", MULTI_QUEUE | MIXED_MODE | USERPTR },
+		{ "multi-queue-mixed-rebind", MULTI_QUEUE | MIXED_MODE | REBIND },
+		{ "multi-queue-mixed-userptr-rebind", MULTI_QUEUE | MIXED_MODE | USERPTR | REBIND },
+		{ "multi-queue-mixed-userptr-invalidate", MULTI_QUEUE | MIXED_MODE | USERPTR |
+			INVALIDATE },
+		{ "multi-queue-mixed-userptr-invalidate-race", MULTI_QUEUE | MIXED_MODE | USERPTR |
+			INVALIDATE | RACE },
+		{ "multi-queue-mixed-shared-vm-basic", MULTI_QUEUE | MIXED_MODE | SHARED_VM },
+		{ "multi-queue-mixed-shared-vm-userptr", MULTI_QUEUE | MIXED_MODE | SHARED_VM |
+			USERPTR },
+		{ "multi-queue-mixed-shared-vm-rebind", MULTI_QUEUE | MIXED_MODE | SHARED_VM | REBIND },
+		{ "multi-queue-mixed-shared-vm-userptr-rebind", MULTI_QUEUE | MIXED_MODE | SHARED_VM |
+			USERPTR | REBIND },
+		{ "multi-queue-mixed-shared-vm-userptr-invalidate", MULTI_QUEUE | MIXED_MODE |
+			SHARED_VM | USERPTR | INVALIDATE },
+		{ "multi-queue-mixed-shared-vm-userptr-invalidate-race", MULTI_QUEUE | MIXED_MODE |
+			SHARED_VM | USERPTR | INVALIDATE | RACE },
+		{ "multi-queue-mixed-fd-basic", MULTI_QUEUE | MIXED_MODE | FD },
+		{ "multi-queue-mixed-fd-userptr", MULTI_QUEUE | MIXED_MODE | FD | USERPTR },
+		{ "multi-queue-mixed-fd-rebind", MULTI_QUEUE | MIXED_MODE | FD | REBIND },
+		{ "multi-queue-mixed-fd-userptr-rebind", MULTI_QUEUE | MIXED_MODE | FD | USERPTR |
+			REBIND },
+		{ "multi-queue-mixed-fd-userptr-invalidate", MULTI_QUEUE | MIXED_MODE | FD |
+			USERPTR | INVALIDATE },
+		{ "multi-queue-mixed-fd-userptr-invalidate-race", MULTI_QUEUE | MIXED_MODE | FD |
+			USERPTR | INVALIDATE | RACE },
+		{ "multi-queue-cm-basic", MULTI_QUEUE | COMPUTE_MODE },
+		{ "multi-queue-cm-userptr", MULTI_QUEUE | COMPUTE_MODE | USERPTR },
+		{ "multi-queue-cm-rebind", MULTI_QUEUE | COMPUTE_MODE | REBIND },
+		{ "multi-queue-cm-userptr-rebind", MULTI_QUEUE | COMPUTE_MODE | USERPTR | REBIND },
+		{ "multi-queue-cm-userptr-invalidate", MULTI_QUEUE | COMPUTE_MODE | USERPTR |
+			INVALIDATE },
+		{ "multi-queue-cm-userptr-invalidate-race", MULTI_QUEUE | COMPUTE_MODE | USERPTR |
+			INVALIDATE | RACE },
+		{ "multi-queue-cm-shared-vm-basic", MULTI_QUEUE | COMPUTE_MODE | SHARED_VM },
+		{ "multi-queue-cm-shared-vm-userptr", MULTI_QUEUE | COMPUTE_MODE | SHARED_VM | USERPTR },
+		{ "multi-queue-cm-shared-vm-rebind", MULTI_QUEUE | COMPUTE_MODE | SHARED_VM | REBIND },
+		{ "multi-queue-cm-shared-vm-userptr-rebind", MULTI_QUEUE | COMPUTE_MODE | SHARED_VM |
+			USERPTR | REBIND },
+		{ "multi-queue-cm-shared-vm-userptr-invalidate", MULTI_QUEUE | COMPUTE_MODE | SHARED_VM |
+			USERPTR | INVALIDATE },
+		{ "multi-queue-cm-shared-vm-userptr-invalidate-race", MULTI_QUEUE | COMPUTE_MODE |
+			SHARED_VM | USERPTR | INVALIDATE | RACE },
+		{ "multi-queue-cm-fd-basic", MULTI_QUEUE | COMPUTE_MODE | FD },
+		{ "multi-queue-cm-fd-userptr", MULTI_QUEUE | COMPUTE_MODE | FD | USERPTR },
+		{ "multi-queue-cm-fd-rebind", MULTI_QUEUE | COMPUTE_MODE | FD | REBIND },
+		{ "multi-queue-cm-fd-userptr-rebind", MULTI_QUEUE | COMPUTE_MODE | FD | USERPTR |
+			REBIND },
+		{ "multi-queue-cm-fd-userptr-invalidate", MULTI_QUEUE | COMPUTE_MODE | FD |
+			USERPTR | INVALIDATE },
+		{ "multi-queue-cm-fd-userptr-invalidate-race", MULTI_QUEUE | COMPUTE_MODE | FD |
+			USERPTR | INVALIDATE | RACE },
 		{ NULL },
 	};
 	int fd;
@@ -1285,8 +1517,16 @@ int igt_main()
 		fd = drm_open_driver(DRIVER_XE);
 
 	for (const struct section *s = sections; s->name; s++) {
-		igt_subtest_f("threads-%s", s->name)
+		igt_subtest_f("threads-%s", s->name) {
+			if (s->flags & MULTI_QUEUE) {
+				igt_skip_on_f(!(intel_graphics_ver(intel_get_drm_devid(fd)) >= IP_VER(35, 0)),
+						"multi_queue is supported on graphics version 35 and above");
+				/* Balancer can't be set with multi-queue at the same time */
+				igt_assert(!(s->flags & BALANCER));
+			}
+
 			threads(fd, s->flags);
+		}
 	}
 
 	igt_fixture()

@@ -31,6 +31,7 @@
 #define USER_FENCE_VALUE	0xdeadbeefdeadbeefull
 #define QUARTER_SEC		(NSEC_PER_SEC / 4)
 #define FIVE_SEC		(5LL * NSEC_PER_SEC)
+#define NUM_HUGE_PAGES		128
 
 struct test_exec_data {
 	uint32_t batch[32];
@@ -54,6 +55,28 @@ struct batch_data {
 	(data__)->expected_data;				\
 })
 #define READ_VALUE(data__)	((data__)->expected_data)
+
+bool is_hugepg_enable = false;
+
+static void set_nr_hugepages(int n)
+{
+	char cmd[64];
+
+	snprintf(cmd, sizeof(cmd), "echo %d > /proc/sys/vm/nr_hugepages", n);
+	igt_assert(system(cmd) == 0);
+}
+
+static void reset_nr_hugepages(void)
+{
+	set_nr_hugepages(0);
+	is_hugepg_enable = false;
+}
+
+static void enable_hugepage(void)
+{
+	set_nr_hugepages(NUM_HUGE_PAGES);
+	is_hugepg_enable = true;
+}
 
 static void __write_dword(uint32_t *batch, uint64_t sdi_addr, uint32_t wdata,
 			int *idx)
@@ -1164,7 +1187,7 @@ madvise_swizzle_op_exec(int fd, uint32_t vm, struct test_exec_data *data,
 	xe_vm_madvise(fd, vm, to_user_pointer(data), bo_size, 0,
 		      DRM_XE_MEM_RANGE_ATTR_PREFERRED_LOC,
 		      preferred_loc,
-		      0);
+		      0, 0);
 }
 
 static void
@@ -1172,7 +1195,7 @@ xe_vm_madvixe_pat_attr(int fd, uint32_t vm, uint64_t addr, uint64_t range,
 		       int pat_index)
 {
 	xe_vm_madvise(fd, vm, addr, range, 0,
-		      DRM_XE_MEM_RANGE_ATTR_PAT, pat_index, 0);
+		      DRM_XE_MEM_RANGE_ATTR_PAT, pat_index, 0, 0);
 }
 
 static void
@@ -1181,7 +1204,7 @@ xe_vm_madvise_atomic_attr(int fd, uint32_t vm, uint64_t addr, uint64_t range,
 {
 	xe_vm_madvise(fd, vm, addr, range, 0,
 		      DRM_XE_MEM_RANGE_ATTR_ATOMIC,
-		      mem_attr, 0);
+		      mem_attr, 0, 0);
 }
 
 static void
@@ -1190,7 +1213,7 @@ xe_vm_madvise_migrate_pages(int fd, uint32_t vm, uint64_t addr, uint64_t range)
 	xe_vm_madvise(fd, vm, addr, range, 0,
 		      DRM_XE_MEM_RANGE_ATTR_PREFERRED_LOC,
 		      DRM_XE_PREFERRED_LOC_DEFAULT_SYSTEM,
-		      DRM_XE_MIGRATE_ALL_PAGES);
+		      DRM_XE_MIGRATE_ALL_PAGES, 0);
 }
 
 static void
@@ -1417,7 +1440,7 @@ test_exec(int fd, struct drm_xe_engine_class_instance *eci,
 	};
 	uint32_t exec_queues[MAX_N_EXEC_QUEUES];
 	struct test_exec_data *data, *next_data = NULL, *original_data = NULL;
-	uint32_t bo_flags;
+	uint32_t bo_flags = 0;
 	uint32_t bo = 0, bind_sync = 0;
 	void **pending_free;
 	u64 *exec_ufence = NULL, *bind_ufence = NULL;
@@ -1444,8 +1467,10 @@ test_exec(int fd, struct drm_xe_engine_class_instance *eci,
 	if (flags & EVERY_OTHER_CHECK && odd(n_execs))
 		return;
 
-	if (flags & HUGE_PAGE)
+	if (flags & HUGE_PAGE) {
+		enable_hugepage();
 		igt_require_hugepages();
+	}
 
 	if (flags & EVERY_OTHER_CHECK)
 		igt_assert(flags & MREMAP);
@@ -1922,11 +1947,12 @@ test_exec(int fd, struct drm_xe_engine_class_instance *eci,
 		/*
 		 * Due how system allocations work, we can't make this check
 		 * 100% reliable, rather than fail the test, just print a
-		 * warning message.
+		 * message.
 		 */
-		if (pf_count != pf_count_after)
-			igt_warn("pf_count(%d) != pf_count_after(%d)\n",
+		if (pf_count != pf_count_after) {
+			igt_info("Pagefault count: before=%d, after=%d\n",
 				 pf_count, pf_count_after);
+		}
 	}
 
 cleanup:
@@ -1983,6 +2009,9 @@ cleanup:
 	}
 	if (free_vm)
 		xe_vm_destroy(fd, vm);
+
+	if (is_hugepg_enable)
+		reset_nr_hugepages();
 }
 
 struct thread_data {
@@ -2035,8 +2064,10 @@ threads(int fd, int n_exec_queues, int n_execs, size_t bo_size,
 	if ((FILE_BACKED | FORK_READ) & flags)
 		return;
 
-	if (flags & HUGE_PAGE)
+	if (flags & HUGE_PAGE) {
+		enable_hugepage();
 		igt_require_hugepages();
+	}
 
 	xe_for_each_engine(fd, hwe)
 		++n_engines;
@@ -2114,6 +2145,9 @@ threads(int fd, int n_exec_queues, int n_execs, size_t bo_size,
 			free(alloc);
 	}
 	free(threads_data);
+
+	if (is_hugepg_enable)
+		reset_nr_hugepages();
 }
 
 static void process(struct drm_xe_engine_class_instance *hwe, int n_exec_queues,
@@ -2149,8 +2183,10 @@ processes(int fd, int n_exec_queues, int n_execs, size_t bo_size,
 	if (flags & FORK_READ)
 		return;
 
-	if (flags & HUGE_PAGE)
+	if (flags & HUGE_PAGE) {
+		enable_hugepage();
 		igt_require_hugepages();
+	}
 
 	map_fd = open(sync_file, O_RDWR | O_CREAT, 0x666);
 	posix_fallocate(map_fd, 0, sizeof(*pdata));
@@ -2170,15 +2206,41 @@ processes(int fd, int n_exec_queues, int n_execs, size_t bo_size,
 
 	close(map_fd);
 	munmap(pdata, sizeof(*pdata));
+
+	if (is_hugepg_enable)
+		reset_nr_hugepages();
 }
+
+/* compute flags */
+#define TOUCH_ONCE		(0x1 << 0)
+#define ACCESS_DEVICE_HOST	(0x1 << 1)
 
 /**
  * SUBTEST: compute
  * Description: Run a simple compute kernel with the system allocator
  * Test category: functionality test
+ *
+ * SUBTEST: eu-fault-4k-%s
+ * Description: Run a simple compute kernel %arg[1] on a 4KB malloc'ed buffer
+ * Test category: performance test
+ *
+ * SUBTEST: eu-fault-64k-%s
+ * Description: Run a simple compute kernel %arg[1] on a 64KB malloc'ed buffer
+ * Test category: performance test
+ *
+ * SUBTEST: eu-fault-2m-%s
+ * Description: Run a simple compute kernel %arg[1] on a 2MB malloc'ed buffer
+ * Test category: performance test
+ *
+ * arg[1]:
+ *
+ * @once-device:				touch the buffer only once, from the device
+ * @once-device-host:				touch the buffer only once, from the device then from the host
+ * @range-device:				touch the whole buffer, from the device
+ * @range-device-host:				touch the whole buffer, from the device then from the host
  */
 static void
-test_compute(int fd, struct drm_xe_engine_class_instance *eci, size_t size)
+test_compute(int fd, size_t size, unsigned int flags)
 {
 	struct drm_xe_sync sync = {
 		.type = DRM_XE_SYNC_TYPE_USER_FENCE,
@@ -2190,9 +2252,12 @@ test_compute(int fd, struct drm_xe_engine_class_instance *eci, size_t size)
 	} *bo_sync;
 	uint32_t vm;
 	struct user_execenv env = {
+		/*
+		 * size is the number of bytes of the array, array_size is its number of elements.
+		 */
 		.array_size = size / sizeof(float),
 	};
-	float *compute_input, *compute_output;
+	float *compute_input;
 	int i;
 
 	vm = xe_vm_create(fd, DRM_XE_VM_CREATE_FLAG_LR_MODE | DRM_XE_VM_CREATE_FLAG_FAULT_MODE, 0);
@@ -2203,21 +2268,17 @@ test_compute(int fd, struct drm_xe_engine_class_instance *eci, size_t size)
 
 	compute_input = aligned_alloc(SZ_2M, size);
 	igt_assert(compute_input);
-	compute_output = aligned_alloc(SZ_2M, size);
-	igt_assert(compute_output);
 
-	for (i = 0; i < env.array_size; i++)
+	env.loop_count = (flags & TOUCH_ONCE) ? 1 : env.array_size;
+	env.skip_results_check = !(flags & ACCESS_DEVICE_HOST);
+	env.input_addr = to_user_pointer(compute_input);
+	env.vm = vm;
+
+	for (i = 0; i < env.loop_count; i++)
 		compute_input[i] = rand() / (float)RAND_MAX;
 
-	env.input_addr = to_user_pointer(compute_input);
-	env.output_addr = to_user_pointer(compute_output);
-	env.vm = vm;
 	run_intel_compute_kernel(fd, &env, EXECENV_PREF_SYSTEM);
 
-	for (i = 0; i < env.array_size; i++)
-		igt_assert_eq_double(compute_input[i] * compute_input[i], compute_output[i]);
-
-	free(compute_output);
 	free(compute_input);
 	unbind_system_allocator();
 	xe_vm_destroy(fd, vm);
@@ -2365,6 +2426,13 @@ int igt_main()
 		  MADVISE_OP | PREFETCH | PREFETCH_CHANGE_ATTR | ATOMIC_BATCH },
 		{ "no-range-invalidate-same-attr",
 		  MADVISE_OP | PREFETCH | PREFETCH_SAME_ATTR | ATOMIC_BATCH },
+		{ NULL },
+	};
+	const struct section csections[] = {
+		{ "once-device", TOUCH_ONCE },
+		{ "once-device-host", TOUCH_ONCE | ACCESS_DEVICE_HOST },
+		{ "range-device", 0 },
+		{ "range-device-host", ACCESS_DEVICE_HOST },
 		{ NULL },
 	};
 
@@ -2609,8 +2677,16 @@ int igt_main()
 	}
 
 	igt_subtest("compute")
-		xe_for_each_engine(fd, hwe)
-			test_compute(fd, hwe, SZ_2M);
+		test_compute(fd, SZ_2M, 0);
+
+	for (const struct section *s = csections; s->name; s++) {
+		igt_subtest_f("eu-fault-4k-%s", s->name)
+			test_compute(fd, SZ_4K, s->flags);
+		igt_subtest_f("eu-fault-64k-%s", s->name)
+			test_compute(fd, SZ_64K, s->flags);
+		igt_subtest_f("eu-fault-2m-%s", s->name)
+			test_compute(fd, SZ_2M, s->flags);
+	}
 
 	igt_fixture() {
 		xe_device_put(fd);

@@ -213,12 +213,14 @@ static void prepare_crtc(data_t *data, igt_output_t *output, enum pipe pipe)
 {
 	drmModeModeInfo *mode;
 	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
 	int w, h;
-	igt_plane_t *primary = igt_pipe_get_plane_type(&display->pipes[pipe], DRM_PLANE_TYPE_PRIMARY);
+	igt_plane_t *primary = igt_crtc_get_plane_type(crtc,
+						       DRM_PLANE_TYPE_PRIMARY);
 
 	/* create the pipe_crc object for this pipe */
 	igt_pipe_crc_free(data->pipe_crc);
-	data->pipe_crc = igt_pipe_crc_new(data->gfx_fd, pipe,
+	data->pipe_crc = igt_crtc_crc_new(crtc,
 					  IGT_PIPE_CRC_SOURCE_AUTO);
 
 	mode = igt_output_get_mode(output);
@@ -384,10 +386,12 @@ static void constant_alpha_min(data_t *data, enum pipe pipe, igt_plane_t *plane)
 static void constant_alpha_mid(data_t *data, enum pipe pipe, igt_plane_t *plane)
 {
 	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
 	igt_crc_t ref_crc, crc;
 
 	if (plane->type != DRM_PLANE_TYPE_PRIMARY)
-		igt_plane_set_fb(igt_pipe_get_plane_type(&display->pipes[pipe], DRM_PLANE_TYPE_PRIMARY), &data->gray_fb);
+		igt_plane_set_fb(igt_crtc_get_plane_type(crtc, DRM_PLANE_TYPE_PRIMARY),
+				 &data->gray_fb);
 
 	igt_plane_set_prop_enum(plane, IGT_PLANE_PIXEL_BLEND_MODE, "None");
 	igt_plane_set_prop_value(plane, IGT_PLANE_ALPHA, 0x7fff);
@@ -409,10 +413,12 @@ static void constant_alpha_mid(data_t *data, enum pipe pipe, igt_plane_t *plane)
 static void constant_alpha_max(data_t *data, enum pipe pipe, igt_plane_t *plane)
 {
 	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
 	igt_crc_t ref_crc, crc;
 
 	if (plane->type != DRM_PLANE_TYPE_PRIMARY)
-		igt_plane_set_fb(igt_pipe_get_plane_type(&display->pipes[pipe], DRM_PLANE_TYPE_PRIMARY), &data->gray_fb);
+		igt_plane_set_fb(igt_crtc_get_plane_type(crtc, DRM_PLANE_TYPE_PRIMARY),
+				 &data->gray_fb);
 
 	igt_plane_set_fb(plane, &data->argb_fb_100);
 	igt_display_commit2(display, COMMIT_ATOMIC);
@@ -439,10 +445,12 @@ static void constant_alpha_max(data_t *data, enum pipe pipe, igt_plane_t *plane)
 static void alpha_7efc(data_t *data, enum pipe pipe, igt_plane_t *plane)
 {
 	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
 	igt_crc_t ref_crc = {}, crc = {};
 
 	if (plane->type != DRM_PLANE_TYPE_PRIMARY)
-		igt_plane_set_fb(igt_pipe_get_plane_type(&display->pipes[pipe], DRM_PLANE_TYPE_PRIMARY), &data->gray_fb);
+		igt_plane_set_fb(igt_crtc_get_plane_type(crtc, DRM_PLANE_TYPE_PRIMARY),
+				 &data->gray_fb);
 
 	igt_display_commit2(display, COMMIT_ATOMIC);
 	igt_pipe_crc_start(data->pipe_crc);
@@ -492,11 +500,13 @@ static void coverage_7efc(data_t *data, enum pipe pipe, igt_plane_t *plane)
 static void coverage_premult_constant(data_t *data, enum pipe pipe, igt_plane_t *plane)
 {
 	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
 	igt_crc_t ref_crc = {}, crc = {};
 
 	/* Set a background color on the primary fb for testing */
 	if (plane->type != DRM_PLANE_TYPE_PRIMARY)
-		igt_plane_set_fb(igt_pipe_get_plane_type(&display->pipes[pipe], DRM_PLANE_TYPE_PRIMARY), &data->gray_fb);
+		igt_plane_set_fb(igt_crtc_get_plane_type(crtc, DRM_PLANE_TYPE_PRIMARY),
+				 &data->gray_fb);
 
 	igt_require(igt_plane_try_prop_enum(plane, IGT_PLANE_PIXEL_BLEND_MODE, "Coverage"));
 	igt_plane_set_fb(plane, &data->argb_fb_cov_7e);
@@ -525,11 +535,12 @@ static void run_test_on_pipe_planes(data_t *data, enum pipe pipe, igt_output_t *
 				    void(*test)(data_t *, enum pipe, igt_plane_t *))
 {
 	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
 	igt_plane_t *plane;
 	int first_plane = -1;
 	int last_plane = -1;
 
-	for_each_plane_on_pipe(display, pipe, plane) {
+	for_each_plane_on_pipe(display, crtc->pipe, plane) {
 		if (!igt_plane_has_prop(plane, IGT_PLANE_ALPHA))
 			continue;
 
@@ -537,7 +548,7 @@ static void run_test_on_pipe_planes(data_t *data, enum pipe pipe, igt_output_t *
 			continue;
 
 		/* reset plane alpha properties between each plane */
-		reset_alpha(display, pipe);
+		reset_alpha(display, crtc->pipe);
 
 		if (must_multiply && !has_multiplied_alpha(data, plane))
 			continue;
@@ -549,7 +560,7 @@ static void run_test_on_pipe_planes(data_t *data, enum pipe pipe, igt_output_t *
 		last_plane = j__;
 	}
 
-	for_each_plane_on_pipe(display, pipe, plane) {
+	for_each_plane_on_pipe(display, crtc->pipe, plane) {
 		if (!igt_plane_has_prop(plane, IGT_PLANE_ALPHA))
 			continue;
 
@@ -557,7 +568,7 @@ static void run_test_on_pipe_planes(data_t *data, enum pipe pipe, igt_output_t *
 			continue;
 
 		/* Reset plane alpha properties between each plane. */
-		reset_alpha(display, pipe);
+		reset_alpha(display, crtc->pipe);
 
 		if (must_multiply && !has_multiplied_alpha(data, plane))
 			continue;
@@ -566,14 +577,14 @@ static void run_test_on_pipe_planes(data_t *data, enum pipe pipe, igt_output_t *
 			continue;
 
 		igt_info("Testing plane %u\n", plane->index);
-		test(data, pipe, plane);
+		test(data, crtc->pipe, plane);
 		igt_plane_set_fb(plane, NULL);
 
 		if (in_simulation)
 			break;
 	}
 
-	igt_output_set_pipe(output, PIPE_NONE);
+	igt_output_set_crtc(output, NULL);
 	igt_display_commit2(display, COMMIT_ATOMIC);
 }
 
@@ -646,11 +657,12 @@ static bool pipe_check(data_t *data, enum pipe pipe,
 		       bool blend, bool must_multiply)
 {
 	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
 	igt_plane_t *plane;
 	bool plane_alpha = false, plane_blend = false, multiply = false;
 
-	igt_display_require_output_on_pipe(display, pipe);
-	for_each_plane_on_pipe(display, pipe, plane) {
+	igt_display_require_output_on_pipe(display, crtc->pipe);
+	for_each_plane_on_pipe(display, crtc->pipe, plane) {
 		if (!igt_plane_has_prop(plane, IGT_PLANE_ALPHA))
 			continue;
 		plane_alpha = true;
@@ -660,7 +672,7 @@ static bool pipe_check(data_t *data, enum pipe pipe,
 		plane_blend = true;
 
 		/* reset plane alpha properties between each plane */
-		reset_alpha(display, pipe);
+		reset_alpha(display, crtc->pipe);
 
 		if (must_multiply && !has_multiplied_alpha(data, plane))
 			continue;
@@ -686,30 +698,37 @@ static bool pipe_check(data_t *data, enum pipe pipe,
 static void run_subtests(data_t *data)
 {
 	igt_output_t *output;
-	enum pipe pipe;
+	igt_crtc_t *crtc;
 
 	for (int i = 0; i < ARRAY_SIZE(subtests); i++) {
 		igt_describe_f("%s\n", subtests[i].desc);
 
 		igt_subtest_with_dynamic(subtests[i].name) {
-			for_each_pipe_with_single_output(&data->display, pipe, output) {
+			for_each_crtc_with_single_output(&data->display, crtc,
+							 output) {
 				if (!extended &&
-				    pipe != active_pipes[0] &&
-				    pipe != active_pipes[last_pipe])
+				    crtc->pipe != active_pipes[0] &&
+				    crtc->pipe != active_pipes[last_pipe])
 					continue;
 
 				igt_display_reset(&data->display);
 
-				igt_output_set_pipe(output, pipe);
+				igt_output_set_crtc(output,
+						    crtc);
 				if (!intel_pipe_output_combo_valid(&data->display))
 					continue;
 
-				prepare_crtc(data, output, pipe);
-				if (!pipe_check(data, pipe, subtests[i].blend, subtests[i].must_multiply))
+				prepare_crtc(data, output, crtc->pipe);
+				if (!pipe_check(data, crtc->pipe, subtests[i].blend, subtests[i].must_multiply))
 					continue;
 
-				igt_dynamic_f("pipe-%s-%s", kmstest_pipe_name(pipe), output->name)
-					run_test_on_pipe_planes(data, pipe, output, subtests[i].blend,
+				igt_dynamic_f("pipe-%s-%s",
+					      igt_crtc_name(crtc),
+					      output->name)
+					run_test_on_pipe_planes(data,
+								crtc->pipe,
+								output,
+								subtests[i].blend,
 								subtests[i].must_multiply, subtests[i].test);
 			}
 		}
@@ -737,7 +756,7 @@ int igt_main_args("e", NULL, help_str, opt_handler, NULL)
 	data_t data = {};
 
 	igt_fixture() {
-		enum pipe pipe;
+		igt_crtc_t *crtc;
 
 		last_pipe = 0;
 
@@ -747,8 +766,8 @@ int igt_main_args("e", NULL, help_str, opt_handler, NULL)
 		igt_require(data.display.is_atomic);
 
 		/* Get active pipes. */
-		for_each_pipe(&data.display, pipe)
-			active_pipes[last_pipe++] = pipe;
+		for_each_crtc(&data.display, crtc)
+			active_pipes[last_pipe++] = crtc->pipe;
 		last_pipe--;
 
 		in_simulation = igt_run_in_simulation();

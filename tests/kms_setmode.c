@@ -343,19 +343,17 @@ static void setup_crtcs(const struct test_config *tconf,
 	config_valid = true;
 
 	while (i < connector_count) {
-		drmModeCrtc *drm_crtc;
 		unsigned long encoder_mask;
 		int j;
 
 		igt_assert_lt(crtc_count, MAX_CRTCS);
 
 		crtc->crtc_idx = cconf[i].crtc_idx;
-		drm_crtc = drmModeGetCrtc(drm_fd,
-					  resources->crtcs[crtc->crtc_idx]);
-		crtc->crtc_id = drm_crtc->crtc_id;
-		drmModeFreeCrtc(drm_crtc);
-		crtc->pipe_id = kmstest_get_pipe_from_crtc_id(drm_fd,
-							      crtc->crtc_id);
+		crtc->crtc_id = resources->crtcs[crtc->crtc_idx];
+
+		/* FIXME: avoid __intel_get_pipe_from_crtc_index() */
+		crtc->pipe_id = is_intel_device(drm_fd) ?
+			__intel_get_pipe_from_crtc_index(drm_fd, crtc->crtc_idx) : crtc->crtc_idx;
 
 		crtc->connector_count = 1;
 		for (j = i + 1; j < connector_count; j++)
@@ -668,7 +666,7 @@ retry:
 					     crtc->connector_count, &crtc->mode);
 
 		if (is_intel_device(drm_fd))
-			intel_drrs_disable(drm_fd, crtc->pipe_id);
+			intel_drrs_disable(drm_fd, crtc->crtc_idx);
 
 		free(ids);
 
