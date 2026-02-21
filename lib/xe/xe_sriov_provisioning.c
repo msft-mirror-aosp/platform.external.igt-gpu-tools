@@ -5,9 +5,12 @@
 
 #include <errno.h>
 
+#include "drmtest.h"
 #include "igt_core.h"
 #include "igt_debugfs.h"
 #include "igt_sriov_device.h"
+#include "igt_sysfs.h"
+#include "igt_sysfs_choice.h"
 #include "intel_chipset.h"
 #include "linux_scaffold.h"
 #include "xe/xe_query.h"
@@ -597,6 +600,108 @@ int __xe_sriov_set_sched_if_idle(int pf, unsigned int gt_num, bool value)
 void xe_sriov_set_sched_if_idle(int pf, unsigned int gt_num, bool value)
 {
 	igt_fail_on(__xe_sriov_set_sched_if_idle(pf, gt_num, value));
+}
+
+static const char * const xe_sriov_sched_priority_str[] = {
+	[XE_SRIOV_SCHED_PRIORITY_LOW]    = "low",
+	[XE_SRIOV_SCHED_PRIORITY_NORMAL] = "normal",
+	[XE_SRIOV_SCHED_PRIORITY_HIGH]   = "high",
+};
+
+_Static_assert(ARRAY_SIZE(xe_sriov_sched_priority_str) == (XE_SRIOV_SCHED_PRIORITY_HIGH + 1),
+	       "sched priority table must cover 0..HIGH");
+
+/**
+ * xe_sriov_sched_priority_to_string - Convert scheduling priority enum to string
+ * @prio: SR-IOV scheduling priority value
+ *
+ * Converts an enumeration value of type &enum xe_sriov_sched_priority
+ * into its corresponding string representation.
+ *
+ * Return: A pointer to a constant string literal ("low", "normal", or "high"),
+ * or %NULL if the value is invalid or unrecognized.
+ */
+const char *xe_sriov_sched_priority_to_string(enum xe_sriov_sched_priority prio)
+{
+	switch (prio) {
+	case XE_SRIOV_SCHED_PRIORITY_LOW:
+	case XE_SRIOV_SCHED_PRIORITY_NORMAL:
+	case XE_SRIOV_SCHED_PRIORITY_HIGH:
+		return xe_sriov_sched_priority_str[prio];
+	}
+
+	return NULL;
+}
+
+/**
+ * xe_sriov_sched_priority_from_string - Parse scheduling priority from string
+ * @s: NUL-terminated string to parse
+ * @prio: Output pointer to store parsed enum value
+ *
+ * Parses a string representing a scheduling priority ("low", "normal", "high")
+ * into the corresponding &enum xe_sriov_sched_priority value.
+ *
+ * Return: 0 on success, -EINVAL if the string is invalid or unrecognized.
+ */
+int xe_sriov_sched_priority_from_string(const char *s,
+					enum xe_sriov_sched_priority *prio)
+{
+	igt_assert(s && prio);
+
+	for (size_t i = 0; i < ARRAY_SIZE(xe_sriov_sched_priority_str); i++) {
+		const char *name = xe_sriov_sched_priority_str[i];
+
+		if (name && !strcmp(s, name)) {
+			*prio = (enum xe_sriov_sched_priority)i;
+			return 0;
+		}
+	}
+	return -EINVAL;
+}
+
+/**
+ * xe_sriov_sched_priority_choice_to_mask - Map parsed sysfs choice to mask + selection
+ * @choice: Parsed choice (tokens + selected index)
+ * @mask: Output bitmask of known priorities present in @choice
+ * @selected_idx: Output selected priority index in the known-name table, or -1
+ *
+ * Converts an &struct igt_sysfs_choice representing the sched_priority sysfs
+ * attribute into a bitmask and an optional selected index.
+ *
+ * The bit positions in @mask correspond to &enum xe_sriov_sched_priority values
+ * (LOW/NORMAL/HIGH). Unknown tokens in @choice are ignored (best-effort), so
+ * tests can tolerate kernels that add extra choices.
+ *
+ * Return: 0 on success, -EINVAL on invalid arguments.
+ */
+int xe_sriov_sched_priority_choice_to_mask(const struct igt_sysfs_choice *choice,
+					   unsigned int *mask, int *selected_idx)
+{
+	return igt_sysfs_choice_to_mask(choice, xe_sriov_sched_priority_str,
+					ARRAY_SIZE(xe_sriov_sched_priority_str),
+					mask, selected_idx);
+}
+
+/**
+ * xe_sriov_sched_priority_mask_to_string - Format priority mask as text
+ * @buf: Output buffer.
+ * @buf_sz: Size of @buf.
+ * @mask: Priority bitmask.
+ * @selected_idx: Index to highlight with brackets, or <0 for none.
+ *
+ * Converts @mask to a space-separated string of priority names. If @selected_idx
+ * is >= 0 and present in @mask, that priority is wrapped in brackets, e.g.
+ * "low [normal] high". An empty @mask results in an empty string.
+ *
+ * Return: 0 on success, -EINVAL on invalid args, -E2BIG if @buf_sz is too small.
+ */
+int xe_sriov_sched_priority_mask_to_string(char *buf, size_t buf_sz,
+					   unsigned int mask, int selected_idx)
+{
+	return igt_sysfs_choice_format_mask(buf, buf_sz,
+					 xe_sriov_sched_priority_str,
+					 ARRAY_SIZE(xe_sriov_sched_priority_str),
+					 mask, selected_idx);
 }
 
 /**

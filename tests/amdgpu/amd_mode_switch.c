@@ -36,15 +36,15 @@ typedef struct data {
 static void test_init(data_t *data)
 {
 	igt_display_t *display = &data->display;
-	int i;
+	igt_crtc_t *crtc;
 
-	for_each_pipe(display, i) {
-		igt_output_t *output = &display->outputs[i];
+	for_each_crtc(display, crtc) {
+		igt_output_t *output = &display->outputs[crtc->pipe];
 
-		data->primary[i] = igt_pipe_get_plane_type(
-			&data->display.pipes[i], DRM_PLANE_TYPE_PRIMARY);
+		data->primary[crtc->pipe] = igt_crtc_get_plane_type(crtc,
+								    DRM_PLANE_TYPE_PRIMARY);
 
-		data->output[i] = output;
+		data->output[crtc->pipe] = output;
 	}
 
 	igt_require(data->output[0]);
@@ -77,6 +77,7 @@ static void force_output_mode(data_t *d, igt_output_t *output,
 
 static void run_mode_switch_first_last(data_t *data, int num_pipes)
 {
+	igt_display_t *display = &data->display;
 	igt_output_t *output;
 	struct igt_fb *buffer1[MAX_PIPES] = { NULL };
 	struct igt_fb *buffer2[MAX_PIPES] = { NULL };
@@ -88,7 +89,7 @@ static void run_mode_switch_first_last(data_t *data, int num_pipes)
 
 	test_init(data);
 
-	igt_skip_on_f(num_pipes > igt_display_get_n_pipes(&data->display) ||
+	igt_skip_on_f(num_pipes > igt_display_n_crtcs(&data->display) ||
 			      num_pipes > data->display.n_outputs,
 		      "ASIC does not have %d outputs/pipes\n", num_pipes);
 
@@ -112,7 +113,8 @@ static void run_mode_switch_first_last(data_t *data, int num_pipes)
 					    DRM_FORMAT_MOD_NONE, 1.f, 0.f,
 					    0.f, buffer1[j]);
 		}
-		igt_output_set_pipe(output, j);
+		igt_output_set_crtc(output,
+				    igt_crtc_for_pipe(display, j));
 		force_output_mode(data, output, kmode);
 		igt_plane_set_fb(data->primary[j], buffer1[j]);
 		drmModeFreeConnector(conn);

@@ -170,6 +170,12 @@ amdgpu_cs_jpeg_decode(amdgpu_device_handle device_handle,
 	uint32_t idx;
 	struct mmd_context acontext = {0};
 	struct mmd_context *context = &acontext;
+	/*
+	 * VCN JPEG (VCN 4.0.5+) requires IB size aligned to 16 DW.
+	 * We pad using a 2-DW NOP packet, so the initial ndw must be even.
+	 */
+	/* IB capacity in DW (IB_SIZE is in bytes, divide by 4) */
+	unsigned int ib_dw_capacity = IB_SIZE / 4;
 
 	r = mmd_context_init(device_handle, context);
 	igt_assert_eq(r, 0);
@@ -191,6 +197,16 @@ amdgpu_cs_jpeg_decode(amdgpu_device_handle device_handle,
 	} else {
 		send_cmd_bitstream(context, dec_buf.addr, &idx);
 		send_cmd_target(context, dec_buf.addr + (size / 4), &idx);
+	}
+
+	igt_assert_eq(idx & 1, 0);
+
+	while (idx & 0xF) {
+		igt_assert(idx + 2 <= ib_dw_capacity);
+
+		/* 2-DW NOP packet for VCN JPEG */
+		context->ib_cpu[idx++] = 0x60000000;
+		context->ib_cpu[idx++] = 0x00000000;
 	}
 
 	amdgpu_bo_cpu_unmap(dec_buf.handle);

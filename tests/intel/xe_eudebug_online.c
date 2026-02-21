@@ -21,6 +21,7 @@
 #include "intel_pat.h"
 #include "intel_mocs.h"
 #include "gpgpu_shader.h"
+#include <sys/wait.h>
 
 #define SHADER_NOP			(0 << 0)
 #define SHADER_BREAKPOINT		(1 << 0)
@@ -468,6 +469,38 @@ static void online_debug_data_destroy(struct online_debug_data *data)
 {
 	free(data->aips_offset_table);
 	munmap(data, ALIGN(sizeof(*data), PAGE_SIZE));
+}
+
+static void wait_for_workloads_start(struct online_debug_data **data, int n)
+{
+	int val;
+	int count;
+	int i;
+
+	igt_for_milliseconds(n * STARTUP_TIMEOUT_MS) {
+		count = 0;
+		for (i = 0; i < n; i++) {
+			if (READ_ONCE(data[i]->vm_fd) == -1 ||
+			    READ_ONCE(data[i]->target_size) == 0)
+				continue;
+
+			if (pread(data[i]->vm_fd, &val, sizeof(val),
+				  data[i]->target_offset) == sizeof(val) &&
+			    val != 0)
+				count++;
+		}
+
+		if (count == n)
+			break;
+	}
+	igt_assert_eq(count, n);
+}
+
+static void wait_for_workload_start(struct online_debug_data *data)
+{
+	struct online_debug_data *array[] = { data };
+
+	wait_for_workloads_start(array, 1);
 }
 
 static void eu_attention_debug_trigger(struct xe_eudebug_debugger *d,
@@ -1634,6 +1667,9 @@ static void test_set_breakpoint_online_sigint_debugger(int fd,
 	max_sleep_time = set_breakpoint_time * 11 / 10;
 	igt_info("Maximum sleep_time: %" PRIu64 " us\n", max_sleep_time);
 
+	/* Skip checking canaries as they can be invalid due to signal timing */
+	flags |= DO_NOT_EXPECT_CANARIES;
+
 	ts = (struct timespec) { };
 	igt_nsec_elapsed(&ts);
 
@@ -1903,7 +1939,6 @@ static void test_interrupt_all(int fd, struct drm_xe_engine_class_instance *hwe,
 {
 	struct xe_eudebug_session *s;
 	struct online_debug_data *data;
-	uint32_t val;
 
 	igt_require(!(flags & FAULTABLE_VM) || !xe_supports_faults(fd));
 
@@ -1928,16 +1963,7 @@ static void test_interrupt_all(int fd, struct drm_xe_engine_class_instance *hwe,
 	xe_eudebug_debugger_start_worker(s->debugger);
 	xe_eudebug_client_start(s->client);
 
-	/* wait for workload to start */
-	igt_for_milliseconds(STARTUP_TIMEOUT_MS) {
-		/* collect needed data from triggers */
-		if (READ_ONCE(data->vm_fd) == -1 || READ_ONCE(data->target_size) == 0)
-			continue;
-
-		if (pread(data->vm_fd, &val, sizeof(val), data->target_offset) == sizeof(val))
-			if (val != 0)
-				break;
-	}
+	wait_for_workload_start(data);
 
 	pthread_mutex_lock(&data->mutex);
 	igt_assert(data->client_handle != -1);
@@ -1996,7 +2022,6 @@ static void test_interrupt_other(int fd, struct drm_xe_engine_class_instance *hw
 	struct xe_eudebug_session *s;
 	struct xe_eudebug_client *debugee;
 	int debugee_flags = SHADER_LOOP | DO_NOT_EXPECT_CANARIES;
-	int val;
 
 	data = online_debug_data_create(fd, hwe, flags);
 	s = xe_eudebug_session_create(fd, run_online_client, flags, data);
@@ -2014,16 +2039,7 @@ static void test_interrupt_other(int fd, struct drm_xe_engine_class_instance *hw
 	xe_eudebug_debugger_start_worker(s->debugger);
 	xe_eudebug_client_start(s->client);
 
-	/* wait for workload to start */
-	igt_for_milliseconds(STARTUP_TIMEOUT_MS) {
-		if (READ_ONCE(data->vm_fd) == -1 || READ_ONCE(data->target_size) == 0)
-			continue;
-
-		if (pread(data->vm_fd, &val, sizeof(val), data->target_offset) == sizeof(val))
-			if (val != 0)
-				break;
-	}
-	igt_assert_f(val != 0, "Workload execution is not yet started\n");
+	wait_for_workload_start(data);
 
 	xe_eudebug_debugger_detach(s->debugger);
 	reset_debugger_log(s->debugger);
@@ -2054,15 +2070,29 @@ static void test_interrupt_other(int fd, struct drm_xe_engine_class_instance *hw
 
 	xe_force_gt_reset_async(s->debugger->master_fd, debugee_data->hwe.gt_id);
 
-	xe_eudebug_client_wait_done(debugee);
+	/* First client should complete because of the reset */
+	xe_eudebug_client_wait_done(s->client);
+
+	/* Check if second workload was started and is running */
+	wait_for_workload_start(debugee_data);
+
+	/* Terminate debugee and mark it as cleaned up */
+	igt_assert_eq(kill(debugee->pid, 0), 0);
+	igt_assert_eq(debugee->done, 0);
+	kill(debugee->pid, SIGKILL);
+	igt_assert_eq(waitpid(debugee->pid, NULL, 0), debugee->pid);
+	debugee->done = 1;
+	debugee->pid = 0;
+
 	xe_eudebug_debugger_stop_worker(s->debugger);
 
 	xe_eudebug_event_log_print(s->debugger->log, true);
 	xe_eudebug_event_log_print(debugee->log, true);
 
-	xe_eudebug_session_check(s, true, XE_EUDEBUG_FILTER_EVENT_VM_BIND |
-				 XE_EUDEBUG_FILTER_EVENT_VM_BIND_OP |
-				 XE_EUDEBUG_FILTER_EVENT_VM_BIND_UFENCE);
+	/*
+	 * Skip xe_eudebug_session_check() because we forcibly killed the debugee
+	 * with SIGKILL, so its event log is incomplete and validation would fail.
+	 */
 
 	xe_eudebug_client_destroy(debugee);
 	xe_eudebug_session_destroy(s);
@@ -2082,7 +2112,6 @@ static void test_tdctl_parameters(int fd, struct drm_xe_engine_class_instance *h
 {
 	struct xe_eudebug_session *s;
 	struct online_debug_data *data;
-	uint32_t val;
 	uint32_t random_command;
 	uint32_t bitmask_size = query_attention_bitmask_size(fd, hwe->gt_id);
 	uint8_t *attention_bitmask = malloc(bitmask_size * sizeof(uint8_t));
@@ -2110,16 +2139,7 @@ static void test_tdctl_parameters(int fd, struct drm_xe_engine_class_instance *h
 	xe_eudebug_debugger_start_worker(s->debugger);
 	xe_eudebug_client_start(s->client);
 
-	/* wait for workload to start */
-	igt_for_milliseconds(STARTUP_TIMEOUT_MS) {
-		/* collect needed data from triggers */
-		if (READ_ONCE(data->vm_fd) == -1 || READ_ONCE(data->target_size) == 0)
-			continue;
-
-		if (pread(data->vm_fd, &val, sizeof(val), data->target_offset) == sizeof(val))
-			if (val != 0)
-				break;
-	}
+	wait_for_workload_start(data);
 
 	pthread_mutex_lock(&data->mutex);
 	igt_assert(data->client_handle != -1);
@@ -2237,7 +2257,6 @@ static void test_interrupt_reconnect(int fd, struct drm_xe_engine_class_instance
 	struct drm_xe_eudebug_event *e = NULL;
 	struct online_debug_data *data;
 	struct xe_eudebug_session *s;
-	uint32_t val;
 
 	data = online_debug_data_create(fd, hwe, flags);
 	s = xe_eudebug_session_create(fd, run_online_client, flags, data);
@@ -2260,16 +2279,7 @@ static void test_interrupt_reconnect(int fd, struct drm_xe_engine_class_instance
 	xe_eudebug_debugger_start_worker(s->debugger);
 	xe_eudebug_client_start(s->client);
 
-	/* wait for workload to start */
-	igt_for_milliseconds(STARTUP_TIMEOUT_MS) {
-		/* collect needed data from triggers */
-		if (READ_ONCE(data->vm_fd) == -1 || READ_ONCE(data->target_size) == 0)
-			continue;
-
-		if (pread(data->vm_fd, &val, sizeof(val), data->target_offset) == sizeof(val))
-			if (val != 0)
-				break;
-	}
+	wait_for_workload_start(data);
 
 	pthread_mutex_lock(&data->mutex);
 	igt_assert(data->client_handle != -1);

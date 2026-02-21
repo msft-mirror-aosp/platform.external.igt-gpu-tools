@@ -16,6 +16,25 @@
 #include "igt_core.h"
 #include "igt_x86.h"
 
+const struct igt_color_tf srgb_eotf = {2.4f, (float)(1/1.055), (float)(0.055/1.055), (float)(1/12.92), 0.04045f, 0, 0};
+const struct igt_color_tf bt2020_inv_oetf = {(float)(1/0.45f), (float)(1/1.0993f), (float)(0.0993f/1.0993f), (float)(1/4.5f), (float)(0.081), 0, 0};
+
+const struct igt_color_tf linear_tf = {1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f};
+const struct igt_color_tf max_tf = {1.0f, 0.0f, 1.0f, 0.0f, 1.0e-6f, 0.0f, 0.0f};
+
+const struct igt_color_tf_pq pq_eotf = {-107/128.0f, 1.0f, 32/2523.0f, 2413/128.0f, -2392/128.0f, 8192/1305.0f };
+
+igt_1dlut_t igt_1dlut_srgb_inv_eotf = { {
+} };
+
+igt_1dlut_t igt_1dlut_srgb_eotf = { {
+} };
+
+igt_1dlut_t igt_1dlut_linear = { {
+} };
+
+igt_1dlut_t igt_1dlut_max = { {
+} };
 
 static float clamp(float val, float min, float max)
 {
@@ -118,6 +137,16 @@ void igt_color_srgb_eotf(igt_pixel_t *pixel)
 void igt_color_srgb_inv_eotf(igt_pixel_t *pixel)
 {
 	igt_color_inv_tf(pixel, &srgb_eotf);
+}
+
+void igt_color_linear(igt_pixel_t *pixel)
+{
+	igt_color_tf(pixel, &linear_tf);
+}
+
+void igt_color_max(igt_pixel_t *pixel)
+{
+	igt_color_tf(pixel, &max_tf);
 }
 
 void igt_color_bt2020_inv_oetf(igt_pixel_t *pixel)
@@ -546,14 +575,37 @@ bool igt_cmp_fb_component(uint16_t comp1, uint16_t comp2, uint8_t up, uint8_t do
 bool igt_cmp_fb_pixels(igt_fb_t *fb1, igt_fb_t *fb2, uint8_t up, uint8_t down)
 {
 	uint32_t *ptr1, *ptr2;
+	uint32_t *map1, *map2;
 	uint32_t pixel1, pixel2, i, j;
-	bool matched = true;
+	uint32_t *cached_p1 = NULL, *cached_p2 = NULL;
+	bool result = true;
 
-	ptr1 = igt_fb_map_buffer(fb1->fd, fb1);
-	ptr2 = igt_fb_map_buffer(fb2->fd, fb2);
+	map1 = ptr1 = igt_fb_map_buffer(fb1->fd, fb1);
+	map2 = ptr2 = igt_fb_map_buffer(fb2->fd, fb2);
+	igt_assert(map1);
+	igt_assert(map2);
 
 	igt_assert(fb1->drm_format == fb2->drm_format);
 	igt_assert(fb1->size == fb2->size);
+
+	/*
+	 * Copy WC memory to cached buffer for faster reads.
+	 * Reading from WC memory is extremely slow so this is important
+	 * on dGPUs where framebuffer mappings are typically Write-Combining.
+	 */
+	cached_p1 = malloc(fb1->size);
+	cached_p2 = malloc(fb2->size);
+	if (cached_p1 && cached_p2) {
+		igt_memcpy_from_wc(cached_p1, ptr1, fb1->size);
+		igt_memcpy_from_wc(cached_p2, ptr2, fb2->size);
+		ptr1 = cached_p1;
+		ptr2 = cached_p2;
+	} else {
+		free(cached_p1);
+		free(cached_p2);
+		cached_p1 = NULL;
+		cached_p2 = NULL;
+	}
 
 	for (i = 0; i < fb1->size / sizeof(uint32_t); i++) {
 		uint16_t mask = 0xff;
@@ -585,15 +637,18 @@ bool igt_cmp_fb_pixels(igt_fb_t *fb1, igt_fb_t *fb2, uint8_t up, uint8_t down)
 			if (!igt_cmp_fb_component(comp1, comp2, up, down)) {
 				igt_info("i %d j %d shift %d mask %x comp1 %x comp2 %x, pixel1 %x pixel2 %x\n",
 					 i, j, shift, mask, comp1, comp2, pixel1, pixel2);
-				return false;
+				result = false;
+				goto cleanup;
 			}
 		}
 	}
 
-	igt_fb_unmap_buffer(fb1, ptr1);
-	igt_fb_unmap_buffer(fb2, ptr2);
-
-	return matched;
+cleanup:
+	igt_fb_unmap_buffer(fb1, map1);
+	igt_fb_unmap_buffer(fb2, map2);
+	free(cached_p1);
+	free(cached_p2);
+	return result;
 }
 
 void igt_dump_fb(igt_display_t *display, igt_fb_t *fb,
@@ -649,3 +704,33 @@ void igt_colorop_set_3dlut(igt_display_t *display,
 {
 	igt_colorop_replace_prop_blob(colorop, IGT_COLOROP_DATA, lut3d, lut_size);
 }
+
+const igt_matrix_3x4_t igt_matrix_3x4_50_desat = { {
+	0.5, 0.25, 0.25, 0.0,
+	0.25, 0.5, 0.25, 0.0,
+	0.25, 0.25, 0.5, 0.0
+} };
+
+const igt_matrix_3x4_t igt_matrix_3x4_overdrive = { {
+	1.5, 0.0, 0.0, 0.0,
+	0.0, 1.5, 0.0, 0.0,
+	0.0, 0.0, 1.5, 0.0
+} };
+
+const igt_matrix_3x4_t igt_matrix_3x4_oversaturate = { {
+	1.5,   -0.25, -0.25, 0.0,
+	-0.25,  1.5,  -0.25, 0.0,
+	-0.25, -0.25,  1.5,  0.0
+} };
+
+const igt_matrix_3x4_t igt_matrix_3x4_bt709_enc = { {
+	 0.2126,   0.7152,   0.0722,  0.0,
+	-0.09991, -0.33609,  0.436,   0.0,
+	 0.615,   -0.55861, -0.05639, 0.0
+} };
+
+const igt_matrix_3x4_t igt_matrix_3x4_bt709_dec = { {
+	1.0,  0.0,      1.28033, 0.0,
+	1.0, -0.21482, -0.38059, 0.0,
+	1.0,  2.12798,  0.0,     0.0
+} };

@@ -102,6 +102,7 @@
 #include "xe/xe_gt.h"
 #include "xe/xe_ioctl.h"
 #include "xe/xe_spin.h"
+#include "xe/xe_sriov_admin.h"
 #include "xe/xe_sriov_provisioning.h"
 
 #define SLEEP_DURATION 2 /* in seconds */
@@ -534,6 +535,10 @@ static void accuracy(int fd, struct drm_xe_engine_class_instance *eci,
 		intel_allocator_init();
 		ahnd = intel_allocator_open(fd, 0, INTEL_ALLOCATOR_RELOC);
 
+		spin = igt_spin_new(fd, .ahnd = ahnd, .vm = vm, .hwe = eci);
+		xe_spin_end(spin->xe_spin);
+		xe_spin_sync_wait(fd, spin);
+
 		for (int pass = 0; pass < ARRAY_SIZE(timeout); pass++) {
 			unsigned int target_idle_us = idle_us;
 			struct timespec start = { };
@@ -546,21 +551,25 @@ static void accuracy(int fd, struct drm_xe_engine_class_instance *eci,
 
 			while (pass_ns < timeout[pass]) {
 				unsigned long loop_ns, loop_active_ns, loop_idle_ns, now;
+				unsigned long after_sync;
 				double err, prev_avg, cur_val;
 
 				/* idle sleep */
 				igt_measured_usleep(target_idle_us);
 
 				/* start spinner */
-				spin = igt_spin_new(fd, .ahnd = ahnd, .vm = vm, .hwe = eci);
+				xe_spin_reset(fd, spin);
 				loop_idle_ns = igt_nsec_elapsed(&start);
 				igt_measured_usleep(active_us);
-				igt_spin_free(fd, spin);
+				xe_spin_end(spin->xe_spin);
 
 				now = igt_nsec_elapsed(&start);
+				xe_spin_sync_wait(fd, spin);
+				after_sync = igt_nsec_elapsed(&start);
+
 				loop_active_ns = now - loop_idle_ns;
 				loop_ns = now - pass_ns;
-				pass_ns = now;
+				pass_ns = after_sync;
 
 				pass_active_ns += loop_active_ns;
 				total_active_ns += loop_active_ns;
@@ -590,6 +599,7 @@ static void accuracy(int fd, struct drm_xe_engine_class_instance *eci,
 				      sizeof(expected));
 		}
 
+		igt_spin_free(fd, spin);
 		xe_vm_destroy(fd, vm);
 		put_ahnd(ahnd);
 	}
@@ -622,7 +632,7 @@ static void accuracy(int fd, struct drm_xe_engine_class_instance *eci,
 	igt_info("error=%.2f%% (%.2f%% vs %.2f%%)\n",
 		 (engine_activity - expected) * 100, 100 * engine_activity, 100 * expected);
 
-	assert_within(100.0 * engine_activity, 100.0 * expected, 3);
+	assert_within(100.0 * engine_activity, 100.0 * expected, 2);
 }
 
 static void engine_activity_all_fn(int fd, struct drm_xe_engine_class_instance *eci, int num_fns)
@@ -693,13 +703,16 @@ static void engine_activity_all_fn(int fd, struct drm_xe_engine_class_instance *
 }
 
 static void engine_activity_fn(int fd, struct drm_xe_engine_class_instance *eci,
-			       int function, bool sched_if_idle)
+			       int function, enum xe_sriov_sched_priority prio)
 {
 	uint64_t config, engine_active_ticks, engine_total_ticks, before[2], after[2];
 	double busy_percent, exec_quantum_ratio;
 	struct xe_cork *cork = NULL;
 	int pmu_fd[2], fn_fd;
 	uint32_t vm;
+
+	if (prio != xe_sriov_admin_get_sched_priority(fd, 0, NULL))
+		xe_sriov_admin_bulk_set_sched_priority(fd, prio);
 
 	if (function > 0) {
 		fn_fd = igt_sriov_open_vf_drm_device(fd, function);
@@ -748,7 +761,7 @@ static void engine_activity_fn(int fd, struct drm_xe_engine_class_instance *eci,
 	if (function > 0)
 		close(fn_fd);
 
-	if (sched_if_idle)
+	if (prio == XE_SRIOV_SCHED_PRIORITY_NORMAL)
 		assert_within_epsilon(engine_active_ticks, engine_total_ticks, tolerance);
 	else
 		assert_within_epsilon(busy_percent, exec_quantum_ratio, tolerance);
@@ -973,10 +986,12 @@ static void test_gt_frequency(int fd, struct drm_xe_engine_class_instance *eci)
 
 static unsigned int enable_and_provision_vfs(int fd)
 {
-	unsigned int gt, num_vfs;
-	int pf_exec_quantum = 64, vf_exec_quantum = 32, vf;
+	unsigned int num_vfs, vf;
+	uint32_t pf_exec_quantum_ms = 64, vf_exec_quantum_ms = 32;
+	uint32_t pf_preempt_timeout_us = 64000, vf_preempt_timeout_us = 32000;
 
 	igt_require(igt_sriov_is_pf(fd));
+	igt_require(xe_sriov_admin_is_present(fd));
 	igt_require(igt_sriov_get_enabled_vfs(fd) == 0);
 	xe_sriov_require_default_scheduling_attributes(fd);
 	autoprobe = igt_sriov_is_driver_autoprobe_enabled(fd);
@@ -988,37 +1003,33 @@ static unsigned int enable_and_provision_vfs(int fd)
 	igt_require(num_vfs == 2);
 
 	/* Set 32ms for VF execution quantum and 64ms for PF execution quantum */
-	xe_for_each_gt(fd, gt) {
-		xe_sriov_set_sched_if_idle(fd, gt, 0);
-		for (int fn = 0; fn <= num_vfs; fn++)
-			xe_sriov_set_exec_quantum_ms(fd, fn, gt, fn ? vf_exec_quantum :
-						     pf_exec_quantum);
-	}
+	xe_sriov_admin_bulk_set_exec_quantum_ms(fd, vf_exec_quantum_ms);
+	xe_sriov_admin_bulk_set_preempt_timeout_us(fd, vf_preempt_timeout_us);
+	xe_sriov_admin_bulk_set_sched_priority(fd, XE_SRIOV_SCHED_PRIORITY_LOW);
+	xe_sriov_admin_set_exec_quantum_ms(fd, 0, pf_exec_quantum_ms);
+	xe_sriov_admin_set_preempt_timeout_us(fd, 0,
+					      pf_preempt_timeout_us);
 
 	/* probe VFs */
 	igt_sriov_enable_driver_autoprobe(fd);
 	for (vf = 1; vf <= num_vfs; vf++)
 		igt_sriov_bind_vf_drm_driver(fd, vf);
 
-	total_exec_quantum = pf_exec_quantum + (num_vfs * vf_exec_quantum);
+	total_exec_quantum = pf_exec_quantum_ms + (num_vfs * vf_exec_quantum_ms);
 
 	return num_vfs;
 }
 
 static void unprovision_and_disable_vfs(int fd)
 {
-	unsigned int gt, num_vfs = igt_sriov_get_enabled_vfs(fd);
+	int ret;
 
-	xe_for_each_gt(fd, gt) {
-		xe_sriov_set_sched_if_idle(fd, gt, 0);
-		for (int fn = 0; fn <= num_vfs; fn++)
-			xe_sriov_set_exec_quantum_ms(fd, fn, gt, 0);
-	}
-
+	ret = __xe_sriov_admin_bulk_restore_defaults(fd);
 	xe_sriov_disable_vfs_restore_auto_provisioning(fd);
 	/* abort to avoid execution of next tests with enabled VFs */
 	igt_abort_on_f(igt_sriov_get_enabled_vfs(fd) > 0,
 		       "Failed to disable VF(s)");
+	igt_abort_on_f(ret, "Failed to restore scheduling params\n");
 	autoprobe ? igt_sriov_enable_driver_autoprobe(fd) :
 		    igt_sriov_disable_driver_autoprobe(fd);
 
@@ -1188,13 +1199,12 @@ int igt_main()
 		igt_describe("Validate per-function engine activity");
 		test_each_engine("fn-engine-activity-load", fd, eci)
 			for (int fn = 0; fn < num_fns; fn++)
-				engine_activity_fn(fd, eci, fn, false);
+				engine_activity_fn(fd, eci, fn, XE_SRIOV_SCHED_PRIORITY_LOW);
 
 		igt_describe("Validate per-function engine activity when sched-if-idle is set");
 		test_each_engine("fn-engine-activity-sched-if-idle", fd, eci) {
-			xe_sriov_set_sched_if_idle(fd, eci->gt_id, 1);
 			for (int fn = 0; fn < num_fns; fn++)
-				engine_activity_fn(fd, eci, fn, true);
+				engine_activity_fn(fd, eci, fn, XE_SRIOV_SCHED_PRIORITY_NORMAL);
 		}
 
 		igt_fixture()

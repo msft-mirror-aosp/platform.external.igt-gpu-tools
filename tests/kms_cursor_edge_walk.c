@@ -126,8 +126,7 @@ static void cursor_move(data_t *data, int x, int y, int i)
 	igt_assert(drmModeMoveCursor(data->drm_fd, crtc_id, x, y) == 0 ||
 		   (IS_CHERRYVIEW(data->devid) && data->pipe == PIPE_C &&
 		    x < 0 && x > -data->curw));
-	igt_wait_for_vblank(data->drm_fd,
-			display->pipes[data->pipe].crtc_offset);
+	igt_wait_for_vblank(igt_crtc_for_pipe(display, data->pipe));
 }
 
 #define XSTEP 8
@@ -267,7 +266,8 @@ static void prepare_crtc(data_t *data)
 	cleanup_crtc(data);
 
 	/* select the pipe we want to use */
-	igt_output_set_pipe(data->output, data->pipe);
+	igt_output_set_crtc(data->output,
+			    igt_crtc_for_pipe(display, data->pipe));
 
 	mode = igt_output_get_mode(data->output);
 	igt_create_pattern_fb(data->drm_fd, mode->hdisplay, mode->vdisplay,
@@ -284,7 +284,7 @@ static void prepare_crtc(data_t *data)
 	data->jump_y = (mode->vdisplay - data->curh) / 2;
 
 	/* create the pipe_crc object for this pipe */
-	data->pipe_crc = igt_pipe_crc_new_nonblock(data->drm_fd, data->pipe,
+	data->pipe_crc = igt_crtc_crc_new_nonblock(igt_crtc_for_pipe(display, data->pipe),
 						   IGT_PIPE_CRC_SOURCE_AUTO);
 
 	/* get reference crc w/o cursor */
@@ -344,6 +344,7 @@ static const char *help_str =
 
 int igt_main_args("", long_opts, help_str, opt_handler, &data)
 {
+	igt_crtc_t *crtc;
 	struct {
 		const char *name;
 		unsigned flags;
@@ -357,7 +358,6 @@ int igt_main_args("", long_opts, help_str, opt_handler, &data)
 
 	igt_fixture() {
 		int ret;
-		enum pipe pipe;
 
 		data.drm_fd = drm_open_driver_master(DRIVER_ANY);
 
@@ -379,8 +379,8 @@ int igt_main_args("", long_opts, help_str, opt_handler, &data)
 
 		/* Get active pipes. */
 		last_pipe = 0;
-		for_each_pipe(&data.display, pipe)
-			active_pipes[last_pipe++] = pipe;
+		for_each_crtc(&data.display, crtc)
+			active_pipes[last_pipe++] = crtc->pipe;
 		last_pipe--;
 	}
 
@@ -394,20 +394,24 @@ int igt_main_args("", long_opts, help_str, opt_handler, &data)
 					data.curw, data.curh, tests[i].name);
 			igt_subtest_with_dynamic_f("%dx%d-%s", data.curw,
 						   data.curh, tests[i].name) {
-				for_each_pipe_with_single_output(&data.display, data.pipe, data.output) {
-					if (!extended && data.pipe != active_pipes[0] &&
-					    data.pipe != active_pipes[last_pipe])
+				for_each_crtc_with_single_output(&data.display,
+								 crtc,
+								 data.output) {
+					data.pipe = crtc->pipe;
+					if (!extended && crtc->pipe != active_pipes[0] &&
+					    crtc->pipe != active_pipes[last_pipe])
 						continue;
 
 					igt_display_reset(&data.display);
-					igt_output_set_pipe(data.output, data.pipe);
+					igt_output_set_crtc(data.output,
+							    crtc);
 					if (!intel_pipe_output_combo_valid(&data.display))
 						continue;
 
-					igt_output_set_pipe(data.output, PIPE_NONE);
+					igt_output_set_crtc(data.output, NULL);
 
 					igt_dynamic_f("pipe-%s-%s",
-						      kmstest_pipe_name(data.pipe),
+						      igt_crtc_name(crtc),
 						      data.output->name)
 						test_crtc(&data, tests[i].flags);
 				}

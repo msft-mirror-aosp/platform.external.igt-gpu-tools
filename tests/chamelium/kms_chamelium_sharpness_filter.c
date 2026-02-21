@@ -40,27 +40,32 @@ typedef struct {
 
 static bool pipe_output_combo_valid(data_t *data, enum pipe pipe)
 {
+	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
 	bool ret = true;
 
-	igt_output_set_pipe(data->output, pipe);
+	igt_output_set_crtc(data->output,
+			    crtc);
 	if (!intel_pipe_output_combo_valid(&data->display))
 		ret = false;
-	igt_output_set_pipe(data->output, PIPE_NONE);
+	igt_output_set_crtc(data->output, NULL);
 
 	return ret;
 }
 
 static void set_filter_strength_on_pipe(data_t *data)
 {
-	igt_pipe_set_prop_value(&data->display, data->pipe_id,
-				IGT_CRTC_SHARPNESS_STRENGTH,
-				data->filter_strength);
+	igt_display_t *display = &data->display;
+	igt_crtc_set_prop_value(igt_crtc_for_pipe(display, data->pipe_id),
+				    IGT_CRTC_SHARPNESS_STRENGTH,
+				    data->filter_strength);
 }
 
 static void reset_filter_strength_on_pipe(data_t *data)
 {
-	igt_pipe_set_prop_value(&data->display, data->pipe_id,
-				IGT_CRTC_SHARPNESS_STRENGTH, 0);
+	igt_display_t *display = &data->display;
+	igt_crtc_set_prop_value(igt_crtc_for_pipe(display, data->pipe_id),
+				    IGT_CRTC_SHARPNESS_STRENGTH, 0);
 }
 
 static void paint_image(igt_fb_t *fb)
@@ -102,7 +107,7 @@ static void destroy_frame_dumps(struct chamelium_frame_dump *frames[], int count
 static void cleanup(data_t *data)
 {
 	igt_remove_fb(data->drm_fd, &data->fb);
-	igt_output_set_pipe(data->output, PIPE_NONE);
+	igt_output_set_crtc(data->output, NULL);
 	igt_output_override_mode(data->output, NULL);
 	igt_display_commit2(&data->display, COMMIT_ATOMIC);
 }
@@ -110,12 +115,14 @@ static void cleanup(data_t *data)
 static void test_t(data_t *data, igt_plane_t *primary,
 		   struct chamelium_port *port)
 {
+	igt_display_t *display = &data->display;
 	struct chamelium_frame_dump *frame[4];
 	drmModeModeInfo *mode;
 	int height, width;
 	bool match[4], match_ok = false;
 
-	igt_output_set_pipe(data->output, data->pipe_id);
+	igt_output_set_crtc(data->output,
+			    igt_crtc_for_pipe(display, data->pipe_id));
 
 	mode = igt_output_get_mode(data->output);
 	height = mode->hdisplay;
@@ -175,23 +182,23 @@ static void test_t(data_t *data, igt_plane_t *primary,
 
 static int test_setup(data_t *data, enum pipe p)
 {
-	igt_pipe_t *pipe;
+	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, p);
 	int i = 0;
 
 	igt_display_reset(&data->display);
+	igt_require(crtc->n_planes >= 0);
 
-	pipe = &data->display.pipes[p];
-	igt_require(pipe->n_planes >= 0);
-
-	data->primary = igt_pipe_get_plane_type(pipe, DRM_PLANE_TYPE_PRIMARY);
+	data->primary = igt_crtc_get_plane_type(crtc, DRM_PLANE_TYPE_PRIMARY);
 	igt_assert(data->primary);
 
 	/*
 	 * Prefer to run this test on HDMI connector if its connected, since on DP we
 	 * sometimes face DP FSM issue
 	 */
-        for_each_valid_output_on_pipe(&data->display, p, data->output) {
-		data->pipe_id = p;
+        for_each_valid_output_on_pipe(&data->display, crtc->pipe,
+				      data->output) {
+		data->pipe_id = crtc->pipe;
 		for (i = 0; i < data->port_count; i++) {
 			if ((data->output->config.connector->connector_type == DRM_MODE_CONNECTOR_HDMIA ||
 			     data->output->config.connector->connector_type == DRM_MODE_CONNECTOR_HDMIB) &&
@@ -200,8 +207,9 @@ static int test_setup(data_t *data, enum pipe p)
 		}
 	}
 
-	for_each_valid_output_on_pipe(&data->display, p, data->output) {
-		data->pipe_id = p;
+	for_each_valid_output_on_pipe(&data->display, crtc->pipe,
+				      data->output) {
+		data->pipe_id = crtc->pipe;
 		for (i = 0; i < data->port_count; i++) {
 			if (strcmp(data->output->name,
 				   chamelium_port_get_name(data->ports[i])) == 0)
@@ -214,15 +222,17 @@ static int test_setup(data_t *data, enum pipe p)
 
 static void test_sharpness_filter(data_t *data,  enum pipe p)
 {
-	int port_idx = test_setup(data, p);
+	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, p);
+	int port_idx = test_setup(data, crtc->pipe);
 
 	igt_require(port_idx >= 0);
-	igt_require(igt_pipe_obj_has_prop(&data->display.pipes[p], IGT_CRTC_SHARPNESS_STRENGTH));
+	igt_require(igt_crtc_has_prop(crtc, IGT_CRTC_SHARPNESS_STRENGTH));
 
-	if (!pipe_output_combo_valid(data, p))
+	if (!pipe_output_combo_valid(data, crtc->pipe))
 		return;
 
-	igt_dynamic_f("pipe-%s-%s", kmstest_pipe_name(p), data->output->name)
+	igt_dynamic_f("pipe-%s-%s", igt_crtc_name(crtc), data->output->name)
 		(test_t(data, data->primary, data->ports[port_idx]));
 }
 
@@ -230,13 +240,13 @@ static void
 run_sharpness_filter_test(data_t *data)
 {
 	igt_display_t *display = &data->display;
-	enum pipe pipe;
+	igt_crtc_t *crtc;
 
 	igt_describe("Verify basic content adaptive sharpness filter.");
 	igt_subtest_with_dynamic("filter-basic") {
-		for_each_pipe(display, pipe) {
+		for_each_crtc(display, crtc) {
 			data->filter_strength = MID_FILTER_STRENGTH;
-			test_sharpness_filter(data, pipe);
+			test_sharpness_filter(data, crtc->pipe);
 		}
 	}
 }

@@ -105,7 +105,7 @@ static void screens_disabled_subtest(data_t *data)
 
 	for (int i = 0; i < data->display.n_outputs; i++) {
 		data->output = &data->display.outputs[i];
-		igt_output_set_pipe(data->output, PIPE_NONE);
+		igt_output_set_crtc(data->output, NULL);
 		igt_display_commit(&data->display);
 		valid_output++;
 	}
@@ -139,13 +139,13 @@ static void test_cleanup(data_t *data)
 {
 	igt_plane_t *primary;
 
-	if (!data->output || data->output->pending_pipe == PIPE_NONE)
+	if (!data->output || igt_output_get_driving_crtc(data->output) == NULL)
 		return;
 
 	primary = igt_output_get_plane_type(data->output,
 					    DRM_PLANE_TYPE_PRIMARY);
 	igt_plane_set_fb(primary, NULL);
-	igt_output_set_pipe(data->output, PIPE_NONE);
+	igt_output_set_crtc(data->output, NULL);
 	igt_display_commit(&data->display);
 	igt_remove_fb(data->drm_fd, &data->fb);
 	data->output = NULL;
@@ -153,10 +153,12 @@ static void test_cleanup(data_t *data)
 
 static bool test_constraint(data_t *data)
 {
+	igt_display_t *display = &data->display;
 	drmModeModeInfo *mode;
 
 	igt_display_reset(&data->display);
-	igt_output_set_pipe(data->output, data->pipe);
+	igt_output_set_crtc(data->output,
+			    igt_crtc_for_pipe(display, data->pipe));
 
 	mode = igt_output_get_mode(data->output);
 
@@ -222,7 +224,7 @@ int igt_main()
 	igt_subtest_with_dynamic_f("kms-lpsp") {
 		igt_display_t *display = &data.display;
 		igt_output_t *output;
-		enum pipe pipe;
+		igt_crtc_t *crtc;
 
 		for_each_connected_output(display, output) {
 			drmModeConnectorPtr connector = output->config.connector;
@@ -230,12 +232,12 @@ int igt_main()
 			if (!i915_output_is_lpsp_capable(data.drm_fd, output))
 				continue;
 
-			for_each_pipe(display, pipe) {
-				if (!igt_pipe_connector_valid(pipe, output))
+			for_each_crtc(display, crtc) {
+				if (!igt_pipe_connector_valid(crtc->pipe, output))
 					continue;
 
 				/* LPSP is low power single pipe usages i.e. PIPE_A */
-				if (pipe != PIPE_A)
+				if (crtc->pipe != PIPE_A)
 					continue;
 
 				if (connector->connector_type != DRM_MODE_CONNECTOR_eDP)
@@ -243,12 +245,14 @@ int igt_main()
 						     "LPSP support on external panel from Gen13+ platform\n");
 
 				data.output = output;
-				data.pipe = pipe;
+				data.pipe = crtc->pipe;
 
 				if (!test_constraint(&data))
 					continue;
 
-				igt_dynamic_f("pipe-%s-%s", kmstest_pipe_name(pipe), igt_output_name(output))
+				igt_dynamic_f("pipe-%s-%s",
+					      igt_crtc_name(crtc),
+					      igt_output_name(output))
 					test_lpsp(&data);
 
 				test_cleanup(&data);

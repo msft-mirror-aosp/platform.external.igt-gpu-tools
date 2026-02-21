@@ -411,6 +411,8 @@
  *
  * @rgb101010:      FORMAT_RGB101010
  * @rgb565:         FORMAT_RGB565
+ * @argb161616f:    FORMAT_ARGB161616F
+ * @abgr161616f:    FORMAT_ABGR161616F
  *
  * arg[2]:
  *
@@ -444,6 +446,8 @@
  *
  * @rgb101010:      FORMAT_RGB101010
  * @rgb565:         FORMAT_RGB565
+ * @argb161616f:    FORMAT_ARGB161616F
+ * @abgr161616f:    FORMAT_ABGR161616F
  *
  * arg[2]:
  *
@@ -865,6 +869,8 @@ struct test_mode {
 		FORMAT_RGB888 = 0,
 		FORMAT_RGB565,
 		FORMAT_RGB101010,
+		FORMAT_ARGB161616F,
+		FORMAT_ABGR161616F,
 		FORMAT_COUNT,
 		FORMAT_DEFAULT = FORMAT_RGB888,
 	} format;
@@ -909,7 +915,7 @@ struct rect {
 	int y;
 	int w;
 	int h;
-	uint32_t color;
+	uint64_t color;
 };
 
 struct {
@@ -1110,21 +1116,24 @@ static void init_mode_params(struct modeset_params *params,
 	params->output = output;
 	params->mode = *mode;
 
-	params->primary.plane = igt_pipe_get_plane_type(&drm.display.pipes[pipe], DRM_PLANE_TYPE_PRIMARY);
+	params->primary.plane = igt_crtc_get_plane_type(igt_crtc_for_pipe(&drm.display, pipe),
+							DRM_PLANE_TYPE_PRIMARY);
 	params->primary.fb = NULL;
 	params->primary.x = 0;
 	params->primary.y = 0;
 	params->primary.w = mode->hdisplay;
 	params->primary.h = mode->vdisplay;
 
-	params->cursor.plane = igt_pipe_get_plane_type(&drm.display.pipes[pipe], DRM_PLANE_TYPE_CURSOR);
+	params->cursor.plane = igt_crtc_get_plane_type(igt_crtc_for_pipe(&drm.display, pipe),
+						       DRM_PLANE_TYPE_CURSOR);
 	params->cursor.fb = NULL;
 	params->cursor.x = 0;
 	params->cursor.y = 0;
 	params->cursor.w = 64;
 	params->cursor.h = 64;
 
-	params->sprite.plane = igt_pipe_get_plane_type(&drm.display.pipes[pipe], DRM_PLANE_TYPE_OVERLAY);
+	params->sprite.plane = igt_crtc_get_plane_type(igt_crtc_for_pipe(&drm.display, pipe),
+						       DRM_PLANE_TYPE_OVERLAY);
 	igt_require(params->sprite.plane);
 	params->sprite.fb = NULL;
 	params->sprite.x = 0;
@@ -1154,19 +1163,20 @@ static bool find_connector(bool edp_only, bool pipe_a,
 			   enum pipe *ret_pipe)
 {
 	igt_output_t *output;
-	enum pipe pipe;
+	igt_crtc_t *crtc;
 
-	for_each_pipe_with_valid_output(&drm.display, pipe, output) {
+	for_each_crtc_with_valid_output(&drm.display, crtc, output) {
 		drmModeConnectorPtr c = output->config.connector;
 
 		if (edp_only && c->connector_type != DRM_MODE_CONNECTOR_eDP)
 			continue;
 
-		if (pipe_a && pipe != PIPE_A)
+		if (pipe_a && crtc->pipe != PIPE_A)
 			continue;
 
-		if (output == forbidden_output || pipe == forbidden_pipe) {
-			igt_output_set_pipe(output, pipe);
+		if (output == forbidden_output || crtc->pipe == forbidden_pipe) {
+			igt_output_set_crtc(output,
+					    crtc);
 			igt_output_override_mode(output, connector_get_mode(output));
 
 			continue;
@@ -1175,11 +1185,12 @@ static bool find_connector(bool edp_only, bool pipe_a,
 		if (c->connector_type == DRM_MODE_CONNECTOR_eDP && opt.no_edp)
 			continue;
 
-		igt_output_set_pipe(output, pipe);
+		igt_output_set_crtc(output,
+				    crtc);
 		igt_output_override_mode(output, connector_get_mode(output));
 		if (intel_pipe_output_combo_valid(&drm.display)) {
 			*ret_output = output;
-			*ret_pipe = pipe;
+			*ret_pipe = crtc->pipe;
 			return true;
 		}
 	}
@@ -1272,6 +1283,22 @@ static void create_fb(enum pixel_format pformat, int width, int height,
 		else
 			format = DRM_FORMAT_XRGB8888;
 		break;
+	case FORMAT_ARGB161616F:
+		if (plane == PLANE_PRI)
+			format = DRM_FORMAT_ARGB16161616F;
+		else if (plane == PLANE_CUR)
+			format = DRM_FORMAT_ARGB8888;
+		else
+			format = DRM_FORMAT_ARGB16161616F;
+		break;
+	case FORMAT_ABGR161616F:
+		if (plane == PLANE_PRI)
+			format = DRM_FORMAT_ABGR16161616F;
+		else if (plane == PLANE_CUR)
+			format = DRM_FORMAT_ARGB8888;
+		else
+			format = DRM_FORMAT_ABGR16161616F;
+		break;
 	default:
 		igt_assert(false);
 	}
@@ -1283,9 +1310,9 @@ static void create_fb(enum pixel_format pformat, int width, int height,
 	igt_create_fb(drm.fd, width, height, format, modifier, fb);
 }
 
-static uint32_t pick_color(struct igt_fb *fb, enum color ecolor)
+static uint64_t pick_color(struct igt_fb *fb, enum color ecolor)
 {
-	uint32_t color, r, g, b, b2, a;
+	uint64_t color, r, g, b, b2, a;
 	bool alpha = false;
 
 	switch (fb->drm_format) {
@@ -1313,6 +1340,22 @@ static uint32_t pick_color(struct igt_fb *fb, enum color ecolor)
 		g = 0x3FF << 10;
 		b = 0x3FF;
 		b2 = 0x200;
+		break;
+	case DRM_FORMAT_ARGB16161616F:
+		alpha = true;
+		a = 0x3C00ULL << 48;
+		r = 0x3C00ULL << 32;
+		g = 0x3C00ULL << 16;
+		b = 0x3C00ULL;
+		b2 = 0x3800ULL;
+		break;
+	case DRM_FORMAT_ABGR16161616F:
+		alpha = true;
+		a = 0x3C00ULL << 48;
+		b = 0x3C00ULL << 32;
+		g = 0x3C00ULL << 16;
+		r = 0x3C00ULL;
+		b2 = 0x3800ULL;
 		break;
 	default:
 		igt_assert(false);
@@ -1477,7 +1520,8 @@ static void __set_prim_plane_for_params(struct modeset_params *params)
 static void __set_mode_for_params(struct modeset_params *params)
 {
 	igt_output_override_mode(params->output, &params->mode);
-	igt_output_set_pipe(params->output, params->pipe);
+	igt_output_set_crtc(params->output,
+			    igt_crtc_for_pipe(params->output->display, params->pipe));
 
 	__set_prim_plane_for_params(params);
 }
@@ -1494,7 +1538,7 @@ static void __debugfs_read_crtc(const char *param, char *buf, int len)
 	enum pipe pipe;
 
 	pipe = prim_mode_params.pipe;
-	dir = igt_debugfs_pipe_dir(drm.fd, pipe, O_DIRECTORY);
+	dir = igt_debugfs_crtc_dir(drm.fd, pipe, O_DIRECTORY);
 	igt_require_fd(dir);
 	igt_debugfs_simple_read(dir, param, buf, len);
 	close(dir);
@@ -1832,7 +1876,7 @@ static void fill_fb_region(struct fb_region *region,
 			   enum igt_draw_method method,
 			   enum color ecolor)
 {
-	uint32_t color = pick_color(region->fb, ecolor);
+	uint64_t color = pick_color(region->fb, ecolor);
 
 	igt_draw_rect_fb(drm.fd, drm.bops, 0, region->fb, method,
 			 region->x, region->y, region->w, region->h,
@@ -1936,13 +1980,14 @@ static void init_blue_crc(enum pixel_format format, enum tiling_type tiling)
 
 	fill_fb(&blue, COLOR_PRIM_BG);
 
-	igt_output_set_pipe(prim_mode_params.output, prim_mode_params.pipe);
+	igt_output_set_crtc(prim_mode_params.output,
+			    igt_crtc_for_pipe(prim_mode_params.output->display, prim_mode_params.pipe));
 	igt_output_override_mode(prim_mode_params.output, &prim_mode_params.mode);
 	igt_plane_set_fb(prim_mode_params.primary.plane, &blue);
 	igt_display_commit(&drm.display);
 
 	if (!pipe_crc) {
-		pipe_crc = igt_pipe_crc_new(drm.fd, prim_mode_params.pipe,
+		pipe_crc = igt_crtc_crc_new(igt_crtc_for_pipe(&drm.display, prim_mode_params.pipe),
 					    IGT_PIPE_CRC_SOURCE_AUTO);
 		igt_assert(pipe_crc);
 	}
@@ -1991,7 +2036,8 @@ static void init_crcs(enum pixel_format format, enum tiling_type tiling,
 					 IGT_DRAW_PWRITE : IGT_DRAW_BLT, r);
 	}
 
-	igt_output_set_pipe(prim_mode_params.output, prim_mode_params.pipe);
+	igt_output_set_crtc(prim_mode_params.output,
+			    igt_crtc_for_pipe(prim_mode_params.output->display, prim_mode_params.pipe));
 	igt_output_override_mode(prim_mode_params.output, &prim_mode_params.mode);
 	for (r = 0; r < pattern->n_rects; r++) {
 		igt_plane_set_fb(prim_mode_params.primary.plane, &tmp_fbs[r]);
@@ -2397,8 +2443,10 @@ static void update_modeset_cached_params(enum igt_draw_method method)
 {
 	bool found = false;
 
-	igt_output_set_pipe(prim_mode_params.output, prim_mode_params.pipe);
-	igt_output_set_pipe(scnd_mode_params.output, scnd_mode_params.pipe);
+	igt_output_set_crtc(prim_mode_params.output,
+			    igt_crtc_for_pipe(prim_mode_params.output->display, prim_mode_params.pipe));
+	igt_output_set_crtc(scnd_mode_params.output,
+			    igt_crtc_for_pipe(scnd_mode_params.output->display, scnd_mode_params.pipe));
 
 	found = igt_override_all_active_output_modes_to_fit_bw(&drm.display);
 	igt_require_f(found, "No valid mode combo found.\n");
@@ -2464,7 +2512,7 @@ static void set_region_for_test(const struct test_mode *t,
 static void set_plane_for_test_fbc(const struct test_mode *t, igt_plane_t *plane)
 {
 	struct igt_fb fb;
-	uint32_t color;
+	uint64_t color;
 
 	igt_info("Testing fbc on plane %i%s\n", plane->index + 1, kmstest_pipe_name(prim_mode_params.pipe));
 
@@ -2721,7 +2769,8 @@ static void plane_fbc_rte_subtest(const struct test_mode *t)
 	do_assertions(ASSERT_FBC_DISABLED | DONT_ASSERT_CRC);
 
 	igt_output_override_mode(prim_mode_params.output, &prim_mode_params.mode);
-	igt_output_set_pipe(prim_mode_params.output, prim_mode_params.pipe);
+	igt_output_set_crtc(prim_mode_params.output,
+			    igt_crtc_for_pipe(prim_mode_params.output->display, prim_mode_params.pipe));
 
 	wanted_crc = &blue_crcs[t->format].crc;
 
@@ -2939,6 +2988,9 @@ static bool format_is_valid(int feature_flags,
 		return true;
 	case FORMAT_RGB101010:
 		return false;
+	case FORMAT_ARGB161616F:
+	case FORMAT_ABGR161616F:
+		return true;
 	default:
 		igt_assert(false);
 	}
@@ -3112,7 +3164,8 @@ static void page_flip_for_params(struct modeset_params *params,
 
 	switch (type) {
 	case FLIP_PAGEFLIP:
-		rc = drmModePageFlip(drm.fd, drm.display.pipes[params->pipe].crtc_id,
+		rc = drmModePageFlip(drm.fd,
+				     igt_crtc_for_pipe(&drm.display, params->pipe)->crtc_id,
 				     params->primary.fb->fb_id,
 				     DRM_MODE_PAGE_FLIP_EVENT, NULL);
 		igt_assert_eq(rc, 0);
@@ -3724,7 +3777,9 @@ static void stridechange_subtest(const struct test_mode *t)
 	 * Try to set a new stride. with the page flip api. This is allowed
 	 * with the atomic page flip helper, but not with the legacy page flip.
 	 */
-	rc = drmModePageFlip(drm.fd, drm.display.pipes[params->pipe].crtc_id, new_fb->fb_id, 0, NULL);
+	rc = drmModePageFlip(drm.fd,
+			     igt_crtc_for_pipe(&drm.display, params->pipe)->crtc_id,
+			     new_fb->fb_id, 0, NULL);
 	igt_assert(rc == -EINVAL || rc == 0);
 	do_assertions(rc ? 0 : DONT_ASSERT_FBC_STATUS);
 }
@@ -4007,6 +4062,10 @@ static const char *format_str(enum pixel_format format)
 		return "rgb565";
 	case FORMAT_RGB101010:
 		return "rgb101010";
+	case FORMAT_ARGB161616F:
+		return "argb161616f";
+	case FORMAT_ABGR161616F:
+		return "abgr161616f";
 	default:
 		igt_assert(false);
 	}
@@ -4090,8 +4149,8 @@ struct option long_options[] = {
 int igt_main_args("", long_options, help_str, opt_handler, NULL)
 {
 	struct test_mode t;
-	enum pipe pipe;
 	igt_output_t *output;
+	igt_crtc_t *crtc;
 
 	igt_fixture() {
 		setup_drm();
@@ -4166,25 +4225,25 @@ int igt_main_args("", long_options, help_str, opt_handler, NULL)
 			igt_skip_on_f((IS_BATTLEMAGE(drm.devid) && t.feature == FEATURE_FBC),
 				      "FBC isn't supported on BMG\n");
 
-			for_each_pipe(&drm.display, pipe) {
-				if (pipe == default_pipe) {
-					igt_info("pipe-%s: FBC validated in other subtest\n", kmstest_pipe_name(pipe));
+			for_each_crtc(&drm.display, crtc) {
+				if (crtc->pipe == default_pipe) {
+					igt_info("pipe-%s: FBC validated in other subtest\n", igt_crtc_name(crtc));
 					continue;
 				}
 
-				if (!intel_fbc_supported_on_chipset(drm.fd, pipe)) {
-					igt_info("Can't test FBC: not supported on pipe-%s\n", kmstest_pipe_name(pipe));
+				if (!intel_fbc_supported_on_chipset(drm.fd, crtc->pipe)) {
+					igt_info("Can't test FBC: not supported on pipe-%s\n", igt_crtc_name(crtc));
 					continue;
 				}
 
 				pipe_crc = NULL;
 				setup_crcs();
 
-				for_each_valid_output_on_pipe(&drm.display, pipe, output) {
-					init_mode_params(&prim_mode_params, output, pipe);
+				for_each_valid_output_on_pipe(&drm.display, crtc->pipe, output) {
+					init_mode_params(&prim_mode_params, output, crtc->pipe);
 					setup_fbc();
 
-					igt_dynamic_f("pipe-%s-%s", kmstest_pipe_name(pipe),
+					igt_dynamic_f("pipe-%s-%s", igt_crtc_name(crtc),
 						      igt_output_name(output))
 						rte_subtest(&t);
 
@@ -4353,6 +4412,9 @@ int igt_main_args("", long_options, help_str, opt_handler, NULL)
 				      format_str(t.format),
 				      igt_draw_get_method_name(t.method))
 			{
+				if (t.format == FORMAT_ARGB161616F ||
+				    t.format == FORMAT_ABGR161616F)
+					igt_require(drm.display_ver >= 35);
 				igt_require(igt_draw_supports_method(drm.fd, t.method));
 				format_draw_subtest(&t);
 			}

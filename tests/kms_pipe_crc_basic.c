@@ -131,6 +131,7 @@ static void test_read_crc(data_t *data, enum pipe pipe,
 			  igt_output_t *output, unsigned flags)
 {
 	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
 	igt_plane_t *primary;
 	drmModeModeInfo *mode;
 	igt_crc_t *crcs = NULL;
@@ -138,7 +139,7 @@ static void test_read_crc(data_t *data, enum pipe pipe,
 
 	igt_display_reset(display);
 
-	igt_output_set_pipe(output, pipe);
+	igt_output_set_crtc(output, crtc);
 	mode = igt_output_get_mode(output);
 
 	primary = igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY);
@@ -167,13 +168,13 @@ static void test_read_crc(data_t *data, enum pipe pipe,
 		if (flags & TEST_NONBLOCK) {
 			igt_pipe_crc_t *pipe_crc;
 
-			pipe_crc = igt_pipe_crc_new_nonblock(data->drm_fd, pipe,
+			pipe_crc = igt_crtc_crc_new_nonblock(crtc,
 							     IGT_PIPE_CRC_SOURCE_AUTO);
-			igt_wait_for_vblank(data->drm_fd, display->pipes[pipe].crtc_offset);
+			igt_wait_for_vblank(crtc);
 			igt_pipe_crc_start(pipe_crc);
 
-			igt_wait_for_vblank_count(data->drm_fd,
-					display->pipes[pipe].crtc_offset, N_CRCS);
+			igt_wait_for_vblank_count(crtc,
+						  N_CRCS);
 			n_crcs = igt_pipe_crc_get_crcs(pipe_crc, N_CRCS+1, &crcs);
 			igt_pipe_crc_stop(pipe_crc);
 			igt_pipe_crc_free(pipe_crc);
@@ -183,7 +184,7 @@ static void test_read_crc(data_t *data, enum pipe pipe,
 		} else {
 			igt_pipe_crc_t *pipe_crc;
 
-			pipe_crc = igt_pipe_crc_new(data->drm_fd, pipe,
+			pipe_crc = igt_crtc_crc_new(crtc,
 						    IGT_PIPE_CRC_SOURCE_AUTO);
 			igt_pipe_crc_start(pipe_crc);
 
@@ -219,7 +220,7 @@ static void test_read_crc(data_t *data, enum pipe pipe,
 	}
 
 	/* Clean-up */
-	igt_output_set_pipe(output, PIPE_NONE);
+	igt_output_set_crtc(output, NULL);
 	igt_plane_set_fb(primary, NULL);
 	igt_display_commit(display);
 }
@@ -238,6 +239,7 @@ static void test_compare_crc(data_t *data, enum pipe pipe, igt_output_t *output,
 			     uint32_t plane_format)
 {
 	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
 	igt_plane_t *primary;
 	drmModeModeInfo *mode;
 	igt_crc_t ref_crc, crc;
@@ -245,7 +247,7 @@ static void test_compare_crc(data_t *data, enum pipe pipe, igt_output_t *output,
 	struct igt_fb fb0, fb1;
 
 	igt_display_reset(display);
-	igt_output_set_pipe(output, pipe);
+	igt_output_set_crtc(output, crtc);
 
 	mode = igt_output_get_mode(output);
 
@@ -268,7 +270,7 @@ static void test_compare_crc(data_t *data, enum pipe pipe, igt_output_t *output,
 	igt_plane_set_fb(primary, &fb0);
 	igt_display_commit(display);
 
-	pipe_crc = igt_pipe_crc_new(data->drm_fd, pipe,
+	pipe_crc = igt_crtc_crc_new(crtc,
 				    IGT_PIPE_CRC_SOURCE_AUTO);
 	igt_pipe_crc_collect_crc(pipe_crc, &ref_crc);
 
@@ -282,7 +284,7 @@ static void test_compare_crc(data_t *data, enum pipe pipe, igt_output_t *output,
 	/* Clean-up */
 	igt_pipe_crc_free(pipe_crc);
 	igt_plane_set_fb(primary, NULL);
-	igt_output_set_pipe(output, PIPE_NONE);
+	igt_output_set_crtc(output, NULL);
 	igt_display_commit(display);
 
 	igt_remove_fb(data->drm_fd, &fb0);
@@ -293,16 +295,17 @@ static void test_disable_crc_after_crtc(data_t *data, enum pipe pipe,
 					igt_output_t *output)
 {
 	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
 	igt_pipe_crc_t *pipe_crc;
 	drmModeModeInfo *mode;
 	igt_crc_t crc[2];
 	igt_plane_t *primary;
 
-	pipe_crc = igt_pipe_crc_new(data->drm_fd, pipe,
+	pipe_crc = igt_crtc_crc_new(crtc,
 				    IGT_PIPE_CRC_SOURCE_AUTO);
 
 	igt_display_reset(display);
-	igt_output_set_pipe(output, pipe);
+	igt_output_set_crtc(output, crtc);
 
 	mode = igt_output_get_mode(output);
 	igt_create_color_fb(data->drm_fd,
@@ -330,7 +333,7 @@ static void test_disable_crc_after_crtc(data_t *data, enum pipe pipe,
 	/* Clean-up */
 	igt_pipe_crc_free(pipe_crc);
 	igt_plane_set_fb(primary, NULL);
-	igt_output_set_pipe(output, PIPE_NONE);
+	igt_output_set_crtc(output, NULL);
 	igt_display_commit(display);
 	igt_remove_fb(data->drm_fd, &data->fb);
 }
@@ -342,10 +345,10 @@ static bool pipe_output_combo_valid(igt_display_t *display,
 
 	igt_display_reset(display);
 
-	igt_output_set_pipe(output, pipe);
+	igt_output_set_crtc(output, igt_crtc_for_pipe(display, pipe));
 	if (!intel_pipe_output_combo_valid(display))
 		ret = false;
-	igt_output_set_pipe(output, PIPE_NONE);
+	igt_output_set_crtc(output, NULL);
 
 	return ret;
 }
@@ -370,8 +373,8 @@ const char *help_str =
 
 int igt_main_args("e", NULL, help_str, opt_handler, NULL)
 {
-	enum pipe pipe;
 	igt_output_t *output;
+	igt_crtc_t *crtc;
 	struct {
 		const char *name;
 		unsigned flags;
@@ -407,8 +410,8 @@ int igt_main_args("e", NULL, help_str, opt_handler, NULL)
 		data.debugfs = igt_debugfs_dir(data.drm_fd);
 
 		/* Get active pipes. */
-		for_each_pipe(&data.display, pipe)
-			active_pipes[last_pipe++] = pipe;
+		for_each_crtc(&data.display, crtc)
+			active_pipes[last_pipe++] = crtc->pipe;
 		last_pipe--;
 	}
 
@@ -419,18 +422,23 @@ int igt_main_args("e", NULL, help_str, opt_handler, NULL)
 	for (i = 0; i < ARRAY_SIZE(tests); i++) {
 		igt_describe(tests[i].desc);
 		igt_subtest_with_dynamic(tests[i].name) {
-			for_each_pipe_with_single_output(&data.display, pipe, output) {
-				if (simulation_constraint(pipe))
+			for_each_crtc_with_single_output(&data.display, crtc,
+							 output) {
+				if (simulation_constraint(crtc->pipe))
 					continue;
 
-				if(!pipe_output_combo_valid(&data.display, pipe, output))
+				if(!pipe_output_combo_valid(&data.display, crtc->pipe, output))
 					continue;
 
-				igt_dynamic_f("pipe-%s-%s", kmstest_pipe_name(pipe), output->name) {
+				igt_dynamic_f("pipe-%s-%s",
+					      igt_crtc_name(crtc),
+					      output->name) {
 					if (tests[i].flags & TEST_SUSPEND) {
 						enum igt_suspend_test test = SUSPEND_TEST_NONE;
 
-						test_read_crc(&data, pipe, output, 0);
+						test_read_crc(&data,
+							      crtc->pipe,
+							      output, 0);
 
 						/* rtcwake cmd is not supported on MTK devices */
 						if (is_mtk_device(data.drm_fd))
@@ -439,17 +447,26 @@ int igt_main_args("e", NULL, help_str, opt_handler, NULL)
 						igt_system_suspend_autoresume(SUSPEND_STATE_MEM,
 									      test);
 
-						test_read_crc(&data, pipe, output, 0);
+						test_read_crc(&data,
+							      crtc->pipe,
+							      output, 0);
 					} else if (tests[i].flags & TEST_HANG) {
 						igt_hang_t hang = igt_allow_hang(data.drm_fd, 0, 0);
 
-						test_read_crc(&data, pipe, output, 0);
+						test_read_crc(&data,
+							      crtc->pipe,
+							      output, 0);
 						igt_force_gpu_reset(data.drm_fd);
-						test_read_crc(&data, pipe, output, 0);
+						test_read_crc(&data,
+							      crtc->pipe,
+							      output, 0);
 
 						igt_disallow_hang(data.drm_fd, hang);
 					} else {
-						test_read_crc(&data, pipe, output, tests[i].flags);
+						test_read_crc(&data,
+							      crtc->pipe,
+							      output,
+							      tests[i].flags);
 					}
 				}
 			}
@@ -459,43 +476,49 @@ int igt_main_args("e", NULL, help_str, opt_handler, NULL)
 	igt_describe("Check that disabling CRCs on a CRTC after having disabled the CRTC "
 		     "does not cause issues.");
 	igt_subtest_with_dynamic("disable-crc-after-crtc") {
-		for_each_pipe_with_single_output(&data.display, pipe, output) {
-			if (simulation_constraint(pipe))
+		for_each_crtc_with_single_output(&data.display, crtc, output) {
+			if (simulation_constraint(crtc->pipe))
 				continue;
 
-			if(!pipe_output_combo_valid(&data.display, pipe, output))
+			if(!pipe_output_combo_valid(&data.display, crtc->pipe, output))
 				continue;
 
-			igt_dynamic_f("pipe-%s-%s", kmstest_pipe_name(pipe), output->name)
-				test_disable_crc_after_crtc(&data, pipe, output);
+			igt_dynamic_f("pipe-%s-%s", igt_crtc_name(crtc),
+				      output->name)
+				test_disable_crc_after_crtc(&data, crtc->pipe,
+							    output);
 		}
 	}
 
 	igt_describe("Basic sanity check for CRC mismatches with XR24 format");
 	igt_subtest_with_dynamic("compare-crc-sanitycheck-xr24") {
-		for_each_pipe_with_single_output(&data.display, pipe, output) {
-			if (simulation_constraint(pipe))
+		for_each_crtc_with_single_output(&data.display, crtc, output) {
+			if (simulation_constraint(crtc->pipe))
 				continue;
 
-			if(!pipe_output_combo_valid(&data.display, pipe, output))
+			if(!pipe_output_combo_valid(&data.display, crtc->pipe, output))
 				continue;
 
-			igt_dynamic_f("pipe-%s-%s", kmstest_pipe_name(pipe), output->name)
-				test_compare_crc(&data, pipe, output, DRM_FORMAT_XRGB8888);
+			igt_dynamic_f("pipe-%s-%s", igt_crtc_name(crtc),
+				      output->name)
+				test_compare_crc(&data, crtc->pipe, output,
+						 DRM_FORMAT_XRGB8888);
 		}
 	}
 
 	igt_describe("Basic sanity check for CRC mismatches with NV12 format");
 	igt_subtest_with_dynamic("compare-crc-sanitycheck-nv12") {
-		for_each_pipe_with_single_output(&data.display, pipe, output) {
-			if (simulation_constraint(pipe))
+		for_each_crtc_with_single_output(&data.display, crtc, output) {
+			if (simulation_constraint(crtc->pipe))
 				continue;
 
-			if(!pipe_output_combo_valid(&data.display, pipe, output))
+			if(!pipe_output_combo_valid(&data.display, crtc->pipe, output))
 				continue;
 
-			igt_dynamic_f("pipe-%s-%s", kmstest_pipe_name(pipe), output->name)
-				test_compare_crc(&data, pipe, output, DRM_FORMAT_NV12);
+			igt_dynamic_f("pipe-%s-%s", igt_crtc_name(crtc),
+				      output->name)
+				test_compare_crc(&data, crtc->pipe, output,
+						 DRM_FORMAT_NV12);
 		}
 	}
 

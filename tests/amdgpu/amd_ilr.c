@@ -41,7 +41,7 @@ typedef struct {
 	igt_plane_t *primary;
 	igt_output_t *output;
 	igt_fb_t fb;
-	igt_pipe_t *pipe;
+	igt_crtc_t *crtc;
 	igt_pipe_crc_t *pipe_crc;
 	igt_crc_t crc_dprx;
 	enum pipe pipe_id;
@@ -73,7 +73,7 @@ static void set_all_output_pipe_to_none(data_t *data)
 	igt_output_t *output;
 
 	for_each_connected_output(&data->display, output) {
-		igt_output_set_pipe(output, PIPE_NONE);
+		igt_output_set_crtc(output, NULL);
 	}
 
 	igt_display_commit_atomic(&data->display, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
@@ -81,15 +81,16 @@ static void set_all_output_pipe_to_none(data_t *data)
 
 static void test_init(data_t *data, igt_output_t *output)
 {
-	enum pipe pipe;
+	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc;
 
 	igt_require(output->config.connector->count_modes >= 1);
 
 	set_all_output_pipe_to_none(data);
 
-	for_each_pipe(&data->display, pipe) {
-		if (igt_pipe_connector_valid(pipe, output)) {
-			data->pipe_id = pipe;
+	for_each_crtc(&data->display, crtc) {
+		if (igt_pipe_connector_valid(crtc->pipe, output)) {
+			data->pipe_id = crtc->pipe;
 			break;
 		}
 	}
@@ -98,12 +99,13 @@ static void test_init(data_t *data, igt_output_t *output)
 
 	igt_require(data->pipe_id != PIPE_NONE);
 
-	data->pipe = &data->display.pipes[data->pipe_id];
+	data->crtc = igt_crtc_for_pipe(display, data->pipe_id);
 
-	data->pipe_crc = igt_pipe_crc_new(data->drm_fd, data->pipe_id,
+	data->pipe_crc = igt_crtc_crc_new(data->crtc,
 					  AMDGPU_PIPE_CRC_SOURCE_DPRX);
 
-	igt_output_set_pipe(output, data->pipe_id);
+	igt_output_set_crtc(output,
+			    data->crtc);
 
 	data->primary = igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY);
 }
@@ -180,8 +182,7 @@ static void test_ilr_policy(data_t *data, igt_output_t *output)
 		/* Secondly check trained BW is sufficient.
 		 * If BW is insufficient, crc retrieving will timeout
 		 */
-		igt_wait_for_vblank_count(data->drm_fd,
-					data->pipe->crtc_offset, 10);
+		igt_wait_for_vblank_count(data->crtc, 10);
 
 		igt_pipe_crc_collect_crc(data->pipe_crc, &data->crc_dprx);
 		crc_str = igt_crc_to_string(&data->crc_dprx);

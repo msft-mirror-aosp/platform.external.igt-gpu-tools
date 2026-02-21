@@ -39,17 +39,17 @@ static void make_display(igt_display_t *display)
 }
 
 static bool get_output(igt_display_t *display,
-		       enum pipe *pipe, igt_output_t **output)
+		       igt_crtc_t **crtc, igt_output_t **output)
 {
-	igt_info("Display %p has %d pipes\n", display, display->n_pipes);
-	for (int i = 0; i < display->n_pipes; ++i)
+	igt_info("Display %p has %d crtcs\n", display, display->n_crtcs);
+	for (int i = 0; i < display->n_crtcs; ++i)
 	{
 		igt_info("Pipe %d (crtc %u) has %d planes\n",
-			 i, display->pipes[i].crtc_id,
-			 display->pipes[i].n_planes);
+			 i, display->crtcs[i].crtc_id,
+			 display->crtcs[i].n_planes);
 	}
 
-	for_each_pipe_with_valid_output(display, *pipe, *output)
+	for_each_crtc_with_valid_output(display, *crtc, *output)
 	{
 		/* we are happy with the first one */
 		return true;
@@ -58,32 +58,29 @@ static bool get_output(igt_display_t *display,
 	return false;
 }
 
-static void get_pipe(igt_display_t *display,
-		     igt_pipe_t **p, igt_output_t **output)
+static void get_crtc(igt_display_t *display,
+		     igt_crtc_t **crtc, igt_output_t **output)
 {
-	enum pipe pipe_idx = PIPE_NONE;
 	*output = NULL;
-	igt_require(get_output(display, &pipe_idx, output));
+	igt_require(get_output(display, crtc, output));
 	igt_info("Using output id %u, name %s\n",
 		 (*output)->id, (*output)->name);
 
-	/* I'd love to call this 'pipe' but pipe(2) is in the way */
-	*p = &display->pipes[pipe_idx];
-	igt_require(*p);
+	igt_require(*crtc);
 
-	igt_info("Chosen pipe (crtc %u) has %d planes\n",
-		 (*p)->crtc_id, (*p)->n_planes);
+	igt_info("Chosen crtc %u has %d planes\n",
+		 (*crtc)->pipe, (*crtc)->n_planes);
 }
 
-static void prepare(igt_display_t *display, igt_pipe_t *p, igt_output_t *output)
+static void prepare(igt_display_t *display, igt_crtc_t *c, igt_output_t *output)
 {
 	igt_display_reset(display);
-	igt_output_set_pipe(output, p->pipe);
+	igt_output_set_crtc(output, c);
 }
 
-static igt_plane_t *plane_for_index(igt_pipe_t *p, size_t index)
+static igt_plane_t *plane_for_index(igt_crtc_t *c, size_t index)
 {
-	return &p->planes[index];
+	return &c->planes[index];
 }
 
 struct histogram
@@ -167,7 +164,7 @@ static void info_timestamp(const char *text)
 	igt_debug("%ld: %s\n", ts.tv_usec, text);
 }
 
-static void flip_overlays(igt_pipe_t *p, struct igt_fb **fb_sets,
+static void flip_overlays(igt_crtc_t *c, struct igt_fb **fb_sets,
 			  const struct tuning *tuning,
 			  size_t iter)
 {
@@ -176,19 +173,19 @@ static void flip_overlays(igt_pipe_t *p, struct igt_fb **fb_sets,
 
 	for (size_t i = 0; i < tuning->num_fbs; ++i)
 	{
-		igt_plane_t *plane = plane_for_index(p, i);
+		igt_plane_t *plane = plane_for_index(c, i);
 		igt_plane_set_prop_value(plane, IGT_PLANE_ZPOS, i);
 		igt_plane_set_fb(plane, &fbs[i]);
 	}
 
-	igt_pipe_obj_set_prop_value(p, IGT_CRTC_ACTIVE, 1);
+	igt_crtc_set_prop_value(c, IGT_CRTC_ACTIVE, 1);
 
 	info_timestamp("start commit");
-	igt_display_commit2(p->display, COMMIT_ATOMIC);
+	igt_display_commit2(c->display, COMMIT_ATOMIC);
 	info_timestamp("end commit");
 }
 
-static void repeat_flip(igt_pipe_t *p, struct igt_fb **fb_sets,
+static void repeat_flip(igt_crtc_t *c, struct igt_fb **fb_sets,
 			const struct tuning *tuning)
 {
 	struct histogram h;
@@ -197,7 +194,7 @@ static void repeat_flip(igt_pipe_t *p, struct igt_fb **fb_sets,
 	for (size_t iter = 0; iter < tuning->num_iterations; ++iter)
 	{
 		igt_debug("Iteration %zu\n", iter);
-		flip_overlays(p, fb_sets, tuning, iter);
+		flip_overlays(c, fb_sets, tuning, iter);
 		histogram_update(&h);
 	}
 
@@ -205,19 +202,19 @@ static void repeat_flip(igt_pipe_t *p, struct igt_fb **fb_sets,
 
 	for (size_t i = 0; i < tuning->num_fbs; ++i)
 	{
-		igt_plane_t *plane = plane_for_index(p, i);
+		igt_plane_t *plane = plane_for_index(c, i);
 		igt_plane_set_fb(plane, NULL);
 	}
 
 	igt_debug("About to flip with no fbs\n");
 
-	igt_display_commit2(p->display, COMMIT_ATOMIC);
-	igt_wait_for_vblank(p->display->drm_fd, p->pipe);
+	igt_display_commit2(c->display, COMMIT_ATOMIC);
+	igt_wait_for_vblank(c);
 
 	igt_debug("About to deactivate the crtc\n");
 
-	igt_pipe_obj_set_prop_value(p, IGT_CRTC_ACTIVE, 0);
-	igt_display_commit2(p->display, COMMIT_ATOMIC);
+	igt_crtc_set_prop_value(c, IGT_CRTC_ACTIVE, 0);
+	igt_display_commit2(c->display, COMMIT_ATOMIC);
 
 	histogram_print(&h);
 	histogram_cleanup(&h);
@@ -248,9 +245,9 @@ static int get_num_planes(igt_display_t *display)
 	return ret;
 }
 
-static int get_max_zpos(igt_display_t *display, igt_pipe_t *p)
+static int get_max_zpos(igt_display_t *display, igt_crtc_t *c)
 {
-	igt_plane_t *primary = plane_for_index(p, 0);
+	igt_plane_t *primary = plane_for_index(c, 0);
 
 	drmModePropertyPtr zpos_prop = NULL;
 
@@ -270,7 +267,7 @@ static int get_max_zpos(igt_display_t *display, igt_pipe_t *p)
 	}
 }
 
-size_t get_num_fbs(igt_display_t *display, igt_pipe_t *p)
+size_t get_num_fbs(igt_display_t *display, igt_crtc_t *c)
 {
 	const char *NUM_FBS = getenv("NUM_FBS");
 
@@ -281,7 +278,7 @@ size_t get_num_fbs(igt_display_t *display, igt_pipe_t *p)
 	else
 	{
 		const int num_planes = get_num_planes(display);
-		const int max_zpos = get_max_zpos(display, p);
+		const int max_zpos = get_max_zpos(display, c);
 
 		if (max_zpos >= 0 && max_zpos + 1 < num_planes)
 		{
@@ -328,7 +325,7 @@ drmModeModeInfoPtr get_peak_mode(igt_output_t *output)
 }
 
 void get_tuning(struct tuning *tuning,
-		igt_display_t *display, igt_pipe_t *p,
+		igt_display_t *display, igt_crtc_t *c,
 		igt_output_t *output)
 {
 	tuning->mode = get_peak_mode(output);
@@ -337,7 +334,7 @@ void get_tuning(struct tuning *tuning,
 	if (igt_output_get_mode(output) != tuning->mode)
 	{
 		igt_output_override_mode(output, tuning->mode);
-		igt_display_commit2(p->display, COMMIT_ATOMIC);
+		igt_display_commit2(c->display, COMMIT_ATOMIC);
 	}
 
 	igt_info("Chosen mode:\n");
@@ -346,7 +343,7 @@ void get_tuning(struct tuning *tuning,
 	tuning->num_iterations = 1000;
 	tuning->num_fb_sets = 2;
 
-	tuning->num_fbs = get_num_fbs(display, p);
+	tuning->num_fbs = get_num_fbs(display, c);
 	igt_require(tuning->num_fbs <= max_num_fbs);
 
 	drmModeModeInfo *mode = igt_output_get_mode(output);
@@ -361,18 +358,18 @@ void get_tuning(struct tuning *tuning,
 		(size_t)atoi(FB_HEIGHT) :
 		mode->vdisplay;
 
-	igt_display_commit2(p->display, COMMIT_ATOMIC);
+	igt_display_commit2(c->display, COMMIT_ATOMIC);
 
 	struct igt_fb fb;
-	create_dumb_fb(p->display, requested_fb_width, requested_fb_height, &fb);
+	create_dumb_fb(c->display, requested_fb_width, requested_fb_height, &fb);
 
 	for (size_t i = 0; i < tuning->num_fbs; ++i)
 	{
-		igt_plane_t *const plane = plane_for_index(p, i);
+		igt_plane_t *const plane = plane_for_index(c, i);
 		igt_plane_set_prop_value(plane, IGT_PLANE_ZPOS, i);
 		igt_plane_set_fb(plane, &fb);
 
-		int ret = igt_display_try_commit_atomic(p->display,
+		int ret = igt_display_try_commit_atomic(c->display,
 							DRM_MODE_ATOMIC_TEST_ONLY,
 							NULL);
 
@@ -394,7 +391,7 @@ void get_tuning(struct tuning *tuning,
 		igt_plane_set_fb(plane, NULL);
 	}
 
-	igt_remove_fb(p->display->drm_fd, &fb);
+	igt_remove_fb(c->display->drm_fd, &fb);
 }
 
 int igt_main()
@@ -402,9 +399,9 @@ int igt_main()
 	igt_display_t display = {};
 	make_display(&display);
 
-	igt_pipe_t *p = NULL;
+	igt_crtc_t *c = NULL;
 	igt_output_t *output = NULL;
-	get_pipe(&display, &p, &output);
+	get_crtc(&display, &c, &output);
 
 	do_or_die(drmSetClientCap(
 		display.drm_fd,
@@ -416,14 +413,14 @@ int igt_main()
 		DRM_CLIENT_CAP_UNIVERSAL_PLANES,
 		1));
 
-	igt_pipe_refresh(&display, p->pipe, true);
+	igt_crtc_refresh(c, true);
 
-	prepare(&display, p, output);
+	prepare(&display, c, output);
 
 	drmModeModeInfoPtr orig_mode = igt_output_get_mode(output);
 
 	struct tuning tuning;
-	get_tuning(&tuning, &display, p, output);
+	get_tuning(&tuning, &display, c, output);
 
 	{
 		struct igt_fb **fb_sets =
@@ -443,7 +440,7 @@ int igt_main()
 		}
 
 
-		repeat_flip(p, fb_sets, &tuning);
+		repeat_flip(c, fb_sets, &tuning);
 
 		for (size_t i = 0; i < tuning.num_fb_sets; ++i)
 		{

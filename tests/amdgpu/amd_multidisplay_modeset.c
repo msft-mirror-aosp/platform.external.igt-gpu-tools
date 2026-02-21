@@ -134,7 +134,7 @@ static void set_all_output_pipe_to_none(struct data_t *data)
 	igt_output_t *output;
 
 	for_each_connected_output(&data->display, output) {
-		igt_output_set_pipe(output, PIPE_NONE);
+		igt_output_set_crtc(output, NULL);
 	}
 
 	igt_display_commit_atomic(&data->display,
@@ -144,6 +144,7 @@ static void set_all_output_pipe_to_none(struct data_t *data)
 static void test_init(struct data_t *data)
 {
 	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc;
 	int i;
 	bool ret = false;
 	uint8_t dpcd_246h = 0;
@@ -151,19 +152,17 @@ static void test_init(struct data_t *data)
 	for (i = 0; i < MAX_PIPES; i++)
 		data->pipe_crc_dprx[i] = NULL;
 
-	for_each_pipe(display, i) {
+	for_each_crtc(display, crtc) {
 		igt_output_t *output;
-		igt_pipe_t *pipes;
 
 		/* For each valid pipe, get one connected display.
 		 * This will let displays connected to MST hub be
 		 * tested
 		 */
-		output = igt_get_single_output_for_pipe(display, i);
-		pipes = &display->pipes[i];
-		data->primary[i] = igt_pipe_get_plane_type(
-			&data->display.pipes[i], DRM_PLANE_TYPE_PRIMARY);
-		data->output[i] = output;
+		output = igt_get_single_output_for_pipe(display, crtc->pipe);
+		data->primary[crtc->pipe] = igt_crtc_get_plane_type(crtc,
+							   DRM_PLANE_TYPE_PRIMARY);
+		data->output[crtc->pipe] = output;
 
 		/* dp rx crc only available for eDP, SST DP, MST DP */
 		if ((output->config.connector->connector_type ==
@@ -174,25 +173,24 @@ static void test_init(struct data_t *data)
 			ret = dpcd_read_byte(data->fd, output->config.connector,
 				DPCD_TEST_SINK_MISC, &dpcd_246h);
 			if (ret && ((dpcd_246h & 0x20) != 0x0))
-				data->pipe_crc_dprx[i] = igt_pipe_crc_new(
-					data->fd, pipes->pipe,
-					AMDGPU_PIPE_CRC_SOURCE_DPRX);
+				data->pipe_crc_dprx[crtc->pipe] = igt_crtc_crc_new(crtc,
+									  AMDGPU_PIPE_CRC_SOURCE_DPRX);
 		}
 
-		data->pipe_crc_otg[i] = igt_pipe_crc_new(data->fd, pipes->pipe,
-						IGT_PIPE_CRC_SOURCE_AUTO);
+		data->pipe_crc_otg[crtc->pipe] = igt_crtc_crc_new(crtc,
+							 IGT_PIPE_CRC_SOURCE_AUTO);
 		/* disable eDP PSR */
-		if (data->output[i]->config.connector->connector_type ==
+		if (data->output[crtc->pipe]->config.connector->connector_type ==
 				DRM_MODE_CONNECTOR_eDP) {
 			kmstest_set_connector_dpms(display->drm_fd,
-				data->output[i]->config.connector,
+				data->output[crtc->pipe]->config.connector,
 				DRM_MODE_DPMS_OFF);
 
 			igt_amd_disallow_edp_enter_psr(data->fd,
-				data->output[i]->name, true);
+				data->output[crtc->pipe]->name, true);
 
 			kmstest_set_connector_dpms(display->drm_fd,
-				data->output[i]->config.connector,
+				data->output[crtc->pipe]->config.connector,
 				DRM_MODE_DPMS_ON);
 		}
 	}
@@ -204,12 +202,12 @@ static void test_init(struct data_t *data)
 static void test_fini(struct data_t *data)
 {
 	igt_display_t *display = &data->display;
-	int i = 0;
+	igt_crtc_t *crtc;
 
-	for_each_pipe(display, i) {
-		if (data->pipe_crc_dprx[i])
-			igt_pipe_crc_free(data->pipe_crc_dprx[i]);
-		igt_pipe_crc_free(data->pipe_crc_otg[i]);
+	for_each_crtc(display, crtc) {
+		if (data->pipe_crc_dprx[crtc->pipe])
+			igt_pipe_crc_free(data->pipe_crc_dprx[crtc->pipe]);
+		igt_pipe_crc_free(data->pipe_crc_otg[crtc->pipe]);
 	}
 
 	igt_display_reset(display);
@@ -235,7 +233,7 @@ static void multiple_display_test(struct data_t *data, enum sub_test test_mode)
 
 	igt_info("Connected num_disps:%d\n", num_disps);
 
-	igt_skip_on_f(num_disps > igt_display_get_n_pipes(&data->display) ||
+	igt_skip_on_f(num_disps > igt_display_n_crtcs(&data->display) ||
 			      num_disps > data->display.n_outputs,
 		      "ASIC does not have %d outputs/pipes\n", num_disps);
 
@@ -329,7 +327,8 @@ static void multiple_display_test(struct data_t *data, enum sub_test test_mode)
 					kmode->vdisplay, DRM_FORMAT_XRGB8888,
 					0, (buf + j));
 
-			igt_output_set_pipe(output, j);
+			igt_output_set_crtc(output,
+					    igt_crtc_for_pipe(display, j));
 			igt_plane_set_fb(data->primary[j], (buf + j));
 			j++;
 		}

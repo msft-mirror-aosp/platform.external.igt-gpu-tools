@@ -194,6 +194,12 @@ struct amdgpu_userq_bo {
 	void *ptr;
 };
 
+/* Submission modes for user queues */
+enum uq_submission_mode {
+	UQ_SUBMIT_NORMAL,        /* Full synchronization */
+	UQ_SUBMIT_NO_SYNC,       /* Skip sync for error injection */
+};
+
 #define for_each_test(t, T) for(typeof(*T) *t = T; t->name; t++)
 
 /* set during execution */
@@ -272,6 +278,7 @@ struct amdgpu_ring_context {
 	uint64_t point;
 	bool user_queue;
 	uint64_t time_out;
+	enum uq_submission_mode submit_mode;
 
 	struct drm_amdgpu_info_uq_fw_areas info;
 };
@@ -434,6 +441,11 @@ is_support_page_queue(enum amd_ip_block_type ip_type, const struct pci_addr *pci
 
 int
 find_dri_id_by_pci(const struct pci_addr *pci);
+
+long
+amdgpu_get_ip_schedule_mask(const struct pci_addr *pci, enum amd_ip_block_type ip_type, char *sysfs_path);
+
+bool is_spx_mode(const struct pci_addr *pci);
 
 int
 get_dri_index_from_device(amdgpu_device_handle device, int fd);

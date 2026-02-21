@@ -100,9 +100,11 @@ drmModeModeInfo mode_2_lanes = {
 static int
 disable_pipe(data_t *data, enum pipe pipe, igt_output_t *output)
 {
+	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
 	igt_plane_t *primary;
 
-	igt_output_set_pipe(output, pipe);
+	igt_output_set_crtc(output, crtc);
 	primary = igt_output_get_plane(output, 0);
 	igt_plane_set_fb(primary, NULL);
 	return igt_display_commit(&data->display);
@@ -111,12 +113,14 @@ disable_pipe(data_t *data, enum pipe pipe, igt_output_t *output)
 static int
 set_mode_on_pipe(data_t *data, enum pipe pipe, igt_output_t *output)
 {
+	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
 	igt_plane_t *primary;
 	drmModeModeInfo *mode;
 	struct igt_fb fb;
 	int fb_id;
 
-	igt_output_set_pipe(output, pipe);
+	igt_output_set_crtc(output, crtc);
 
 	mode = igt_output_get_mode(output);
 
@@ -150,19 +154,19 @@ static void
 find_outputs(data_t *data, igt_output_t **output1, igt_output_t **output2)
 {
 	igt_output_t *output;
-	enum pipe pipe;
+	igt_crtc_t *crtc;
 
 	*output1 = NULL;
 	*output2 = NULL;
 
-	for_each_pipe_with_valid_output(&data->display, pipe, output) {
-		if (pipe == PIPE_B && !*output1 && output != *output2)
+	for_each_crtc_with_valid_output(&data->display, crtc, output) {
+		if (crtc->pipe == PIPE_B && !*output1 && output != *output2)
 			*output1 = output;
 
-		if (pipe == PIPE_C && output != *output1 && !*output2)
+		if (crtc->pipe == PIPE_C && output != *output1 && !*output2)
 			*output2 = output;
 
-		igt_output_set_pipe(output, PIPE_NONE);
+		igt_output_set_crtc(output, NULL);
 	}
 
 	igt_skip_on_f(!*output1 || !*output2, "Not enough connected outputs\n");

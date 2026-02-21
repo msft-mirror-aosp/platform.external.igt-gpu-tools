@@ -166,7 +166,7 @@ check_suspend(igt_output_t *output)
 
 static void test_cleanup(igt_display_t *display, igt_output_t *output)
 {
-	igt_output_set_pipe(output, PIPE_NONE);
+	igt_output_set_crtc(output, NULL);
 	igt_display_commit2(display, display->is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY);
 	igt_pm_restore_sata_link_power_management();
 }
@@ -176,14 +176,15 @@ static void test_setup(igt_display_t display, igt_output_t *output)
 	igt_plane_t *primary;
 	drmModeModeInfo *mode;
 	struct igt_fb fb;
-	enum pipe pipe;
+	igt_crtc_t *crtc;
 
 	igt_display_reset(&display);
 
-	for_each_pipe(&display, pipe) {
-		igt_output_set_pipe(output, pipe);
+	for_each_crtc(&display, crtc) {
+		igt_output_set_crtc(output,
+				    crtc);
 		if (!intel_pipe_output_combo_valid(&display)) {
-			igt_output_set_pipe(output, PIPE_NONE);
+			igt_output_set_crtc(output, NULL);
 			continue;
 		}
 		mode = igt_output_get_mode(output);

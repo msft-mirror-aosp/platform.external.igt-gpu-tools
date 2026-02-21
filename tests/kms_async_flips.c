@@ -292,6 +292,7 @@ static void require_overlay_flip_support(data_t *data)
 
 static void test_init(data_t *data)
 {
+	igt_display_t *display = &data->display;
 	drmModeModeInfo *mode;
 
 	igt_display_reset(&data->display);
@@ -299,10 +300,11 @@ static void test_init(data_t *data)
 
 	mode = igt_output_get_mode(data->output);
 
-	data->crtc_id = data->display.pipes[data->pipe].crtc_id;
+	data->crtc_id = igt_crtc_for_pipe(display, data->pipe)->crtc_id;
 	data->refresh_rate = mode->vrefresh;
 
-	igt_output_set_pipe(data->output, data->pipe);
+	igt_output_set_crtc(data->output,
+		            igt_crtc_for_pipe(display, data->pipe));
 
 	data->plane = igt_output_get_plane_type(data->output, DRM_PLANE_TYPE_PRIMARY);
 	if (data->overlay_path)
@@ -554,18 +556,14 @@ static void test_async_flip(data_t *data)
 
 static void wait_for_vblank(data_t *data, unsigned long *vbl_time, unsigned int *seq)
 {
-	drmVBlank wait_vbl;
-	uint32_t pipe_id_flag;
-	int pipe;
-
-	memset(&wait_vbl, 0, sizeof(wait_vbl));
-	pipe = kmstest_get_pipe_from_crtc_id(data->drm_fd, data->crtc_id);
-	pipe_id_flag = kmstest_get_vbl_flag(pipe);
-
-	wait_vbl.request.type = DRM_VBLANK_RELATIVE | pipe_id_flag;
-	wait_vbl.request.sequence = 1;
+	int crtc_index = kmstest_get_crtc_index_from_id(data->drm_fd, data->crtc_id);
+	drmVBlank wait_vbl = {
+		.request.type = DRM_VBLANK_RELATIVE | kmstest_get_vbl_flag(crtc_index),
+		.request.sequence = 1,
+	};
 
 	do_ioctl(data->drm_fd, DRM_IOCTL_WAIT_VBLANK, &wait_vbl);
+
 	*vbl_time = wait_vbl.reply.tval_sec * 1000000 + wait_vbl.reply.tval_usec;
 	*seq = wait_vbl.reply.sequence;
 }
@@ -731,10 +729,10 @@ static void test_invalid(data_t *data)
 
 static void queue_vblank(data_t *data)
 {
-	int pipe = kmstest_get_pipe_from_crtc_id(data->drm_fd, data->crtc_id);
+	int crtc_index = kmstest_get_crtc_index_from_id(data->drm_fd, data->crtc_id);
 	drmVBlank wait_vbl = {
 		.request.type = DRM_VBLANK_RELATIVE | DRM_VBLANK_EVENT |
-			kmstest_get_vbl_flag(pipe),
+			kmstest_get_vbl_flag(crtc_index),
 		.request.sequence = 1,
 		.request.signal = (long)data,
 	};
@@ -830,6 +828,7 @@ static void paint_fb(data_t *data, struct igt_fb *fb,
 
 static void test_crc(data_t *data)
 {
+	igt_display_t *display = &data->display;
 	unsigned int frame = 0;
 	unsigned int start;
 	int ret, width, height;
@@ -853,8 +852,7 @@ static void test_crc(data_t *data)
 			     &data->output->config.connector->connector_id, 1, mode);
 	igt_assert_eq(ret, 0);
 
-	data->pipe_crc = igt_pipe_crc_new(data->drm_fd,
-					  kmstest_get_pipe_from_crtc_id(data->drm_fd, data->crtc_id),
+	data->pipe_crc = igt_crtc_crc_new(igt_crtc_for_pipe(display, kmstest_get_crtc_index_from_id(data->drm_fd, data->crtc_id)),
 					  IGT_PIPE_CRC_SOURCE_AUTO);
 
 	igt_pipe_crc_start(data->pipe_crc);
@@ -907,15 +905,18 @@ static void require_linear_modifier(data_t *data)
 
 static void run_test(data_t *data, void (*test)(data_t *))
 {
+	igt_crtc_t *crtc;
 	igt_display_t *display = &data->display;
 
 	if (data->atomic_path)
 		require_atomic_async_cap(data);
 
-	for_each_pipe_with_valid_output(display, data->pipe, data->output) {
+	for_each_crtc_with_valid_output(display, crtc, data->output) {
+		data->pipe = crtc->pipe;
 		igt_display_reset(display);
 
-		igt_output_set_pipe(data->output, data->pipe);
+		igt_output_set_crtc(data->output,
+				    crtc);
 		if (!intel_pipe_output_combo_valid(display))
 			continue;
 
@@ -926,7 +927,8 @@ static void run_test(data_t *data, void (*test)(data_t *))
 		else
 			data->modifier = default_modifier(data);
 
-		igt_dynamic_f("pipe-%s-%s", kmstest_pipe_name(data->pipe), data->output->name) {
+		igt_dynamic_f("pipe-%s-%s", igt_crtc_name(crtc),
+			      data->output->name) {
 			/*
 			 * FIXME: joiner+async flip is busted currently in KMD.
 			 * Remove this check once the issues are fixed in KMD.
@@ -972,11 +974,13 @@ static bool skip_async_format_mod(data_t *data,
 
 static void run_test_with_async_format_modifiers(data_t *data, void (*test)(data_t *))
 {
+	igt_crtc_t *crtc;
 	struct igt_vec tested_formats;
 
 	igt_vec_init(&tested_formats, sizeof(struct format_mod));
 
-	for_each_pipe_with_valid_output(&data->display, data->pipe, data->output) {
+	for_each_crtc_with_valid_output(&data->display, crtc, data->output) {
+		data->pipe = crtc->pipe;
 		test_init(data);
 
 		igt_assert_f(data->plane->async_format_mod_count > 0,
@@ -993,7 +997,7 @@ static void run_test_with_async_format_modifiers(data_t *data, void (*test)(data
 					   IGT_MODIFIER_FMT " on %s.%u\n",
 					   IGT_FORMAT_ARGS(f.format),
 					   IGT_MODIFIER_ARGS(f.modifier),
-					   kmstest_pipe_name(data->pipe),
+					   igt_crtc_name(crtc),
 					   data->plane->index);
 				continue;
 			}
@@ -1002,7 +1006,7 @@ static void run_test_with_async_format_modifiers(data_t *data, void (*test)(data
 			data->plane_format = f.format;
 			data->async_mod_formats = true;
 
-			igt_dynamic_f("pipe-%s-%s-%s-%s", kmstest_pipe_name(data->pipe),
+			igt_dynamic_f("pipe-%s-%s-%s-%s", igt_crtc_name(crtc),
 				      data->output->name,
 				      igt_fb_modifier_name(data->modifier),
 				      igt_format_str(data->plane_format)) {
@@ -1025,10 +1029,12 @@ static void run_test_with_async_format_modifiers(data_t *data, void (*test)(data
 
 static void run_test_with_modifiers(data_t *data, void (*test)(data_t *))
 {
+	igt_crtc_t *crtc;
 	if (data->atomic_path)
 		require_atomic_async_cap(data);
 
-	for_each_pipe_with_valid_output(&data->display, data->pipe, data->output) {
+	for_each_crtc_with_valid_output(&data->display, crtc, data->output) {
+		data->pipe = crtc->pipe;
 		test_init(data);
 
 		igt_require_f(data->plane->async_format_mod_count > 0,
@@ -1045,7 +1051,7 @@ static void run_test_with_modifiers(data_t *data, void (*test)(data_t *))
 
 			data->modifier = modifier;
 
-			igt_dynamic_f("pipe-%s-%s-%s", kmstest_pipe_name(data->pipe),
+			igt_dynamic_f("pipe-%s-%s-%s", igt_crtc_name(crtc),
 				      data->output->name,
 				      igt_fb_modifier_name(modifier)) {
 				      /*

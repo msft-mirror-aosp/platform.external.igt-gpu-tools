@@ -548,8 +548,11 @@ static bool has_vrr(igt_output_t *output)
 /* Toggles variable refresh rate on the pipe. */
 static void set_vrr_on_pipe(data_t *data, enum pipe pipe, bool enabled)
 {
-	igt_pipe_set_prop_value(&data->display, pipe, IGT_CRTC_VRR_ENABLED,
-				enabled);
+	igt_display_t *display = &data->display;
+	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
+	igt_crtc_set_prop_value(crtc,
+				    IGT_CRTC_VRR_ENABLED,
+				    enabled);
 	igt_display_commit2(&data->display, COMMIT_ATOMIC);
 }
 
@@ -750,7 +753,7 @@ static void init_data(data_t *data, igt_output_t *output)
 static void finish_test(data_t *data, enum pipe pipe, igt_output_t *output)
 {
 	igt_plane_set_fb(data->primary, NULL);
-	igt_output_set_pipe(output, PIPE_NONE);
+	igt_output_set_crtc(output, NULL);
 	igt_output_override_mode(output, NULL);
 	igt_display_commit2(&data->display, COMMIT_ATOMIC);
 
@@ -837,20 +840,24 @@ run_test(data_t *data, uint32_t scene)
 	bool found = false;
 
 	for_each_connected_output(&data->display, output) {
-		enum pipe pipe;
+		igt_crtc_t *crtc;
 
 		if (!has_vrr(output)) {
 			igt_info("%s is not a vrr capable output. Skip it.\n", output->name);
 			continue;
 		}
 
-		for_each_pipe(&data->display, pipe)
-			if (igt_pipe_connector_valid(pipe, output)) {
+		for_each_crtc(&data->display, crtc)
+			if (igt_pipe_connector_valid(crtc->pipe, output)) {
 				igt_display_reset(&data->display);
-				igt_output_set_pipe(output, pipe);
+				igt_output_set_crtc(output,
+						    crtc);
 
-				igt_dynamic_f("pipe-%s-%s", kmstest_pipe_name(pipe), output->name)
-				mode_transition(data, pipe, output, scene);
+				igt_dynamic_f("pipe-%s-%s",
+					      igt_crtc_name(crtc),
+					      output->name)
+				mode_transition(data, crtc->pipe, output,
+						scene);
 				found = true;
 				break;
 			}

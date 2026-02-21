@@ -7,15 +7,15 @@ description: "IGT GPU Tools is a collection of tools for development and testing
 third_party {
   license_type: NOTICE
   last_upgrade_date {
-    year: 2025
-    month: 12
-    day: 15
+    year: 2026
+    month: 2
+    day: 13
   }
   homepage: "https://gitlab.freedesktop.org/drm/igt-gpu-tools"
   identifier {
     type: "Git"
     value: "https://gitlab.freedesktop.org/drm/igt-gpu-tools"
-    version: "79d17ef4ead1affa95b8539e15976d64708b7590"
+    version: "07ca77c0e109f1ec1cd02adafe7eaa5d880aba46"
     primary_source: true
   }
 }

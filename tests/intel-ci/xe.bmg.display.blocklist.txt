@@ -10,7 +10,8 @@ igt@kms_(plane_lowres|frontbuffer_tracking|plane_multiple)@.*tiling-y.*
 igt@kms_flip_scaled_crc@.*(yf|y)tile.*
 igt@kms_async_flips@invalid-async-flip
 igt@kms_addfb_basic@addfb25-y-tiled-small-legacy
-igt@kms_pipe_stress@.*ytiled$
+igt@kms_pipe_stress@stress-xrgb8888-(y|yf)tiled
+igt@kms_plane@pixel-format-(y|yf)-tiled.*
 #########################################
 # Valid skip :- 90/270 rotation is not supported
 ##########################################
@@ -116,6 +117,7 @@ igt@kms_ccs@.*-dg2-.*
 igt@kms_ccs@.*-lnl-.*
 igt@kms_ccs@.*-mtl-.*
 igt@kms_flip_scaled_crc@.*dg2rcccs.*
+igt@kms_plane@pixel-format.*(mtl|dg2).*
 ##########################################
 # Valid skip :- Simulation specific
 ##########################################
@@ -150,6 +152,7 @@ igt@kms_setmode@invalid-clone-exclusive-crtc
 # Valid skip :- For display ver < 20
 ##########################################
 igt@kms_frontbuffer_tracking@plane-fbc-rte
+igt@.*sharpness_filter.*
 #########################################
 # Valid skip :- Unsupported for platform with Wa_16023588340
 #########################################
@@ -168,3 +171,12 @@ igt@kms_big_fb@linear-max-hw-stride.*hflip
 #########################################
 igt@kms_pm_dc@dc5-retention-flops
 #########################################
+# Valid skip : 3D LUT is supported NVL+
+########################################
+igt@kms_color_pipeline@plane-lut3d-green-only
+########################################
+# Valid skip :- For display ver >= 35
+########################################
+igt@kms_frontbuffer_tracking@.*a(bgr|rgb)161616f.*
+igt@kms_flip_scaled_crc@.*linear-reflect-x
+########################################

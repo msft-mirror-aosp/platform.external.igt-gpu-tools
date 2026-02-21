@@ -157,7 +157,7 @@ typedef struct {
 	bool limited;
 	enum pipe pipe_id;
 	struct igt_fb fb[4];
-	igt_pipe_t *pipe;
+	igt_crtc_t *crtc;
 	igt_display_t display;
 	igt_output_t *output;
 	igt_plane_t *plane[4];
@@ -173,9 +173,10 @@ typedef struct {
 
 static void set_filter_strength_on_pipe(data_t *data)
 {
-	igt_pipe_set_prop_value(&data->display, data->pipe_id,
-				IGT_CRTC_SHARPNESS_STRENGTH,
-				data->filter_strength);
+	igt_display_t *display = &data->display;
+	igt_crtc_set_prop_value(igt_crtc_for_pipe(display, data->pipe_id),
+				    IGT_CRTC_SHARPNESS_STRENGTH,
+				    data->filter_strength);
 }
 
 static bool has_scaling_mode(igt_output_t *output)
@@ -330,6 +331,7 @@ static int test_filter_toggle(data_t *data)
 
 static void test_sharpness_filter(data_t *data,  enum test_type type)
 {
+	igt_display_t *display = &data->display;
 	igt_output_t *output = data->output;
 	drmModeModeInfo *mode = data->mode;
 	int height = mode->hdisplay;
@@ -338,7 +340,8 @@ static void test_sharpness_filter(data_t *data,  enum test_type type)
 	igt_pipe_crc_t *pipe_crc = NULL;
 	int ret;
 
-	data->plane[0] = igt_pipe_get_plane_type(data->pipe, DRM_PLANE_TYPE_PRIMARY);
+	data->plane[0] = igt_crtc_get_plane_type(data->crtc,
+						 DRM_PLANE_TYPE_PRIMARY);
 	igt_skip_on_f(!igt_plane_has_format_mod(data->plane[0], data->format, data->modifier),
 		      "No requested format/modifier on pipe %s\n", kmstest_pipe_name(data->pipe_id));
 
@@ -369,7 +372,7 @@ static void test_sharpness_filter(data_t *data,  enum test_type type)
 		ret = igt_display_try_commit2(&data->display, COMMIT_ATOMIC);
 
 	if (type == TEST_FILTER_DPMS || type == TEST_FILTER_SUSPEND) {
-		pipe_crc = igt_pipe_crc_new(data->drm_fd, data->pipe_id,
+		pipe_crc = igt_crtc_crc_new(igt_crtc_for_pipe(display, data->pipe_id),
 					    IGT_PIPE_CRC_SOURCE_AUTO);
 		igt_pipe_crc_collect_crc(pipe_crc, &ref_crc);
 	}
@@ -417,9 +420,9 @@ static void test_sharpness_filter(data_t *data,  enum test_type type)
 	cleanup(data);
 }
 
-static bool has_sharpness_filter(igt_pipe_t *pipe)
+static bool has_sharpness_filter(igt_crtc_t *crtc)
 {
-	return igt_pipe_obj_has_prop(pipe, IGT_CRTC_SHARPNESS_STRENGTH);
+	return igt_crtc_has_prop(crtc, IGT_CRTC_SHARPNESS_STRENGTH);
 }
 
 static void
@@ -427,28 +430,29 @@ run_sharpness_filter_test(data_t *data, enum test_type type)
 {
 	igt_display_t *display = &data->display;
 	igt_output_t *output;
-	enum pipe pipe;
+	igt_crtc_t *crtc;
 	char name[40];
 
 	for_each_connected_output(display, output) {
-		for_each_pipe(display, pipe) {
+		for_each_crtc(display, crtc) {
 			igt_display_reset(display);
 
 			data->output = output;
-			data->pipe_id = pipe;
-			data->pipe = &display->pipes[data->pipe_id];
+			data->pipe_id = crtc->pipe;
+			data->crtc = igt_crtc_for_pipe(display, data->pipe_id);
 			data->mode = igt_output_get_mode(data->output);
 
-			if (!has_sharpness_filter(data->pipe)) {
+			if (!has_sharpness_filter(data->crtc)) {
 				igt_info("%s: Doesn't support IGT_CRTC_SHARPNESS_STRENGTH.\n",
 				kmstest_pipe_name(data->pipe_id));
 				continue;
 			}
 
-			igt_output_set_pipe(data->output, data->pipe_id);
+			igt_output_set_crtc(data->output,
+					    data->crtc);
 
 			if (!intel_pipe_output_combo_valid(display)) {
-				igt_output_set_pipe(data->output, PIPE_NONE);
+				igt_output_set_crtc(data->output, NULL);
 				continue;
 			}
 

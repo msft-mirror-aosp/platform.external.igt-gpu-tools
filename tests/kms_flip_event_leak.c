@@ -97,7 +97,7 @@ static void test(data_t *data, enum pipe pipe, igt_output_t *output)
 	igt_device_set_master(data->drm_fd);
 
 	igt_plane_set_fb(primary, NULL);
-	igt_output_set_pipe(output, PIPE_NONE);
+	igt_output_set_crtc(output, NULL);
 	igt_display_commit(&data->display);
 
 	igt_remove_fb(data->drm_fd, &fb[0]);
@@ -107,7 +107,7 @@ int igt_main()
 {
 	data_t data = {};
 	igt_output_t *output;
-	enum pipe pipe;
+	igt_crtc_t *crtc;
 
 	igt_fixture() {
 		data.drm_fd = drm_open_driver_master(DRIVER_ANY);
@@ -118,15 +118,17 @@ int igt_main()
 	}
 
 	igt_subtest_with_dynamic("basic") {
-		for_each_pipe_with_valid_output(&data.display, pipe, output) {
+		for_each_crtc_with_valid_output(&data.display, crtc, output) {
 			igt_display_reset(&data.display);
 
-			igt_output_set_pipe(output, pipe);
+			igt_output_set_crtc(output,
+					    crtc);
 			if (!intel_pipe_output_combo_valid(&data.display))
 				continue;
 
-			igt_dynamic_f("pipe-%s-%s", kmstest_pipe_name(pipe), igt_output_name(output)) {
-				test(&data, pipe, output);
+			igt_dynamic_f("pipe-%s-%s", igt_crtc_name(crtc),
+				      igt_output_name(output)) {
+				test(&data, crtc->pipe, output);
 			}
 		}
 	}

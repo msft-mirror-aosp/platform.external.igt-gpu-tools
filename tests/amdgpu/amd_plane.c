@@ -44,7 +44,7 @@ typedef struct data {
 	igt_plane_t *overlay[MAX_PIPES];
 	igt_plane_t *overlay2[MAX_PIPES];
         igt_output_t *output[MAX_PIPES];
-        igt_pipe_t *pipe[MAX_PIPES];
+        igt_crtc_t *crtc[MAX_PIPES];
         igt_pipe_crc_t *pipe_crc[MAX_PIPES];
         drmModeModeInfo mode[MAX_PIPES];
         enum pipe pipe_id[MAX_PIPES];
@@ -152,21 +152,24 @@ enum test {
 static void test_init(data_t *data)
 {
 	igt_display_t *display = &data->display;
-	int i, n, max_pipes = display->n_pipes;
+	int i, n, max_pipes = igt_display_n_crtcs(display);
+	igt_crtc_t *crtc;
 
-	for_each_pipe(display, i) {
-		data->pipe_id[i] = PIPE_A + i;
-		data->pipe[i] = &display->pipes[data->pipe_id[i]];
-		data->primary[i] = igt_pipe_get_plane_type(
-			data->pipe[i], DRM_PLANE_TYPE_PRIMARY);
-		data->overlay[i] = igt_pipe_get_plane_type_index(
-			data->pipe[i], DRM_PLANE_TYPE_OVERLAY, 0);
-		data->overlay2[i] = igt_pipe_get_plane_type_index(
-			data->pipe[i], DRM_PLANE_TYPE_OVERLAY, 1);
-		data->cursor[i] = igt_pipe_get_plane_type(
-			data->pipe[i], DRM_PLANE_TYPE_CURSOR);
-		data->pipe_crc[i] =
-			igt_pipe_crc_new(data->fd, data->pipe_id[i],
+	for_each_crtc(display, crtc) {
+		data->pipe_id[crtc->pipe] = crtc->pipe;
+		data->crtc[crtc->pipe] = crtc;
+		data->primary[crtc->pipe] = igt_crtc_get_plane_type(crtc,
+								    DRM_PLANE_TYPE_PRIMARY);
+		data->overlay[crtc->pipe] = igt_crtc_get_plane_type_index(crtc,
+									  DRM_PLANE_TYPE_OVERLAY,
+									  0);
+		data->overlay2[crtc->pipe] = igt_crtc_get_plane_type_index(crtc,
+									   DRM_PLANE_TYPE_OVERLAY,
+									   1);
+		data->cursor[crtc->pipe] = igt_crtc_get_plane_type(crtc,
+								   DRM_PLANE_TYPE_CURSOR);
+		data->pipe_crc[crtc->pipe] =
+			igt_crtc_crc_new(crtc,
 					 IGT_PIPE_CRC_SOURCE_AUTO);
 	}
 
@@ -195,10 +198,10 @@ static void test_init(data_t *data)
 static void test_fini(data_t *data)
 {
 	igt_display_t *display = &data->display;
-	int i;
+	igt_crtc_t *crtc;
 
-	for_each_pipe(display, i) {
-		igt_pipe_crc_free(data->pipe_crc[i]);
+	for_each_crtc(display, crtc) {
+		igt_pipe_crc_free(data->pipe_crc[crtc->pipe]);
 	}
 
 	igt_display_reset(display);
@@ -265,7 +268,7 @@ static void set_regamma_lut(data_t *data, lut_t const *lut, int n)
 {
 	size_t size = lut ? sizeof(lut->data) * lut->size : 0;
 	const void *ptr = lut ? lut->data : NULL;
-	igt_pipe_obj_replace_prop_blob(data->pipe[n], IGT_CRTC_GAMMA_LUT, ptr,
+	igt_crtc_replace_prop_blob(data->crtc[n], IGT_CRTC_GAMMA_LUT, ptr,
 				       size);
 }
 
@@ -566,7 +569,8 @@ static void test_multi_mpo_invalid(data_t *data)
 	/* Skip test if we don't have 2 overlay planes */
 	igt_skip_on(!data->overlay2[0]);
 
-	igt_output_set_pipe(data->output[0], data->pipe_id[0]);
+	igt_output_set_crtc(data->output[0],
+			    igt_crtc_for_pipe(display, data->pipe_id[0]));
 
 	igt_create_color_fb(data->fd, w, h, DRM_FORMAT_XRGB8888, 0, 1.0, 1.0, 1.0, &fb[0].test_primary);
 	igt_create_fb(data->fd, w, h, DRM_FORMAT_NV12, 0, &fb[0].test_overlay);
@@ -626,7 +630,8 @@ static void test_display_mpo(data_t *data, enum test test, uint32_t format, int 
 	igt_skip_on_f(valid_outputs < display_count,
 			"Valid outputs (%d) should be equal or greater than %d\n", valid_outputs, display_count);
 
-	regamma_lut_size = igt_pipe_obj_get_prop(data->pipe[0], IGT_CRTC_GAMMA_LUT_SIZE);
+	regamma_lut_size = igt_crtc_get_prop(data->crtc[0],
+					     IGT_CRTC_GAMMA_LUT_SIZE);
 	igt_assert_lt(0, regamma_lut_size);
 	lut_init(&lut, regamma_lut_size);
 	lut_gen(&lut);
@@ -641,7 +646,8 @@ static void test_display_mpo(data_t *data, enum test test, uint32_t format, int 
 			h = data->h[n] = test_mode_3.vdisplay;
 		}
 
-		igt_output_set_pipe(data->output[n], data->pipe_id[n]);
+		igt_output_set_crtc(data->output[n],
+				    igt_crtc_for_pipe(display, data->pipe_id[n]));
 
 		igt_create_fb(data->fd, w, h, DRM_FORMAT_XRGB8888, 0, &fb[n].ref_primary);
 		igt_create_color_fb(data->fd, w, h, DRM_FORMAT_XRGB8888, 0, 1.0, 1.0, 1.0, &fb[n].ref_primary);
@@ -728,7 +734,8 @@ static void test_mpo_4k(data_t *data)
 	draw_color_alpha(&o_fb, cutout_x, cutout_y, cutout_w, cutout_h,
 			 0.00, 0.00, 0.00, 0.00);
 
-	igt_output_set_pipe(data->output[0], data->pipe_id[0]);
+	igt_output_set_crtc(data->output[0],
+			    igt_crtc_for_pipe(display, data->pipe_id[0]));
 	igt_plane_set_fb(data->primary[0], &r_fb);
 	igt_display_commit_atomic(display, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
 
@@ -793,8 +800,10 @@ static void test_mpo_swizzle_toggle_multihead(data_t *data)
 	test_init(data);
 
 	/* Initial modeset */
-	igt_output_set_pipe(data->output[0], data->pipe_id[0]);
-	igt_output_set_pipe(data->output[1], data->pipe_id[1]);
+	igt_output_set_crtc(data->output[0],
+			    igt_crtc_for_pipe(display, data->pipe_id[0]));
+	igt_output_set_crtc(data->output[1],
+			    igt_crtc_for_pipe(display, data->pipe_id[1]));
 	force_output_mode(data, data->output[0], &test_mode_1);
 	force_output_mode(data, data->output[1], &test_mode_2);
 
@@ -862,7 +871,8 @@ static void test_mpo_swizzle_toggle(data_t *data)
 	test_init(data);
 
 	/* Initial modeset */
-	igt_output_set_pipe(data->output[0], data->pipe_id[0]);
+	igt_output_set_crtc(data->output[0],
+			    igt_crtc_for_pipe(display, data->pipe_id[0]));
 	force_output_mode(data, data->output[0], &test_mode_1);
 
 	igt_plane_set_fb(data->primary[0], &fb_1920_xb24_linear);

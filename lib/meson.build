@@ -44,6 +44,7 @@ lib_sources = [
 	'igt_stats.c',
 	'igt_syncobj.c',
 	'igt_sysfs.c',
+	'igt_sysfs_choice.c',
 	'igt_sysrq.c',
 	'igt_taints.c',
 	'igt_thread.c',
@@ -116,6 +117,7 @@ lib_sources = [
 	'igt_eld.c',
 	'igt_infoframe.c',
 	'igt_color.c',
+	'igt_color_lut.c',
 	'veboxcopy_gen12.c',
 	'igt_msm.c',
 	'igt_dsc.c',
@@ -126,6 +128,7 @@ lib_sources = [
 	'xe/xe_mmio.c',
 	'xe/xe_query.c',
 	'xe/xe_spin.c',
+	'xe/xe_sriov_admin.c',
 	'xe/xe_sriov_debugfs.c',
 	'xe/xe_sriov_provisioning.c',
 	'xe/xe_util.c',
@@ -177,6 +180,7 @@ if libdrm_amdgpu.found()
 		'amdgpu/amd_mem_leak.c',
 		'amdgpu/amd_mmd_shared.c',
 		'amdgpu/amd_jpeg_shared.c',
+		'amdgpu/amd_utils.c',
 		'amdgpu/amd_vcn_shared.c'
 	]
 	if libdrm_amdgpu.version().version_compare('> 2.4.99')

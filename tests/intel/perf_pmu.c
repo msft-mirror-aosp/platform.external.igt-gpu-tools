@@ -1050,7 +1050,8 @@ static void prepare_crtc(data_t *data, int fd, igt_output_t *output)
 	igt_plane_t *primary;
 
 	/* select the pipe we want to use */
-	igt_output_set_pipe(output, data->pipe);
+	igt_output_set_crtc(output,
+			    igt_crtc_for_pipe(display, data->pipe));
 
 	/* create and set the primary plane fb */
 	mode = igt_output_get_mode(output);
@@ -1065,8 +1066,7 @@ static void prepare_crtc(data_t *data, int fd, igt_output_t *output)
 
 	igt_display_commit(display);
 
-	igt_wait_for_vblank(fd,
-			display->pipes[data->pipe].crtc_offset);
+	igt_wait_for_vblank(igt_crtc_for_pipe(display, data->pipe));
 }
 
 static void cleanup_crtc(data_t *data, int fd, igt_output_t *output)
@@ -1079,7 +1079,7 @@ static void cleanup_crtc(data_t *data, int fd, igt_output_t *output)
 	primary = igt_output_get_plane_type(output, DRM_PLANE_TYPE_PRIMARY);
 	igt_plane_set_fb(primary, NULL);
 
-	igt_output_set_pipe(output, PIPE_NONE);
+	igt_output_set_crtc(output, NULL);
 	igt_display_commit(display);
 }
 
@@ -1120,7 +1120,7 @@ event_wait(int gem_fd, const intel_ctx_t *ctx,
 	uint16_t devid;
 	igt_output_t *output;
 	data_t data;
-	enum pipe p;
+	igt_crtc_t *crtc;
 	int fd;
 
 	devid = intel_get_drm_devid(gem_fd);
@@ -1167,13 +1167,13 @@ event_wait(int gem_fd, const intel_ctx_t *ctx,
 	eb.flags = e->flags | I915_EXEC_SECURE;
 	eb.rsvd1 = ctx->id;
 
-	for_each_pipe_with_valid_output(&data.display, p, output) {
+	for_each_crtc_with_valid_output(&data.display, crtc, output) {
 		struct igt_helper_process waiter = { };
 		const unsigned int frames = 3;
 		uint64_t val[2];
 
 		batch[6] = MI_WAIT_FOR_EVENT;
-		switch (p) {
+		switch (crtc->pipe) {
 		case PIPE_A:
 			batch[6] |= MI_WAIT_FOR_PIPE_A_VBLANK;
 			batch[5] = ~(1 << 3);
@@ -1192,7 +1192,7 @@ event_wait(int gem_fd, const intel_ctx_t *ctx,
 
 		gem_write(gem_fd, obj.handle, 0, batch, sizeof(batch));
 
-		data.pipe = p;
+		data.pipe = crtc->pipe;
 		prepare_crtc(&data, gem_fd, output);
 
 		fd = open_pmu(gem_fd,

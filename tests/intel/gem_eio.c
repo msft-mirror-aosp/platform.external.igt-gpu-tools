@@ -1034,14 +1034,15 @@ static void display_helper(igt_display_t *dpy, int *done)
 		igt_output_t *output;
 		int pipe;
 
-		pipe = rand() % dpy->n_pipes;
-		if (!dpy->pipes[pipe].valid)
+		pipe = rand() % igt_display_n_crtcs(dpy);
+		if (!igt_crtc_for_pipe(dpy, pipe)->valid)
 			continue;
 		output = igt_get_single_output_for_pipe(dpy, pipe);
 		if (!output)
 			continue;
 
-		igt_output_set_pipe(output, pipe);
+		igt_output_set_crtc(output,
+				    igt_crtc_for_pipe(dpy, pipe));
 		mode = igt_output_get_mode(output);
 
 		if (fb.width != mode->hdisplay || fb.height != mode->vdisplay) {
@@ -1195,7 +1196,7 @@ int igt_main()
 
 	igt_subtest_group() {
 		igt_display_t display = {
-			.drm_fd = -1, .n_pipes = IGT_MAX_PIPES
+			.drm_fd = -1, .n_crtcs = IGT_MAX_PIPES
 		};
 
 		igt_fixture() {

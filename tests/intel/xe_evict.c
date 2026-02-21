@@ -21,6 +21,7 @@
 #include "xe/xe_query.h"
 #include <string.h>
 
+#define XE_EXEC_QUEUE_PRIORITY_NORMAL   1
 #define MAX_N_EXEC_QUEUES	16
 #define MULTI_VM			(0x1 << 0)
 #define THREADED			(0x1 << 1)
@@ -29,6 +30,8 @@
 #define COMPUTE_THREAD		(0x1 << 4)
 #define EXTERNAL_OBJ		(0x1 << 5)
 #define BIND_EXEC_QUEUE		(0x1 << 6)
+#define MULTI_QUEUE		(0x1 << 7)
+#define PRIORITY		(0x1 << 8)
 
 static void
 test_evict(int fd, struct drm_xe_engine_class_instance *eci,
@@ -80,7 +83,27 @@ test_evict(int fd, struct drm_xe_engine_class_instance *eci,
 		if (flags & MULTI_VM)
 			exec_queues[i] = xe_exec_queue_create(fd, i & 1 ? vm2 : vm ,
 						      eci, 0);
-		else
+		else if (flags & MULTI_QUEUE) {
+			struct drm_xe_ext_set_property multi_queue = {
+				.base.next_extension = 0,
+				.base.name = DRM_XE_EXEC_QUEUE_EXTENSION_SET_PROPERTY,
+				.property = DRM_XE_EXEC_QUEUE_SET_PROPERTY_MULTI_GROUP,
+			};
+			uint64_t ext = to_user_pointer(&multi_queue);
+
+			if (flags & PRIORITY) {
+				struct drm_xe_ext_set_property mq_priority = {
+					.base.next_extension = 0,
+					.base.name = DRM_XE_EXEC_QUEUE_EXTENSION_SET_PROPERTY,
+					.property = DRM_XE_EXEC_QUEUE_SET_PROPERTY_MULTI_QUEUE_PRIORITY,
+				};
+				multi_queue.base.next_extension = to_user_pointer(&mq_priority);
+				mq_priority.value = XE_EXEC_QUEUE_PRIORITY_NORMAL + (rand() % 2);
+			}
+			multi_queue.value = i ? exec_queues[0] : DRM_XE_MULTI_GROUP_CREATE;
+			igt_assert_eq(__xe_exec_queue_create(fd, vm, 1, 1, eci,
+							     ext, &exec_queues[i]), 0);
+		} else
 			exec_queues[i] = xe_exec_queue_create(fd, vm, eci, 0);
 		syncobjs[i] = syncobj_create(fd, 0);
 	};
@@ -259,7 +282,27 @@ test_evict_cm(int fd, struct drm_xe_engine_class_instance *eci,
 		if (flags & MULTI_VM)
 			exec_queues[i] = xe_exec_queue_create(fd, i & 1 ? vm2 :
 							      vm, eci, 0);
-		else
+		else if (flags & MULTI_QUEUE) {
+			struct drm_xe_ext_set_property multi_queue = {
+				.base.next_extension = 0,
+				.base.name = DRM_XE_EXEC_QUEUE_EXTENSION_SET_PROPERTY,
+				.property = DRM_XE_EXEC_QUEUE_SET_PROPERTY_MULTI_GROUP,
+			};
+			uint64_t ext = to_user_pointer(&multi_queue);
+
+			if (flags & PRIORITY) {
+				struct drm_xe_ext_set_property mq_priority = {
+					.base.next_extension = 0,
+					.base.name = DRM_XE_EXEC_QUEUE_EXTENSION_SET_PROPERTY,
+					.property = DRM_XE_EXEC_QUEUE_SET_PROPERTY_MULTI_QUEUE_PRIORITY,
+				};
+				multi_queue.base.next_extension = to_user_pointer(&mq_priority);
+				mq_priority.value = XE_EXEC_QUEUE_PRIORITY_NORMAL + (rand() % 2);
+			}
+			multi_queue.value = i ? exec_queues[0] : DRM_XE_MULTI_GROUP_CREATE;
+			igt_assert_eq(__xe_exec_queue_create(fd, vm, 1, 1, eci,
+							     ext, &exec_queues[i]), 0);
+		} else
 			exec_queues[i] = xe_exec_queue_create(fd, vm, eci, 0);
 	}
 
@@ -516,7 +559,11 @@ static unsigned int working_set(uint64_t vram_size, uint64_t system_size,
  * arg[1]:
  *
  * @small:			small
+ * @small-multi-queue:		small multi queue
+ * @small-multi-queue-priority:
+ * 				small multi queue priority
  * @small-external:		small external
+ * @small-external-multi-queue: small external multi queue
  * @small-multi-vm:		small multi VM
  * @beng-small:			small bind exec_queue
  * @beng-small-external:	small external bind exec_queue
@@ -546,7 +593,12 @@ static unsigned int working_set(uint64_t vram_size, uint64_t system_size,
  * arg[1]:
  *
  * @small-cm:			small compute machine
+ * @small-multi-queue-cm:	small multi queue compute machine
+ * @small-multi-queue-priority-cm:
+ * 				small multi queue priority compute machine
  * @small-external-cm:		small external compute machine
+ * @small-external-multi-queue-cm:
+ * 				small external compute machine multi queue
  * @small-multi-vm-cm:		small multi VM compute machine
  * @beng-small-cm:		small bind exec_queue compute machine
  * @beng-small-external-cm:	small external bind exec_queue compute machine
@@ -577,6 +629,8 @@ static unsigned int working_set(uint64_t vram_size, uint64_t system_size,
  * arg[1]:
  *
  * @mixed-threads-small:	mixed threads small
+ * @mixed-threads-small-multi-queue:
+ * 				mixed threads small multi queue
  * @mixed-many-threads-small:	mixed many threads small
  * @mixed-threads-small-multi-vm:
  * 				mixed threads small multi vm
@@ -614,6 +668,8 @@ static unsigned int working_set(uint64_t vram_size, uint64_t system_size,
  *
  * arg[1]:
  * @cm-threads-small:		compute mode threads small
+ * @cm-threads-small-multi-queue:
+ * 				compute mode threads small multi queue
  * @cm-threads-small-multi-vm:	compute mode threads small multi vm
  * @beng-cm-threads-small:	bind exec_queue compute mode threads small
  * @beng-cm-threads-small-multi-vm:
@@ -644,6 +700,7 @@ static unsigned int working_set(uint64_t vram_size, uint64_t system_size,
  *
  * @threads-small:		threads small
  * @beng-threads-small:		bind exec_queue threads small
+ * @threads-small-multi-queue:	threads small multi queue
  * @threads-small-multi-vm:	threads small multi vm
  * @beng-threads-small-multi-vm:
  *				bind exec_queue threads small multi vm
@@ -678,7 +735,7 @@ static unsigned int working_set(uint64_t vram_size, uint64_t system_size,
  */
 int igt_main()
 {
-	struct drm_xe_engine_class_instance *hwe;
+	struct drm_xe_engine_class_instance *hwe, *multi_queue_hwe = NULL;
 	const struct section {
 		const char *name;
 		int n_exec_queues;
@@ -688,7 +745,10 @@ int igt_main()
 		unsigned int flags;
 	} sections[] = {
 		{ "small", 16, 448, 1, 128, 0 },
+		{ "small-multi-queue", 16, 448, 1, 128, MULTI_QUEUE },
+		{ "small-multi-queue-priority", 16, 448, 1, 128, MULTI_QUEUE | PRIORITY },
 		{ "small-external", 16, 448, 1, 128, EXTERNAL_OBJ },
+		{ "small-external-multi-queue", 16, 448, 1, 128, EXTERNAL_OBJ | MULTI_QUEUE },
 		{ "small-multi-vm", 16, 256, 1, 128, MULTI_VM },
 		{ "large", 4, 16, 1, 4, 0 },
 		{ "large-external", 4, 16, 1, 4, EXTERNAL_OBJ },
@@ -713,7 +773,10 @@ int igt_main()
 		unsigned int flags;
 	} sections_cm[] = {
 		{ "small-cm", 16, 448, 1, 128, 0 },
+		{ "small-multi-queue-cm", 16, 448, 1, 128, MULTI_QUEUE },
+		{ "small-multi-queue-priority-cm", 16, 448, 1, 128, MULTI_QUEUE | PRIORITY },
 		{ "small-external-cm", 16, 448, 1, 128, EXTERNAL_OBJ },
+		{ "small-external-multi-queue-cm", 16, 448, 1, 128, EXTERNAL_OBJ | MULTI_QUEUE },
 		{ "small-multi-vm-cm", 16, 256, 1, 128, MULTI_VM },
 		{ "large-cm", 4, 16, 1, 4, 0 },
 		{ "large-external-cm", 4, 16, 1, 4, EXTERNAL_OBJ },
@@ -741,10 +804,16 @@ int igt_main()
 	} sections_threads[] = {
 		{ "threads-small", 2, 16, 128, 1, 128,
 			THREADED },
+		{ "threads-small-multi-queue", 2, 16, 128, 1, 128,
+			THREADED | MULTI_QUEUE },
 		{ "cm-threads-small", 2, 16, 128, 1, 128,
 			COMPUTE_THREAD | THREADED },
+		{ "cm-threads-small-multi-queue", 2, 16, 128, 1, 128,
+			COMPUTE_THREAD | THREADED | MULTI_QUEUE },
 		{ "mixed-threads-small", 2, 16, 128, 1, 128,
 			MIXED_THREADS | THREADED },
+		{ "mixed-threads-small-multi-queue", 2, 16, 128, 1, 128,
+			MIXED_THREADS | THREADED | MULTI_QUEUE },
 		{ "mixed-many-threads-small", 3, 16, 128, 1, 128,
 			THREADED },
 		{ "threads-large", 2, 2, 16, 3, 32,
@@ -820,6 +889,9 @@ int igt_main()
 		xe_for_each_engine(fd, hwe)
 			if (hwe->engine_class != DRM_XE_ENGINE_CLASS_COPY)
 				break;
+
+		xe_for_each_multi_queue_engine(fd, multi_queue_hwe)
+			break;
 	}
 
 	for (const struct section *s = sections; s->name; s++) {
@@ -829,9 +901,15 @@ int igt_main()
 					     1, s->flags);
 
 			igt_debug("Max working set %d n_execs %d\n", ws, s->n_execs);
+			if (s->flags & MULTI_QUEUE) {
+				igt_require(intel_graphics_ver(intel_get_drm_devid(fd)) >= IP_VER(35, 0));
+				igt_require(multi_queue_hwe != NULL);
+				igt_assert_f(!(s->flags & MULTI_VM),
+					     "MULTI_QUEUE and MULTI_VM cannot be used together.\n");
+			}
 			igt_skip_on_f(!ws, "System memory size is too small.\n");
-			test_evict(fd, hwe, s->n_exec_queues,
-				   min(ws, s->n_execs), bo_size,
+			test_evict(fd, s->flags & MULTI_QUEUE ? multi_queue_hwe : hwe,
+				   s->n_exec_queues, min(ws, s->n_execs), bo_size,
 				   s->flags, NULL);
 		}
 	}
@@ -843,10 +921,15 @@ int igt_main()
 					     1, s->flags);
 
 			igt_debug("Max working set %d n_execs %d\n", ws, s->n_execs);
+			if (s->flags & MULTI_QUEUE) {
+				igt_require(intel_graphics_ver(intel_get_drm_devid(fd)) >= IP_VER(35, 0));
+				igt_require(multi_queue_hwe != NULL);
+				igt_assert_f(!(s->flags & MULTI_VM),
+					     "MULTI_QUEUE and MULTI_VM cannot be used together.\n");
+			}
 			igt_skip_on_f(!ws, "System memory size is too small.\n");
-			test_evict_cm(fd, hwe, s->n_exec_queues,
-				      min(ws, s->n_execs), bo_size,
-				      s->flags, NULL);
+			test_evict_cm(fd, s->flags & MULTI_QUEUE ? multi_queue_hwe : hwe, s->n_exec_queues,
+				      min(ws, s->n_execs), bo_size, s->flags, NULL);
 		}
 	}
 
@@ -857,9 +940,16 @@ int igt_main()
 					     s->n_threads, s->flags);
 
 			igt_debug("Max working set %d n_execs %d\n", ws, s->n_execs);
+			if (s->flags & MULTI_QUEUE) {
+				igt_require(intel_graphics_ver(intel_get_drm_devid(fd)) >= IP_VER(35, 0));
+				igt_require(multi_queue_hwe != NULL);
+				igt_assert_f(!(s->flags & MULTI_VM),
+					     "MULTI_QUEUE and MULTI_VM cannot be used together.\n");
+			}
 			igt_skip_on_f(!ws, "System memory size is too small.\n");
-			threads(fd, hwe, s->n_threads, s->n_exec_queues,
-				min(ws, s->n_execs), bo_size, s->flags);
+			threads(fd, s->flags & MULTI_QUEUE ? multi_queue_hwe : hwe,
+				s->n_threads, s->n_exec_queues, min(ws, s->n_execs),
+				bo_size, s->flags);
 		}
 	}
 
