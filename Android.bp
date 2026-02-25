@@ -46,6 +46,7 @@ cc_defaults {
         "-Wno-unused-parameter",
         "-Wno-unused-variable",
         "-Wno-unreachable-code-loop-increment",
+        "-Wno-macro-redefined",
         "-D_GNU_SOURCE",
     ],
     arch: {
@@ -111,6 +112,7 @@ cc_defaults {
 
 cc_library_static {
     name: "igt-gpu-tools",
+    whole_static_libs: ["libpci"],
     defaults: ["igt-gpu-tools-defaults"],
     srcs: [
         "lib/drmtest.c",
