@@ -257,7 +257,7 @@ commit_display_and_wait_for_flip(enum igt_commit_style commit_style)
 	}
 }
 
-static void modeset_with_fb(const enum pipe pipe, igt_output_t *output,
+static void modeset_with_fb(igt_output_t *output,
 			    enum igt_commit_style commit_style)
 {
 	igt_display_t *display = &data.display;
@@ -444,12 +444,11 @@ static bool write_srm_as_fw(const __u8 *srm, int len)
 }
 
 static void test_content_protection_on_output(igt_output_t *output,
-					      enum pipe pipe,
+					      igt_crtc_t *crtc,
 					      enum igt_commit_style commit_style,
 					      int content_type)
 {
 	igt_display_t *display = &data.display;
-	igt_crtc_t *crtc = igt_crtc_for_pipe(display, pipe);
 	bool ret;
 
 	test_cp_enable_with_retry(output, commit_style, 3, content_type, false,
@@ -740,14 +739,14 @@ test_content_protection(enum igt_commit_style commit_style, int content_type)
 			if (!intel_pipe_output_combo_valid(display))
 				continue;
 
-			modeset_with_fb(crtc->pipe, output, commit_style);
+			modeset_with_fb(output, commit_style);
 			if (data.is_force_hdcp14)
 				set_i915_force_hdcp14(output);
 
 			igt_dynamic_f("pipe-%s-%s", igt_crtc_name(crtc),
 				      output->name)
 				test_content_protection_on_output(output,
-								  crtc->pipe,
+								  crtc,
 								  commit_style,
 								  content_type);
 
@@ -868,14 +867,11 @@ test_content_protection_mst(int content_type)
 	igt_output_t *output;
 	int valid_outputs = 0, dp_mst_outputs = 0, ret, count, max_pipe = 0, i;
 	igt_crtc_t *crtc;
-	enum pipe pipe;
 	bool pipe_found;
 	igt_output_t *hdcp_mst_output[IGT_MAX_PIPES];
 
 	for_each_crtc(display, crtc)
 		max_pipe++;
-
-	pipe = PIPE_A;
 
 	for_each_connected_output(display, output) {
 		if (!output_is_dp_mst(output, dp_mst_outputs))
@@ -892,8 +888,7 @@ test_content_protection_mst(int content_type)
 
 		igt_assert_f(pipe_found, "No valid pipe found for %s\n", output->name);
 
-		igt_output_set_crtc(output,
-				    igt_crtc_for_pipe(display, pipe));
+		igt_output_set_crtc(output, crtc);
 		prepare_modeset_on_mst_output(output, false);
 		dp_mst_outputs++;
 		if (output_hdcp_capable(output, content_type))
