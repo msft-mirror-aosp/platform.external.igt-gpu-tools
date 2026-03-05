@@ -73,7 +73,7 @@ struct additional_test {
 			  uint32_t prop_id, uint64_t prop_value, bool atomic);
 };
 
-static void prepare_pipe(igt_display_t *display, igt_crtc_t *crtc,
+static void prepare_crtc(igt_display_t *display, igt_crtc_t *crtc,
 			 igt_output_t *output, struct igt_fb *fb)
 {
 	drmModeModeInfo *mode = igt_output_get_mode(output);
@@ -88,12 +88,12 @@ static void prepare_pipe(igt_display_t *display, igt_crtc_t *crtc,
 	igt_display_commit2(display, display->is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY);
 }
 
-static void cleanup_pipe(igt_display_t *display, igt_crtc_t *crtc,
+static void cleanup_crtc(igt_display_t *display, igt_crtc_t *crtc,
 			 igt_output_t *output, struct igt_fb *fb)
 {
 	igt_plane_t *plane;
 
-	for_each_plane_on_pipe(display, crtc->pipe, plane)
+	for_each_plane_on_crtc(crtc, plane)
 		igt_plane_set_fb(plane, NULL);
 
 	igt_output_set_crtc(output, NULL);
@@ -243,10 +243,10 @@ static void run_colorop_property_tests(igt_display_t *display,
 	int i;
 	int colorop_id = 0;
 
-	prepare_pipe(display, crtc, output,
+	prepare_crtc(display, crtc, output,
 		     &fb);
 
-	for_each_plane_on_pipe(display, crtc->pipe, plane) {
+	for_each_plane_on_crtc(crtc, plane) {
 		igt_info("Testing colorop properties on plane %s.#%d-%s (output: %s)\n",
 			 igt_crtc_name(crtc), plane->index,
 			 kmstest_plane_type_name(plane->type), output->name);
@@ -270,7 +270,7 @@ static void run_colorop_property_tests(igt_display_t *display,
 		}
 	}
 
-	cleanup_pipe(display, crtc, output,
+	cleanup_crtc(display, crtc, output,
 		     &fb);
 }
 
@@ -280,10 +280,10 @@ static void run_plane_property_tests(igt_display_t *display, igt_crtc_t *crtc,
 	struct igt_fb fb;
 	igt_plane_t *plane;
 
-	prepare_pipe(display, crtc, output,
+	prepare_crtc(display, crtc, output,
 		     &fb);
 
-	for_each_plane_on_pipe(display, crtc->pipe, plane) {
+	for_each_plane_on_crtc(crtc, plane) {
 		igt_info("Testing plane properties on %s.#%d-%s (output: %s)\n",
 			 igt_crtc_name(crtc), plane->index,
 			 kmstest_plane_type_name(plane->type), output->name);
@@ -291,7 +291,7 @@ static void run_plane_property_tests(igt_display_t *display, igt_crtc_t *crtc,
 		test_properties(display->drm_fd, DRM_MODE_OBJECT_PLANE, plane->drm_plane->plane_id, atomic, display->has_plane_color_pipeline);
 	}
 
-	cleanup_pipe(display, crtc, output,
+	cleanup_crtc(display, crtc, output,
 		     &fb);
 }
 
@@ -300,7 +300,7 @@ static void run_crtc_property_tests(igt_display_t *display, igt_crtc_t *crtc,
 {
 	struct igt_fb fb;
 
-	prepare_pipe(display, crtc, output,
+	prepare_crtc(display, crtc, output,
 		     &fb);
 
 	igt_info("Testing crtc properties on %s (output: %s)\n",
@@ -311,7 +311,7 @@ static void run_crtc_property_tests(igt_display_t *display, igt_crtc_t *crtc,
 			atomic,
 			false);
 
-	cleanup_pipe(display, crtc, output,
+	cleanup_crtc(display, crtc, output,
 		     &fb);
 }
 
@@ -322,7 +322,7 @@ static void run_connector_property_tests(igt_display_t *display,
 	struct igt_fb fb;
 
 	if (crtc != NULL)
-		prepare_pipe(display, crtc,
+		prepare_crtc(display, crtc,
 			     output, &fb);
 
 	igt_info("Testing connector properties on output %s (pipe: %s)\n", output->name,
@@ -331,7 +331,7 @@ static void run_connector_property_tests(igt_display_t *display,
 	test_properties(display->drm_fd, DRM_MODE_OBJECT_CONNECTOR, output->id, atomic, false);
 
 	if (crtc != NULL)
-		cleanup_pipe(display, crtc,
+		cleanup_crtc(display, crtc,
 			     output, &fb);
 }
 
@@ -347,7 +347,9 @@ static void colorop_properties(igt_display_t *display, bool atomic)
 	for_each_crtc(display, crtc) {
 		found = false;
 
-		for_each_valid_output_on_pipe(display, crtc->pipe, output) {
+		for_each_valid_output_on_crtc(display,
+					      crtc,
+					      output) {
 			igt_display_reset(display);
 
 			igt_output_set_crtc(output,
@@ -527,9 +529,10 @@ static void test_object_invalid_properties(igt_display_t *display,
 				        crtc->crtc_id,
 				        DRM_MODE_OBJECT_CRTC, atomic);
 
-	for_each_crtc(display, crtc)
-		for_each_plane_on_pipe(display, crtc->pipe, plane)
+	for_each_crtc(display, crtc) {
+		for_each_plane_on_crtc(crtc, plane)
 			test_invalid_properties(display->drm_fd, id, type, plane->drm_plane->plane_id, DRM_MODE_OBJECT_PLANE, atomic);
+	}
 
 	for_each_output(display, output)
 		test_invalid_properties(display->drm_fd, id, type, output->id, DRM_MODE_OBJECT_CONNECTOR, atomic);
@@ -935,9 +938,10 @@ static void invalid_properties(igt_display_t *display, bool atomic)
 				               crtc->crtc_id,
 				               DRM_MODE_OBJECT_CRTC, atomic);
 
-	for_each_crtc(display, crtc)
-		for_each_plane_on_pipe(display, crtc->pipe, plane)
+	for_each_crtc(display, crtc) {
+		for_each_plane_on_crtc(crtc, plane)
 			test_object_invalid_properties(display, plane->drm_plane->plane_id, DRM_MODE_OBJECT_PLANE, atomic);
+	}
 
 	for_each_output(display, output)
 		test_object_invalid_properties(display, output->id, DRM_MODE_OBJECT_CONNECTOR, atomic);

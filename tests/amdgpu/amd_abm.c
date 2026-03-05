@@ -129,12 +129,11 @@ static void test_init(data_t *data)
 		igt_skip("No eDP connector found\n");
 
 	/* It doesn't matter which pipe we choose on amdpgu. */
-	data->crtc = igt_crtc_for_pipe(&data->display, PIPE_A);
+	data->crtc = igt_first_crtc(&data->display);
 
 	igt_display_reset(display);
 
-	data->output = igt_get_single_output_for_pipe(display,
-						      data->crtc->pipe);
+	data->output = igt_get_single_output_for_crtc(data->crtc);
 	igt_require(data->output);
 	igt_info("output %s\n", data->output->name);
 
@@ -171,7 +170,8 @@ static void test_fini(data_t *data)
 	igt_output_t *output;
 
 	/* Disable ABM before exit test */
-	for_each_valid_output_on_pipe(&data->display, data->crtc->pipe,
+	for_each_valid_output_on_crtc(&data->display,
+				      data->crtc,
 				      output) {
 		if (output->config.connector->connector_type != DRM_MODE_CONNECTOR_eDP)
 			continue;
@@ -327,7 +327,8 @@ static void backlight_dpms_cycle(data_t *data)
 	int pwm_1, pwm_2;
 	igt_output_t *output;
 
-	for_each_valid_output_on_pipe(&data->display, data->crtc->pipe,
+	for_each_valid_output_on_crtc(&data->display,
+				      data->crtc,
 				      output) {
 		if (output->config.connector->connector_type != DRM_MODE_CONNECTOR_eDP)
 			continue;
@@ -359,7 +360,8 @@ static void backlight_monotonic_basic(data_t *data)
 	int brightness;
 	igt_output_t *output;
 
-	for_each_valid_output_on_pipe(&data->display, data->crtc->pipe,
+	for_each_valid_output_on_crtc(&data->display,
+				      data->crtc,
 				      output) {
 		if (output->config.connector->connector_type != DRM_MODE_CONNECTOR_eDP)
 			continue;
@@ -393,7 +395,8 @@ static void backlight_monotonic_abm(data_t *data)
 	int brightness;
 	igt_output_t *output;
 
-	for_each_valid_output_on_pipe(&data->display, data->crtc->pipe,
+	for_each_valid_output_on_crtc(&data->display,
+				      data->crtc,
 				      output) {
 		if (output->config.connector->connector_type != DRM_MODE_CONNECTOR_eDP)
 			continue;
@@ -426,7 +429,8 @@ static void abm_enabled(data_t *data)
 	int pwm, prev_pwm, pwm_without_abm;
 	igt_output_t *output;
 
-	for_each_valid_output_on_pipe(&data->display, data->crtc->pipe,
+	for_each_valid_output_on_crtc(&data->display,
+				      data->crtc,
 				      output) {
 		if (output->config.connector->connector_type != DRM_MODE_CONNECTOR_eDP)
 			continue;
@@ -460,7 +464,8 @@ static void abm_gradual(data_t *data)
 	int max_brightness;
 	igt_output_t *output;
 
-	for_each_valid_output_on_pipe(&data->display, data->crtc->pipe,
+	for_each_valid_output_on_crtc(&data->display,
+				      data->crtc,
 				      output) {
 		if (output->config.connector->connector_type != DRM_MODE_CONNECTOR_eDP)
 			continue;

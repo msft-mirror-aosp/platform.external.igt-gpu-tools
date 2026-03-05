@@ -2768,7 +2768,8 @@ static void plane_fbc_rte_subtest(const struct test_mode *t)
 
 	wanted_crc = &blue_crcs[t->format].crc;
 
-	for_each_plane_on_pipe(&drm.display, prim_mode_params.crtc->pipe, plane) {
+	for_each_plane_on_crtc(prim_mode_params.crtc,
+			       plane) {
 		if (!is_valid_plane(plane))
 			continue;
 
@@ -4232,7 +4233,7 @@ int igt_main_args("", long_options, help_str, opt_handler, NULL)
 				pipe_crc = NULL;
 				setup_crcs();
 
-				for_each_valid_output_on_pipe(&drm.display, crtc->pipe, output) {
+				for_each_valid_output_on_crtc(&drm.display, crtc, output) {
 					init_mode_params(&prim_mode_params, output, crtc);
 					setup_fbc();
 

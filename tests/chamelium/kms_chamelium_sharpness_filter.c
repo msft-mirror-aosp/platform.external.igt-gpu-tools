@@ -38,7 +38,7 @@ typedef struct {
 	int port_count;
 } data_t;
 
-static bool pipe_output_combo_valid(data_t *data, igt_crtc_t *crtc)
+static bool crtc_output_combo_valid(data_t *data, igt_crtc_t *crtc)
 {
 	bool ret = true;
 
@@ -189,7 +189,8 @@ static int test_setup(data_t *data, igt_crtc_t *crtc)
 	 * Prefer to run this test on HDMI connector if its connected, since on DP we
 	 * sometimes face DP FSM issue
 	 */
-        for_each_valid_output_on_pipe(&data->display, crtc->pipe,
+        for_each_valid_output_on_crtc(&data->display,
+				      crtc,
 				      data->output) {
 		data->crtc = crtc;
 		for (i = 0; i < data->port_count; i++) {
@@ -200,7 +201,8 @@ static int test_setup(data_t *data, igt_crtc_t *crtc)
 		}
 	}
 
-	for_each_valid_output_on_pipe(&data->display, crtc->pipe,
+	for_each_valid_output_on_crtc(&data->display,
+				      crtc,
 				      data->output) {
 		data->crtc = crtc;
 		for (i = 0; i < data->port_count; i++) {
@@ -221,7 +223,7 @@ static void test_sharpness_filter(data_t *data, igt_crtc_t *crtc)
 	igt_require(port_idx >= 0);
 	igt_require(igt_crtc_has_prop(crtc, IGT_CRTC_SHARPNESS_STRENGTH));
 
-	if (!pipe_output_combo_valid(data, crtc))
+	if (!crtc_output_combo_valid(data, crtc))
 		return;
 
 	igt_dynamic_f("pipe-%s-%s", igt_crtc_name(crtc), data->output->name)

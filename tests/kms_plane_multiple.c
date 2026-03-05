@@ -363,7 +363,8 @@ test_plane_position_with_output(data_t *data, igt_crtc_t *crtc,
 			       data->plane1, modifier, c, output, data->fb1);
 		err = igt_display_try_commit2(&data->display, COMMIT_ATOMIC);
 
-		for_each_plane_on_pipe(&data->display, crtc->pipe, plane)
+		for_each_plane_on_crtc(crtc,
+				       plane)
 			igt_plane_set_fb(plane, NULL);
 
 		igt_output_set_crtc(output, NULL);
@@ -394,7 +395,8 @@ test_plane_position_with_output(data_t *data, igt_crtc_t *crtc,
 		igt_assert_crc_equal(&data->ref_crc1, &crc);
 		igt_pipe_crc_stop(data->pipe_crc1);
 
-		for_each_plane_on_pipe(&data->display, crtc->pipe, plane)
+		for_each_plane_on_crtc(crtc,
+				       plane)
 			igt_plane_set_fb(plane, NULL);
 
 		igt_output_set_crtc(output, NULL);
@@ -476,11 +478,13 @@ static void test_plane_position_2_display(data_t *data, igt_crtc_t *crtc1,
 					  igt_output_t *output1, igt_output_t *output2,
 					  uint64_t modifier)
 {
-	igt_display_t *display = &data->display;
 	color_t blue  = { 0.0f, 0.0f, 1.0f };
 	igt_crc_t crc1, crc2;
-	int n_planes = opt.all_planes ?
-		       igt_crtc_for_pipe(display, 0)->n_planes : DEFAULT_N_PLANES;
+	int n_planes;
+
+	n_planes = min(crtc1->n_planes, crtc2->n_planes);
+	if (!opt.all_planes)
+		n_planes = min(n_planes, DEFAULT_N_PLANES);
 
 	/*
 	 * Note: We could use the dynamic way of calculating the maximum planes here
@@ -523,9 +527,9 @@ static void test_plane_position_2_display(data_t *data, igt_crtc_t *crtc1,
 		for_each_if((((output) = &(display)->outputs[j__]), \
 			      igt_output_is_connected((output))))
 
-#define for_each_valid_output_on_pipe_local(display, pipe, output) \
+#define for_each_valid_output_on_crtc_local(display, crtc, output) \
 	for_each_connected_output_local((display), (output)) \
-		for_each_if(igt_pipe_connector_valid((pipe), (output)))
+		for_each_if(igt_crtc_connector_valid((crtc), (output)))
 
 static void run_2_display_test(data_t *data, uint64_t modifier, const char *name)
 {
@@ -540,13 +544,14 @@ static void run_2_display_test(data_t *data, uint64_t modifier, const char *name
 	igt_display_reset(display);
 
 	for_each_crtc(display, crtc) {
-		for_each_valid_output_on_pipe(display, crtc->pipe, output1) {
+		for_each_valid_output_on_crtc(display,
+					      crtc,
+					      output1) {
 			for_each_crtc(display, crtc2) {
-				if (crtc->pipe == crtc2->pipe)
+				if (crtc == crtc2)
 					continue;
 
-				for_each_valid_output_on_pipe_local(display,
-								    crtc2->pipe,
+				for_each_valid_output_on_crtc_local(display, crtc2,
 								    output2) {
 					if (output1 == output2)
 						continue;

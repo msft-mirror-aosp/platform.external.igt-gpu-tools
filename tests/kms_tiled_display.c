@@ -221,7 +221,6 @@ static void setup_mode(data_t *data)
 	data_connector_t *conns = data->conns;
 
 	/*
-	 * The output is set to PIPE_NONE and then assigned a pipe.
 	 * This is done to ensure a complete modeset occures every
 	 * time the test is run.
 	 */
@@ -237,7 +236,7 @@ static void setup_mode(data_t *data)
 
 			if (count > 0) {
 				for (prev = count - 1; prev >= 0; prev--) {
-					if (crtc->pipe == conns[prev].crtc->pipe) {
+					if (crtc == conns[prev].crtc) {
 						pipe_in_use = true;
 						break;
 					}
@@ -246,7 +245,7 @@ static void setup_mode(data_t *data)
 					continue;
 			}
 
-			if (igt_pipe_connector_valid(crtc->pipe, output)) {
+			if (igt_crtc_connector_valid(crtc, output)) {
 				conns[count].crtc = crtc;
 				conns[count].output = output;
 

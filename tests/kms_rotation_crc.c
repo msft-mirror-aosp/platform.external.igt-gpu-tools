@@ -942,7 +942,9 @@ static void test_multi_plane_rotation(data_t *data, igt_crtc_t *crtc)
 
 	igt_display_require_output(display);
 
-	for_each_valid_output_on_pipe(display, crtc->pipe, output) {
+	for_each_valid_output_on_crtc(display,
+				      crtc,
+				      output) {
 		int i, j, k, l, flipsw, fliphw;
 
 		igt_display_reset(display);
@@ -1020,9 +1022,8 @@ static void test_multi_plane_rotation(data_t *data, igt_crtc_t *crtc)
 								continue;
 
 							igt_display_commit_atomic(display, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
-							flipsw = kmstest_get_vblank(data->gfx_fd,
-										    crtc->pipe,
-										    0) + 1;
+							flipsw = igt_crtc_get_vblank(crtc,
+										     0) + 1;
 							have_crc = false;
 						}
 
@@ -1035,9 +1036,8 @@ static void test_multi_plane_rotation(data_t *data, igt_crtc_t *crtc)
 							continue;
 
 						igt_display_commit_atomic(display, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
-						fliphw = kmstest_get_vblank(data->gfx_fd,
-									    crtc->pipe,
-									    0) + 1;
+						fliphw = igt_crtc_get_vblank(crtc,
+									     0) + 1;
 
 						if (!have_crc) {
 							igt_pipe_crc_get_for_frame(data->gfx_fd,
@@ -1314,6 +1314,8 @@ int igt_main_args("", long_opts, help_str, opt_handler, &data)
 
 	igt_describe("Rotation test on both planes by making them fully visible");
 	igt_subtest_f("multiplane-rotation") {
+		igt_crtc_t *crtc = igt_first_crtc(&data.display);
+
 		igt_require(gen >= 9);
 		cleanup_crtc(&data);
 		data.planepos[0].origo = p_top | p_left;
@@ -1322,13 +1324,14 @@ int igt_main_args("", long_opts, help_str, opt_handler, &data)
 		data.planepos[1].origo = p_top | p_right;
 		data.planepos[1].x = -.4f;
 		data.planepos[1].y = .1f;
-		test_multi_plane_rotation(&data,
-					  igt_crtc_for_pipe(&data.display, PIPE_A));
+		test_multi_plane_rotation(&data, crtc);
 	}
 
 	igt_describe("Rotation test on both planes by cropping left/top corner of primary plane and"
 			"right/top corner of sprite plane");
 	igt_subtest_f("multiplane-rotation-cropping-top") {
+		igt_crtc_t *crtc = igt_first_crtc(&data.display);
+
 		igt_require(gen >= 9);
 		cleanup_crtc(&data);
 		data.planepos[0].origo = p_top | p_left;
@@ -1337,13 +1340,14 @@ int igt_main_args("", long_opts, help_str, opt_handler, &data)
 		data.planepos[1].origo = p_top | p_right;
 		data.planepos[1].x = -.15f;
 		data.planepos[1].y = -.15f;
-		test_multi_plane_rotation(&data,
-					  igt_crtc_for_pipe(&data.display, PIPE_A));
+		test_multi_plane_rotation(&data, crtc);
 	}
 
 	igt_describe("Rotation test on both planes by cropping left/bottom corner of primary plane"
 			"and right/bottom corner of sprite plane");
 	igt_subtest_f("multiplane-rotation-cropping-bottom") {
+		igt_crtc_t *crtc = igt_first_crtc(&data.display);
+
 		igt_require(gen >= 9);
 		cleanup_crtc(&data);
 		data.planepos[0].origo = p_bottom | p_left;
@@ -1352,8 +1356,7 @@ int igt_main_args("", long_opts, help_str, opt_handler, &data)
 		data.planepos[1].origo = p_bottom | p_right;
 		data.planepos[1].x = -.15f;
 		data.planepos[1].y = -.20f;
-		test_multi_plane_rotation(&data,
-					  igt_crtc_for_pipe(&data.display, PIPE_A));
+		test_multi_plane_rotation(&data, crtc);
 	}
 
 	/*
