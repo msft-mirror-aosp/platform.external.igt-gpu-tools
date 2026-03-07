@@ -29,6 +29,12 @@
  * Functionality: FLR
  * Description: Examine behavior of SR-IOV VF FLR
  *
+ * SUBTEST: flr-basic
+ * Run type: BAT
+ * Description:
+ *   Initiates FLR without any additional state checks.
+ *   Useful as a basic smoke test of the reset sysfs write path.
+ *
  * SUBTEST: flr-vf1-clear
  * Run type: BAT
  * Description:
@@ -64,6 +70,7 @@ static const char STOP_REASON_SKIP[]  = "SKIP";
 
 static int g_wait_flr_ms = 200;
 static bool g_use_xe_vfio_pci = true;
+static bool g_extended_scope;
 
 static struct g_mmio {
 	struct xe_mmio *mmio;
@@ -1016,6 +1023,60 @@ static void regs_subcheck_cleanup(struct subcheck_data *data)
 {
 }
 
+static void reset_only_subcheck_init(struct subcheck_data *data)
+{
+	if (!g_use_xe_vfio_pci) {
+		set_skip_reason(data, "xe-vfio-pci binding is disabled\n");
+		return;
+	}
+
+	if (!igt_kmod_is_loaded("xe_vfio_pci"))
+		set_skip_reason(data, "xe_vfio_pci is not loaded\n");
+}
+
+static void reset_only_subcheck_prepare_vf(int vf_id, struct subcheck_data *data)
+{
+	char *slot = igt_sriov_get_vf_pci_slot_alloc(data->pf_fd, vf_id);
+	char bound[64];
+	int bound_ret;
+
+	igt_assert(slot);
+
+	bound_ret = igt_pci_get_bound_driver_name(slot, bound, sizeof(bound));
+	if (bound_ret <= 0 || strcmp(bound, "xe-vfio-pci") != 0)
+		set_skip_reason(data, "VF%u not bound to xe-vfio-pci\n", vf_id);
+
+	free(slot);
+}
+
+static void noop_subcheck_verify_vf(int vf_id, int flr_vf_id, struct subcheck_data *data)
+{
+}
+
+static void noop_subcheck_cleanup(struct subcheck_data *data)
+{
+}
+
+static void reset_only_test(int pf_fd, int num_vfs, flr_exec_strategy exec_strategy)
+{
+	struct subcheck_data base = {
+		.pf_fd = pf_fd,
+		.num_vfs = num_vfs,
+		.tile = 0,
+		.stop_reason = NULL,
+	};
+	struct subcheck check = {
+		.data = &base,
+		.name = "reset-only",
+		.init = reset_only_subcheck_init,
+		.prepare_vf = reset_only_subcheck_prepare_vf,
+		.verify_vf = noop_subcheck_verify_vf,
+		.cleanup = noop_subcheck_cleanup,
+	};
+
+	verify_flr(pf_fd, num_vfs, &check, 1, exec_strategy);
+}
+
 static void clear_tests(int pf_fd, int num_vfs, flr_exec_strategy exec_strategy)
 {
 	const uint8_t num_tiles = xe_tiles_count(pf_fd);
@@ -1100,6 +1161,9 @@ static int opt_handler(int opt, int opt_index, void *data)
 	long val;
 
 	switch (opt) {
+	case 'e':
+		g_extended_scope = true;
+		break;
 	case 'v':
 		g_use_xe_vfio_pci = false;
 		igt_info("xe-vfio-pci binding: disabled\n");
@@ -1120,16 +1184,18 @@ static int opt_handler(int opt, int opt_index, void *data)
 }
 
 static const struct option long_options[] = {
+	{ .name = "extended", .has_arg = false, .val = 'e', },
 	{ .name = "no-xe-vfio-pci", .has_arg = false, .val = 'v', },
 	{ .name = "wait-flr-ms", .has_arg = true, .val = 'w', },
 	{},
 };
 
 static const char help_str[] =
+	"  --extended\t\tRun extended scope\n"
 	"  --no-xe-vfio-pci\tDo not load/bind xe-vfio-pci for VFs\n"
 	"  --wait-flr-ms=MS\tSleep MS milliseconds after VF reset sysfs write (default: 200)\n";
 
-int igt_main_args("vw:", long_options, help_str, opt_handler, NULL)
+int igt_main_args("evw:", long_options, help_str, opt_handler, NULL)
 {
 	int pf_fd;
 	bool autoprobe;
@@ -1139,6 +1205,17 @@ int igt_main_args("vw:", long_options, help_str, opt_handler, NULL)
 		igt_require(igt_sriov_is_pf(pf_fd));
 		igt_require(igt_sriov_get_enabled_vfs(pf_fd) == 0);
 		autoprobe = igt_sriov_is_driver_autoprobe_enabled(pf_fd);
+	}
+
+	igt_describe("Initiate FLR without any additional state checks.");
+	igt_subtest_with_dynamic("flr-basic") {
+		for_each_sriov_num_vfs(pf_fd, vf_num) {
+			if (!g_extended_scope && vf_num > 1)
+				break;
+
+			igt_dynamic_f("numvfs-%u", vf_num)
+				reset_only_test(pf_fd, vf_num, execute_sequential_flr);
+		}
 	}
 
 	igt_describe("Verify LMEM, GGTT, and SCRATCH_REGS are properly cleared after VF1 FLR");

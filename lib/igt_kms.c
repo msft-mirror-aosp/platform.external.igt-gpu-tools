@@ -2457,7 +2457,7 @@ int kmstest_get_crtc_idx(drmModeRes *res, uint32_t crtc_id)
  *
  * Blocks or request a signal when a specified vblank event occurs
  *
- * Returns 0 on success or non-zero unsigned integer otherwise
+ * Returns 0 on failure or the reply vblank sequence number otherwise
  */
 unsigned int kmstest_get_vblank(int fd, int crtc_index, unsigned int flags)
 {
@@ -2469,6 +2469,21 @@ unsigned int kmstest_get_vblank(int fd, int crtc_index, unsigned int flags)
 		return 0;
 
 	return vbl.reply.sequence;
+}
+
+/**
+ * igt_crtc_get_vblank:
+ * @crtc: CRTC
+ * @flags: Flags passed to drm_ioctl_wait_vblank
+ *
+ * Blocks or request a signal when a specified vblank event occurs
+ *
+ * Returns 0 on failure or the reply vblank sequence number otherwise
+ */
+unsigned int igt_crtc_get_vblank(igt_crtc_t *crtc, unsigned int flags)
+{
+	return kmstest_get_vblank(crtc->display->drm_fd, crtc->crtc_index,
+				  flags);
 }
 
 /**
@@ -2797,7 +2812,8 @@ void igt_display_reset(igt_display_t *display)
 	for_each_crtc(display, crtc) {
 		igt_plane_t *plane;
 
-		for_each_plane_on_pipe(display, crtc->pipe, plane)
+		for_each_plane_on_crtc(crtc,
+				       plane)
 			igt_plane_reset(plane);
 
 		igt_crtc_reset(crtc);
@@ -2813,30 +2829,12 @@ void igt_display_reset(igt_display_t *display)
 static void igt_fill_plane_format_mod(igt_display_t *display, igt_plane_t *plane);
 static void igt_fill_display_format_mod(igt_display_t *display);
 
-/**
- * igt_require_pipe:
- * @display: pointer to igt_display_t
- * @pipe: pipe which need to check
- *
- * Skip a (sub-)test if the pipe not valid.
- *
- * Should be used everywhere where a test checks pipe and skip
- * test when pipe is not valid.
- */
-void igt_require_pipe(igt_display_t *display, enum pipe pipe)
+static bool igt_crtc_has_valid_output(igt_crtc_t *crtc)
 {
-	igt_skip_on_f(pipe >= igt_display_n_crtcs(display) || !igt_crtc_for_pipe(display, pipe)->valid,
-			"Pipe %s does not exist\n",
-			kmstest_pipe_name(pipe));
-}
-
-static bool igt_pipe_has_valid_output(igt_display_t *display, enum pipe pipe)
-{
+	igt_display_t *display = crtc->display;
 	igt_output_t *output;
 
-	igt_require_pipe(display, pipe);
-
-	for_each_valid_output_on_pipe(display, pipe, output)
+	for_each_valid_output_on_crtc(display, crtc, output)
 		return true;
 
 	return false;
@@ -2956,10 +2954,10 @@ void igt_display_reset_outputs(igt_display_t *display)
 	for_each_crtc(display, crtc) {
 		igt_output_t *output;
 
-		if (!igt_pipe_has_valid_output(display, crtc->pipe))
+		if (!igt_crtc_has_valid_output(crtc))
 			continue;
 
-		output = igt_get_single_output_for_pipe(display, crtc->pipe);
+		output = igt_get_single_output_for_crtc(crtc);
 
 		if (crtc->num_primary_planes > 1) {
 			igt_plane_t *old_primary = &crtc->planes[0];
@@ -3264,17 +3262,16 @@ void igt_display_require_output(igt_display_t *display)
 }
 
 /**
- * igt_display_require_output_on_pipe:
- * @display: A pointer to an #igt_display_t structure
- * @pipe: Display pipe
+ * igt_display_require_output_on_crtc:
+ * @crtc: CRTC
  *
- * Checks whether there's a valid @pipe/@output combination for the given @display and @pipe
- * Skips test if a valid @pipe is not found
+ * Checks whether there's a valid @crtc/@output combination for the given @crtc
  */
-void igt_display_require_output_on_pipe(igt_display_t *display, enum pipe pipe)
+void igt_display_require_output_on_crtc(igt_crtc_t *crtc)
 {
-	if (!igt_pipe_has_valid_output(display, pipe))
-		igt_skip("No valid connector found on pipe %s\n", kmstest_pipe_name(pipe));
+	if (!igt_crtc_has_valid_output(crtc))
+		igt_skip("No valid connector found on CRTC %s\n",
+			 igt_crtc_name(crtc));
 }
 
 /**
@@ -3666,24 +3663,21 @@ igt_output_t **__igt_pipe_populate_outputs(igt_display_t *display, igt_output_t 
 }
 
 /**
- * igt_get_single_output_for_pipe:
- * @display: a pointer to an #igt_display_t structure
- * @pipe: The pipe for which an #igt_output_t must be returned.
+ * igt_get_single_output_for_crtc:
+ * @crtc: The CRTC for which an #igt_output_t must be returned.
  *
- * Get a compatible output for a pipe.
+ * Get a compatible output for a CRTC.
  *
- * Returns: A compatible output for a given pipe, or NULL.
+ * Returns: A compatible output for a given CRTC, or NULL.
  */
-igt_output_t *igt_get_single_output_for_pipe(igt_display_t *display, enum pipe pipe)
+igt_output_t *igt_get_single_output_for_crtc(igt_crtc_t *crtc)
 {
+	igt_display_t *display = crtc->display;
 	igt_output_t *chosen_outputs[igt_display_n_crtcs(display)];
-
-	igt_assert(pipe != PIPE_NONE);
-	igt_require_pipe(display, pipe);
 
 	__igt_pipe_populate_outputs(display, chosen_outputs);
 
-	return chosen_outputs[pipe];
+	return chosen_outputs[crtc->pipe];
 }
 
 static igt_output_t *igt_crtc_get_output(igt_crtc_t *crtc)
@@ -4787,7 +4781,8 @@ static int igt_atomic_commit(igt_display_t *display, uint32_t flags, void *user_
 		if (crtc->changed)
 			igt_atomic_prepare_crtc_commit(crtc, req);
 
-		for_each_plane_on_pipe(display, crtc->pipe, plane) {
+		for_each_plane_on_crtc(crtc,
+				       plane) {
 			/* skip planes that are handled by another pipe */
 			if (plane->ref->crtc != crtc)
 				continue;
@@ -4851,7 +4846,8 @@ display_commit_changed(igt_display_t *display, enum igt_commit_style s)
 			}
 		}
 
-		for_each_plane_on_pipe(display, crtc->pipe, plane) {
+		for_each_plane_on_crtc(crtc,
+				       plane) {
 			if (s == COMMIT_ATOMIC) {
 				int fd;
 				plane->changed = 0;
@@ -6114,6 +6110,20 @@ uint32_t kmstest_get_vbl_flag(int crtc_index)
 	return flag;
 }
 
+/**
+ * igt_crtc_get_vbl_flag:
+ * @crtc: CRTC
+ *
+ * Convert a CRTC into flag representation
+ * expected by DRM_IOCTL_WAIT_VBLANK.
+ *
+ * See #igt_wait_for_vblank_count for details.
+ */
+uint32_t igt_crtc_get_vbl_flag(igt_crtc_t *crtc)
+{
+	return kmstest_get_vbl_flag(crtc->crtc_index);
+}
+
 static inline const uint32_t *
 formats_ptr(const struct drm_format_modifier_blob *blob)
 {
@@ -6252,7 +6262,8 @@ static int igt_count_display_format_mod(igt_display_t *display)
 	for_each_crtc(display, crtc) {
 		igt_plane_t *plane;
 
-		for_each_plane_on_pipe(display, crtc->pipe, plane) {
+		for_each_plane_on_crtc(crtc,
+				       plane) {
 			count += plane->format_mod_count;
 		}
 	}
@@ -6294,7 +6305,8 @@ static void igt_fill_display_format_mod(igt_display_t *display)
 	for_each_crtc(display, crtc) {
 		igt_plane_t *plane;
 
-		for_each_plane_on_pipe(display, crtc->pipe, plane) {
+		for_each_plane_on_crtc(crtc,
+				       plane) {
 			for (int i = 0; i < plane->format_mod_count; i++) {
 				igt_add_display_format_mod(display,
 							   plane->formats[i],
@@ -6585,14 +6597,16 @@ bool igt_get_i915_edp_lobf_status(int drmfd, char *connector_name)
  *
  * Returns: The maximum bpc from the connector debugfs.
  */
-unsigned int igt_get_output_max_bpc(int drmfd, char *connector_name)
+unsigned int igt_get_output_max_bpc(igt_output_t *output)
 {
+	igt_display_t *display = output->display;
+	int drmfd = display->drm_fd;
 	char buf[24];
 	char *start_loc;
 	int fd, res;
 	unsigned int maximum;
 
-	fd = igt_debugfs_connector_dir(drmfd, connector_name, O_RDONLY);
+	fd = igt_debugfs_connector_dir(drmfd, output->name, O_RDONLY);
 	igt_assert(fd >= 0);
 
 	res = igt_debugfs_simple_read(fd, "output_bpc", buf, sizeof(buf));
@@ -6613,15 +6627,17 @@ unsigned int igt_get_output_max_bpc(int drmfd, char *connector_name)
  *
  * Returns: The current bpc from the crtc debugfs.
  */
-unsigned int igt_get_pipe_current_bpc(int drmfd, enum pipe pipe)
+unsigned int igt_get_crtc_current_bpc(igt_crtc_t *crtc)
 {
+	igt_display_t *display = crtc->display;
+	int drmfd = display->drm_fd;
 	char buf[24];
 	char debugfs_name[24];
 	char *start_loc;
 	int fd, res;
 	unsigned int current;
 
-	fd = igt_debugfs_crtc_dir(drmfd, pipe, O_RDONLY);
+	fd = igt_debugfs_crtc_dir(drmfd, crtc->pipe, O_RDONLY);
 	igt_assert(fd >= 0);
 
 	if (is_intel_device(drmfd))
@@ -6642,11 +6658,11 @@ unsigned int igt_get_pipe_current_bpc(int drmfd, enum pipe pipe)
 	return current;
 }
 
-static unsigned int get_current_bpc(int drmfd, enum pipe pipe,
-				    char *output_name, unsigned int bpc)
+static unsigned int get_current_bpc(igt_crtc_t *crtc, igt_output_t *output,
+				    unsigned int bpc)
 {
-	unsigned int maximum = igt_get_output_max_bpc(drmfd, output_name);
-	unsigned int current = igt_get_pipe_current_bpc(drmfd, pipe);
+	unsigned int maximum = igt_get_output_max_bpc(output);
+	unsigned int current = igt_get_crtc_current_bpc(crtc);
 
 	igt_require_f(maximum >= bpc,
 		      "Monitor doesn't support %u bpc, max is %u\n", bpc,
@@ -6664,10 +6680,11 @@ static unsigned int get_current_bpc(int drmfd, enum pipe pipe,
  *
  * Assert if crtc's current bpc is not matched with the requested one.
  */
-void igt_assert_output_bpc_equal(int drmfd, enum pipe pipe,
-				 char *output_name, unsigned int bpc)
+void igt_assert_output_bpc_equal(igt_crtc_t *crtc, igt_output_t *output,
+				 unsigned int bpc)
 {
-	unsigned int current = get_current_bpc(drmfd, pipe, output_name, bpc);
+	unsigned int current = get_current_bpc(crtc,
+					       output, bpc);
 
 	igt_assert_eq(current, bpc);
 }
@@ -6685,10 +6702,11 @@ void igt_assert_output_bpc_equal(int drmfd, enum pipe pipe,
  * Returns: True if crtc's current bpc is matched with the requested bpc,
  * else False.
  */
-bool igt_check_output_bpc_equal(int drmfd, enum pipe pipe,
-				char *output_name, unsigned int bpc)
+bool igt_check_output_bpc_equal(igt_crtc_t *crtc, igt_output_t *output,
+				unsigned int bpc)
 {
-	unsigned int current = get_current_bpc(drmfd, pipe, output_name, bpc);
+	unsigned int current = get_current_bpc(crtc,
+					       output, bpc);
 
 	return (current == bpc);
 }
@@ -6709,7 +6727,7 @@ bool igt_check_output_bpc_equal(int drmfd, enum pipe pipe,
  *
  * Returns: True if suitable mode found to use requested bpc, else False.
  */
-bool igt_max_bpc_constraint(igt_display_t *display, enum pipe pipe,
+bool igt_max_bpc_constraint(igt_display_t *display, igt_crtc_t *crtc,
 			    igt_output_t *output, int bpc)
 {
 	drmModeConnector *connector = output->config.connector;
@@ -6727,8 +6745,7 @@ bool igt_max_bpc_constraint(igt_display_t *display, enum pipe pipe,
 					    display->is_atomic ? COMMIT_ATOMIC : COMMIT_LEGACY))
 			continue;
 
-		if (!igt_check_output_bpc_equal(display->drm_fd, pipe,
-						output->name, bpc))
+		if (!igt_check_output_bpc_equal(crtc, output, bpc))
 			continue;
 
 		return true;
@@ -7279,7 +7296,7 @@ bool intel_pipe_output_combo_valid(igt_display_t *display)
 		if (output->pending_pipe == PIPE_NONE)
 			continue;
 
-		if (!igt_pipe_connector_valid(output->pending_pipe, output)) {
+		if (!igt_crtc_connector_valid(igt_crtc_for_pipe(display, output->pending_pipe), output)) {
 			igt_info("Output %s is disconnected (or) pipe-%s & %s cannot be used together\n",
 				 igt_output_name(output),
 				 kmstest_pipe_name(output->pending_pipe),
@@ -7350,14 +7367,14 @@ int igt_get_dp_mst_connector_id(igt_output_t *output)
 }
 
 /**
- * get_num_scalers:
- * @display: the display
- * @pipe: display pipe
+ * igt_crtc_num_scalers:
+ * @crtc: the CRTC
  *
- * Returns: Number of scalers supported per pipe.
+ * Returns: Number of scalers supported on the CRTC.
  */
-int get_num_scalers(igt_display_t *display, enum pipe pipe)
+int igt_crtc_num_scalers(igt_crtc_t *crtc)
 {
+	igt_display_t *display = crtc->display;
 	char buf[8120];
 	char *start_loc1, *start_loc2;
 	int dir, res;
@@ -7365,7 +7382,7 @@ int get_num_scalers(igt_display_t *display, enum pipe pipe)
 	int drm_fd = display->drm_fd;
 	char dest[20] = ":pipe ";
 
-	strcat(dest, kmstest_pipe_name(pipe));
+	strcat(dest, igt_crtc_name(crtc));
 
 	if (is_intel_device(drm_fd) &&
 	    intel_display_ver(intel_get_drm_devid(drm_fd)) >= 9) {
@@ -7394,7 +7411,8 @@ int get_num_scalers(igt_display_t *display, enum pipe pipe)
 		 * as a rough approximation of the # of scalars.. it may
 		 * undercount on some hw, but it will not overcount
 		 */
-		for_each_plane_on_pipe(display, pipe, plane) {
+		for_each_plane_on_crtc(crtc,
+				       plane) {
 			for (unsigned i = 0; i < plane->format_mod_count; i++) {
 				if (igt_format_is_yuv(plane->formats[i])) {
 					num_scalers++;
@@ -7961,6 +7979,45 @@ igt_crtc_t *igt_crtc_for_crtc_id(igt_display_t *display, uint32_t crtc_id)
 		if (crtc->crtc_id == crtc_id)
 			return crtc;
 	}
+
+	return NULL;
+}
+
+/*
+ * igt_first_crtc:
+ * @display: pointer to igt_display_t
+ *
+ * Returns: The first CRTC on the device
+ */
+igt_crtc_t *igt_first_crtc(igt_display_t *display)
+{
+	igt_crtc_t *crtc;
+
+	for_each_crtc(display, crtc)
+		return crtc;
+
+	return NULL;
+}
+
+/**
+ * igt_first_crtc_with_single_output:
+ * @display: a pointer to an #igt_display_t structure
+ * @ret_output: Returned output
+ *
+ * Returns: The first CRTC with a connected output (the output
+ * is returned via @ret_output)
+ */
+igt_crtc_t *igt_first_crtc_with_single_output(igt_display_t *display, igt_output_t **ret_output)
+{
+	igt_output_t *output;
+	igt_crtc_t *crtc;
+
+	for_each_crtc_with_single_output(display, crtc, output) {
+		*ret_output = output;
+		return crtc;
+	}
+
+	*ret_output = NULL;
 
 	return NULL;
 }

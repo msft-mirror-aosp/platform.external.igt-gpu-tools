@@ -172,7 +172,7 @@ static void reset_alpha(igt_display_t *display, igt_crtc_t *crtc)
 {
 	igt_plane_t *plane;
 
-	for_each_plane_on_pipe(display, crtc->pipe, plane) {
+	for_each_plane_on_crtc(crtc, plane) {
 		if (igt_plane_has_prop(plane, IGT_PLANE_ALPHA))
 			igt_plane_set_prop_value(plane, IGT_PLANE_ALPHA, 0xffff);
 
@@ -529,7 +529,7 @@ static void coverage_premult_constant(data_t *data, igt_crtc_t *crtc,
 	igt_pipe_crc_stop(data->pipe_crc);
 }
 
-static void run_test_on_pipe_planes(data_t *data, igt_crtc_t *crtc,
+static void run_test_on_crtc_planes(data_t *data, igt_crtc_t *crtc,
 				    igt_output_t *output,
 				    bool blend, bool must_multiply,
 				    void(*test)(data_t *, igt_crtc_t *crtc, igt_plane_t *))
@@ -539,7 +539,7 @@ static void run_test_on_pipe_planes(data_t *data, igt_crtc_t *crtc,
 	int first_plane = -1;
 	int last_plane = -1;
 
-	for_each_plane_on_pipe(display, crtc->pipe, plane) {
+	for_each_plane_on_crtc(crtc, plane) {
 		if (!igt_plane_has_prop(plane, IGT_PLANE_ALPHA))
 			continue;
 
@@ -559,7 +559,7 @@ static void run_test_on_pipe_planes(data_t *data, igt_crtc_t *crtc,
 		last_plane = j__;
 	}
 
-	for_each_plane_on_pipe(display, crtc->pipe, plane) {
+	for_each_plane_on_crtc(crtc, plane) {
 		if (!igt_plane_has_prop(plane, IGT_PLANE_ALPHA))
 			continue;
 
@@ -652,15 +652,15 @@ static const struct {
 	},
 };
 
-static bool pipe_check(data_t *data, igt_crtc_t *crtc,
+static bool crtc_check(data_t *data, igt_crtc_t *crtc,
 		       bool blend, bool must_multiply)
 {
 	igt_display_t *display = &data->display;
 	igt_plane_t *plane;
 	bool plane_alpha = false, plane_blend = false, multiply = false;
 
-	igt_display_require_output_on_pipe(display, crtc->pipe);
-	for_each_plane_on_pipe(display, crtc->pipe, plane) {
+	igt_display_require_output_on_crtc(crtc);
+	for_each_plane_on_crtc(crtc, plane) {
 		if (!igt_plane_has_prop(plane, IGT_PLANE_ALPHA))
 			continue;
 		plane_alpha = true;
@@ -718,13 +718,13 @@ static void run_subtests(data_t *data)
 
 				prepare_crtc(data, output,
 					     crtc);
-				if (!pipe_check(data, crtc, subtests[i].blend, subtests[i].must_multiply))
+				if (!crtc_check(data, crtc, subtests[i].blend, subtests[i].must_multiply))
 					continue;
 
 				igt_dynamic_f("pipe-%s-%s",
 					      igt_crtc_name(crtc),
 					      output->name)
-					run_test_on_pipe_planes(data,
+					run_test_on_crtc_planes(data,
 								crtc,
 								output,
 								subtests[i].blend,

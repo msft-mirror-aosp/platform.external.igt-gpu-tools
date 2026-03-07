@@ -273,7 +273,8 @@ test_planes_on_pipe(data_t *data, uint64_t modifier)
 	igt_plane_t *plane;
 	unsigned tested = 0;
 
-	for_each_plane_on_pipe(&data->display, data->crtc->pipe, plane)
+	for_each_plane_on_crtc(data->crtc,
+			       plane)
 		tested += test_planes_on_pipe_with_output(data, plane, modifier);
 
 	igt_assert(tested > 0);
@@ -296,7 +297,8 @@ static void run_test(data_t *data, uint64_t modifier)
 		return;
 
 	for_each_crtc(&data->display, crtc) {
-		for_each_valid_output_on_pipe(&data->display, crtc->pipe,
+		for_each_valid_output_on_crtc(&data->display,
+					      crtc,
 					      output) {
 			data->crtc = crtc;
 			data->output = output;
