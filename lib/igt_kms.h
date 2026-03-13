@@ -507,7 +507,7 @@ typedef struct {
 	struct kmstest_connector_config config;
 	char *name;
 	bool force_reprobe;
-	enum pipe pending_pipe;
+	igt_crtc_t *pending_crtc;
 	bool use_override_mode;
 	drmModeModeInfo override_mode;
 
@@ -585,6 +585,8 @@ static inline igt_crtc_t *igt_crtc_for_pipe(igt_display_t *display, enum pipe pi
 igt_crtc_t *igt_crtc_for_crtc_id(igt_display_t *display, uint32_t crtc_id);
 igt_crtc_t *igt_first_crtc(igt_display_t *display);
 igt_crtc_t *igt_first_crtc_with_single_output(igt_display_t *display, igt_output_t **ret_output);
+igt_crtc_t *igt_next_crtc(igt_display_t *display, igt_crtc_t *crtc);
+igt_crtc_t *igt_random_crtc(igt_display_t *display);
 
 uint32_t igt_crtc_get_vbl_flag(igt_crtc_t *crtc);
 unsigned int igt_crtc_get_vblank(igt_crtc_t *crtc, unsigned int flags);
@@ -1265,6 +1267,7 @@ bool igt_ultrajoiner_possible(int drmfd, drmModeModeInfo *mode, int max_dotclock
 bool ultrajoiner_mode_found(int drm_fd, drmModeConnector *connector,
 			  int max_dotclock, drmModeModeInfo *mode);
 bool igt_has_force_joiner_debugfs(int drmfd, char *conn_name);
+drmModeModeInfo *igt_get_non_joiner_mode(int drm_fd, igt_output_t *output);
 bool is_joiner_mode(int drm_fd, igt_output_t *output);
 bool igt_check_force_joiner_status(int drmfd, char *connector_name);
 bool igt_check_bigjoiner_support(igt_display_t *display);

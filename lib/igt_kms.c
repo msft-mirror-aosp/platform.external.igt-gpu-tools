@@ -2600,8 +2600,8 @@ void igt_output_refresh(igt_output_t *output)
 	igt_display_t *display = output->display;
 	unsigned long crtc_idx_mask = 0;
 
-	if (output->pending_pipe != PIPE_NONE)
-		crtc_idx_mask = 1 << output->pending_pipe;
+	if (output->pending_crtc)
+		crtc_idx_mask = 1 << output->pending_crtc->crtc_index;
 
 	kmstest_free_connector_config(&output->config);
 
@@ -2620,8 +2620,8 @@ void igt_output_refresh(igt_output_t *output)
 		igt_atomic_fill_connector_props(display, output,
 			IGT_NUM_CONNECTOR_PROPS, igt_connector_prop_names);
 
-	LOG(display, "%s: Selecting pipe %s\n", output->name,
-	    kmstest_pipe_name(output->pending_pipe));
+	LOG(display, "%s: Selecting CRTC %s\n", output->name,
+	    igt_crtc_name(output->pending_crtc));
 }
 
 static int
@@ -2741,7 +2741,7 @@ static void igt_crtc_reset(igt_crtc_t *crtc)
 
 static void igt_output_reset(igt_output_t *output)
 {
-	output->pending_pipe = PIPE_NONE;
+	output->pending_crtc = NULL;
 	output->use_override_mode = false;
 	memset(&output->override_mode, 0, sizeof(output->override_mode));
 
@@ -2932,7 +2932,7 @@ void igt_display_reset_outputs(igt_display_t *display)
 		 * We don't assign each output a pipe unless
 		 * a CRTC is set with igt_output_set_crtc().
 		 */
-		output->pending_pipe = PIPE_NONE;
+		output->pending_crtc = NULL;
 		output->id = resources->connectors[i];
 		output->display = display;
 
@@ -3438,19 +3438,20 @@ void igt_display_fini(igt_display_t *display)
 static void igt_display_refresh(igt_display_t *display)
 {
 	igt_output_t *output;
+	unsigned int crtc_index_in_use_mask = 0;
 	int i;
-
-	unsigned long pipes_in_use = 0;
 
        /* Check that two outputs aren't trying to use the same pipe */
 	for (i = 0; i < display->n_outputs; i++) {
 		output = &display->outputs[i];
 
-		if (output->pending_pipe != PIPE_NONE) {
-			if (pipes_in_use & (1 << output->pending_pipe))
+		if (output->pending_crtc) {
+			unsigned int crtc_index_mask = 1 << output->pending_crtc->crtc_index;
+
+			if (crtc_index_in_use_mask & crtc_index_mask)
 				goto report_dup;
 
-			pipes_in_use |= 1 << output->pending_pipe;
+			crtc_index_in_use_mask |= crtc_index_mask;
 		}
 
 		if (output->force_reprobe)
@@ -3463,35 +3464,23 @@ report_dup:
 	for (; i > 0; i--) {
 		igt_output_t *b = &display->outputs[i - 1];
 
-		igt_assert_f(output->pending_pipe !=
-			     b->pending_pipe,
-			     "%s and %s are both trying to use pipe %s\n",
+		if (!b->pending_crtc)
+			continue;
+
+		igt_assert_f(output->pending_crtc != b->pending_crtc,
+			     "%s and %s are both trying to use CRTC %s\n",
 			     igt_output_name(output), igt_output_name(b),
-			     kmstest_pipe_name(output->pending_pipe));
+			     igt_crtc_name(output->pending_crtc));
 	}
 }
 
+/*
+ * Return the pending CRTC (i.e. the CRTC that should drive this output after
+ * the commit(), or NULL if the user hasn't specified a CRTC to use.
+ */
 igt_crtc_t *igt_output_get_driving_crtc(igt_output_t *output)
 {
-	igt_display_t *display = output->display;
-	enum pipe pipe;
-
-	if (output->pending_pipe == PIPE_NONE) {
-		/*
-		 * The user hasn't specified a pipe to use, return none.
-		 */
-		return NULL;
-	} else {
-		/*
-		 * Otherwise, return the pending pipe (ie the pipe that should
-		 * drive this output after the commit()
-		 */
-		pipe = output->pending_pipe;
-	}
-
-	igt_assert(pipe >= 0 && pipe < igt_display_n_crtcs(display));
-
-	return igt_crtc_for_pipe(display, pipe);
+	return output->pending_crtc;
 }
 
 static igt_plane_t *igt_crtc_get_plane(igt_crtc_t *crtc, int plane_idx)
@@ -3600,16 +3589,16 @@ bool output_is_internal_panel(igt_output_t *output)
 
 igt_output_t **__igt_pipe_populate_outputs(igt_display_t *display, igt_output_t **chosen_outputs)
 {
-	unsigned full_pipe_mask = 0, assigned_pipes = 0;
+	unsigned int full_crtc_index_mask = 0, assigned_crtc_index_mask = 0;
 	igt_output_t *output;
 	igt_crtc_t *crtc;
-	int i, j;
+	int i;
 
 	memset(chosen_outputs, 0,
 	       sizeof(*chosen_outputs) * igt_display_n_crtcs(display));
 
 	for_each_crtc(display, crtc)
-		full_pipe_mask |= 1 << crtc->pipe;
+		full_crtc_index_mask |= 1 << crtc->crtc_index;
 
 	/*
 	 * Try to assign all outputs to the first available CRTC for
@@ -3618,7 +3607,7 @@ igt_output_t **__igt_pipe_populate_outputs(igt_display_t *display, igt_output_t 
 	 */
 	for (i = 0; i <= igt_display_n_crtcs(display); i++) {
 		for_each_connected_output(display, output) {
-			uint32_t pipe_mask = output->config.valid_crtc_index_mask & full_pipe_mask;
+			uint32_t crtc_index_mask = output->config.valid_crtc_index_mask & full_crtc_index_mask;
 			bool found = false;
 
 			if (output_is_internal_panel(output)) {
@@ -3630,27 +3619,30 @@ igt_output_t **__igt_pipe_populate_outputs(igt_display_t *display, igt_output_t 
 
 				if (i)
 					continue;
-			} else if (__builtin_popcount(pipe_mask) != i)
+			} else if (__builtin_popcount(crtc_index_mask) != i) {
 				continue;
+			}
 
-			for (j = 0; j < igt_display_n_crtcs(display); j++) {
-				bool pipe_assigned = assigned_pipes & (1 << j);
+			for_each_crtc(display, crtc) {
+				bool crtc_assigned = assigned_crtc_index_mask & (1 << crtc->crtc_index);
 
-				if (pipe_assigned || !(pipe_mask & (1 << j)))
+				if (crtc_assigned || !(crtc_index_mask & (1 << crtc->crtc_index)))
 					continue;
 
 				if (!found) {
-					/* We found an unassigned pipe, use it! */
+					/* We found an unassigned CRTC, use it! */
 					found = true;
-					assigned_pipes |= 1 << j;
-					chosen_outputs[j] = output;
-				} else if (!chosen_outputs[j] ||
-					   /*
-					    * Overwrite internal panel if not assigned,
-					    * external outputs are faster to do modesets
-					    */
-					   output_is_internal_panel(chosen_outputs[j]))
-					chosen_outputs[j] = output;
+					assigned_crtc_index_mask |= 1 << crtc->crtc_index;
+					chosen_outputs[crtc->pipe] = output;
+				} else if (!chosen_outputs[crtc->pipe] ||
+					   output_is_internal_panel(chosen_outputs[crtc->pipe])) {
+					/*
+					 * Overwrite internal panel if not
+					 * assigned, external outputs are faster
+					 * to do modesets
+					 */
+					chosen_outputs[crtc->pipe] = output;
+				}
 			}
 
 			if (!found)
@@ -3688,7 +3680,7 @@ static igt_output_t *igt_crtc_get_output(igt_crtc_t *crtc)
 	for (i = 0; i < display->n_outputs; i++) {
 		igt_output_t *output = &display->outputs[i];
 
-		if (output->pending_pipe == crtc->pipe)
+		if (output->pending_crtc == crtc)
 			return output;
 	}
 
@@ -5285,12 +5277,21 @@ void igt_output_set_crtc(igt_output_t *output, igt_crtc_t *crtc)
 
 	igt_assert(output->name);
 
-	if (output->pending_pipe != PIPE_NONE)
+	if (output->pending_crtc)
 		old_crtc = igt_output_get_driving_crtc(output);
+
+	/*
+	 * Ensure pending_crtc is always valid.
+	 *
+	 * FIXME: Ensure we only have valid crtc objects around in general, so
+	 * we can remove this check.
+	 */
+	if (crtc && !crtc->valid)
+		crtc = NULL;
 
 	LOG(display, "%s: set_crtc(%s)\n", igt_output_name(output),
 	    igt_crtc_name(crtc));
-	output->pending_pipe = crtc ? crtc->pipe : PIPE_NONE;
+	output->pending_crtc = crtc;
 
 	if (old_crtc) {
 		igt_output_t *old_output;
@@ -5368,7 +5369,7 @@ bool __override_all_active_output_modes_to_fit_bw(igt_display_t *display,
  * igt_override_all_active_output_modes_to_fit_bw:
  * @display: a pointer to an #igt_display_t structure
  *
- * Override the mode on all active outputs (i.e. pending_pipe != PIPE_NONE)
+ * Override the mode on all active outputs (i.e. pending_crtc != NULL)
  * on basis of bandwidth.
  *
  * Returns: True if a valid connector mode combo found, else false
@@ -5381,7 +5382,7 @@ bool igt_override_all_active_output_modes_to_fit_bw(igt_display_t *display)
 	for (i = 0 ; i < display->n_outputs; i++) {
 		igt_output_t *output = &display->outputs[i];
 
-		if (output->pending_pipe == PIPE_NONE)
+		if (!output->pending_crtc)
 			continue;
 
 		/* Sort the modes in descending order by clock freq. */
@@ -7015,6 +7016,37 @@ bool ultrajoiner_mode_found(int drm_fd, drmModeConnector *connector,
 }
 
 /**
+ * igt_get_non_joiner_mode:
+ * @drm_fd: drm file descriptor
+ * @output: pointer to the output structure
+ *
+ * Finds the display mode from the output that does not require
+ * Big Joiner or Ultra Joiner.
+ *
+ * Returns: Pointer to non-joiner mode, or NULL if not found.
+ */
+drmModeModeInfo *igt_get_non_joiner_mode(int drm_fd, igt_output_t *output)
+{
+	drmModeConnector *connector;
+	int max_dotclock;
+
+	connector = output->config.connector;
+	max_dotclock = igt_get_max_dotclock(drm_fd);
+
+	for (int i = 0; i < connector->count_modes; i++) {
+		drmModeModeInfo *current_mode = &connector->modes[i];
+
+		/* Check if mode requires joiner */
+		if (!igt_bigjoiner_possible(drm_fd, current_mode, max_dotclock) &&
+		    !igt_ultrajoiner_possible(drm_fd, current_mode, max_dotclock)) {
+			return current_mode;
+		}
+	}
+
+	return NULL;
+}
+
+/**
  * is_joiner_mode:
  * @drm_fd: drm file descriptor
  * @output: pointer to the output structure
@@ -7121,7 +7153,7 @@ bool igt_check_force_joiner_status(int drmfd, char *connector_name)
  * igt_check_bigjoiner_support:
  * @display: a pointer to an #igt_display_t structure
  *
- * Get all active pipes from connected outputs (i.e. pending_pipe != PIPE_NONE)
+ * Get all active pipes from connected outputs (i.e. pending_crtc != NULL)
  * and check those pipes supports the selected mode(s).
  *
  * Example:
@@ -7152,10 +7184,10 @@ bool igt_check_bigjoiner_support(igt_display_t *display)
 	 * just before calling this function.
 	 */
 	for_each_connected_output(display, output) {
-		if (output->pending_pipe == PIPE_NONE)
+		if (!output->pending_crtc)
 			continue;
 
-		pipes[pipes_in_use].idx = output->pending_pipe;
+		pipes[pipes_in_use].idx = output->pending_crtc->pipe;
 		pipes[pipes_in_use].mode = igt_output_get_mode(output);
 		pipes[pipes_in_use].output = output;
 		pipes[pipes_in_use].force_joiner = igt_check_force_joiner_status(display->drm_fd, output->name);
@@ -7274,7 +7306,7 @@ bool igt_parse_mode_string(const char *mode_string, drmModeModeInfo *mode)
  *
  * Every individual test must use igt_output_set_crtc() before calling this
  * helper, so that this function will get all active pipes from connected
- * outputs (i.e. pending_pipe != PIPE_NONE) and check the selected combo is
+ * outputs (i.e. pending_crtc != NULL) and check the selected combo is
  * valid or not.
  *
  * This helper is supposed to be a superset of all constraints of pipe/output
@@ -7293,13 +7325,13 @@ bool intel_pipe_output_combo_valid(igt_display_t *display)
 	igt_output_t *output;
 
 	for_each_connected_output(display, output) {
-		if (output->pending_pipe == PIPE_NONE)
+		if (!output->pending_crtc)
 			continue;
 
-		if (!igt_crtc_connector_valid(igt_crtc_for_pipe(display, output->pending_pipe), output)) {
+		if (!igt_crtc_connector_valid(output->pending_crtc, output)) {
 			igt_info("Output %s is disconnected (or) pipe-%s & %s cannot be used together\n",
 				 igt_output_name(output),
-				 kmstest_pipe_name(output->pending_pipe),
+				 igt_crtc_name(output->pending_crtc),
 				 igt_output_name(output));
 			return false;
 		}
@@ -8020,4 +8052,43 @@ igt_crtc_t *igt_first_crtc_with_single_output(igt_display_t *display, igt_output
 	*ret_output = NULL;
 
 	return NULL;
+}
+
+/*
+ * igt_next_crtc:
+ * @display: pointer to igt_display_t
+ * @crtc: pointer to igt_crtc_t, or NULL for first
+ *
+ * Returns: The next CRTC on the device
+ */
+igt_crtc_t *igt_next_crtc(igt_display_t *display, igt_crtc_t *crtc)
+{
+	igt_crtc_t *next;
+
+	for_each_crtc(display, next) {
+		if (!crtc || next->pipe > crtc->pipe)
+			return next;
+	}
+
+	return NULL;
+}
+
+/*
+ * igt_random_crtc:
+ * @display: pointer to igt_display_t
+ *
+ * Returns: A random CRTC on the device
+ */
+igt_crtc_t *igt_random_crtc(igt_display_t *display)
+{
+	igt_crtc_t *crtcs[IGT_MAX_PIPES];
+	igt_crtc_t *crtc;
+	int n = 0;
+
+	for_each_crtc(display, crtc)
+		crtcs[n++] = crtc;
+
+	igt_skip_on_f(!n, "No CRTCs on device\n");
+
+	return crtcs[rand() % n];
 }
