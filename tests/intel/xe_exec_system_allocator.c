@@ -2211,6 +2211,24 @@ processes(int fd, int n_exec_queues, int n_execs, size_t bo_size,
 		reset_nr_hugepages();
 }
 
+struct xe_gt_stats_snapshot {
+	int svm_4K_pagefault_us;
+	int svm_64K_pagefault_us;
+	int svm_2M_pagefault_us;
+};
+
+static void read_gt_stats_snapshot(int fd,
+				   struct drm_xe_engine_class_instance *eci,
+				   struct xe_gt_stats_snapshot *snapshot)
+{
+	snapshot->svm_4K_pagefault_us =
+		xe_gt_stats_get_count(fd, eci->gt_id, "svm_4K_pagefault_us");
+	snapshot->svm_64K_pagefault_us =
+		xe_gt_stats_get_count(fd, eci->gt_id, "svm_64K_pagefault_us");
+	snapshot->svm_2M_pagefault_us =
+		xe_gt_stats_get_count(fd, eci->gt_id, "svm_2M_pagefault_us");
+}
+
 /* compute flags */
 #define TOUCH_ONCE		(0x1 << 0)
 #define ACCESS_DEVICE_HOST	(0x1 << 1)
@@ -2240,7 +2258,8 @@ processes(int fd, int n_exec_queues, int n_execs, size_t bo_size,
  * @range-device-host:				touch the whole buffer, from the device then from the host
  */
 static void
-test_compute(int fd, size_t size, unsigned int flags)
+test_compute(int fd, struct drm_xe_engine_class_instance *eci, size_t size,
+	     unsigned int flags, int loops)
 {
 	struct drm_xe_sync sync = {
 		.type = DRM_XE_SYNC_TYPE_USER_FENCE,
@@ -2258,7 +2277,7 @@ test_compute(int fd, size_t size, unsigned int flags)
 		.array_size = size / sizeof(float),
 	};
 	float *compute_input;
-	int i;
+	struct xe_gt_stats_snapshot stats_before, stats_after;
 
 	vm = xe_vm_create(fd, DRM_XE_VM_CREATE_FLAG_LR_MODE | DRM_XE_VM_CREATE_FLAG_FAULT_MODE, 0);
 	bo_sync = aligned_alloc(xe_get_default_alignment(fd), sizeof(*bo_sync));
@@ -2266,20 +2285,50 @@ test_compute(int fd, size_t size, unsigned int flags)
 	bind_system_allocator(&sync, 1);
 	xe_wait_ufence(fd, &bo_sync->sync, USER_FENCE_VALUE, 0, FIVE_SEC);
 
-	compute_input = aligned_alloc(SZ_2M, size);
-	igt_assert(compute_input);
-
 	env.loop_count = (flags & TOUCH_ONCE) ? 1 : env.array_size;
 	env.skip_results_check = !(flags & ACCESS_DEVICE_HOST);
-	env.input_addr = to_user_pointer(compute_input);
 	env.vm = vm;
 
-	for (i = 0; i < env.loop_count; i++)
-		compute_input[i] = rand() / (float)RAND_MAX;
+	read_gt_stats_snapshot(fd, eci, &stats_before);
 
-	run_intel_compute_kernel(fd, &env, EXECENV_PREF_SYSTEM);
+	for (int i = 0; i < loops; i++) {
+		/*
+		 * What is done below for the input buffer could also be done for the output
+		 * buffer, that is system allocation with aligned_alloc() then setting it into
+		 * user_execenv. However the current focus of this test is to provide fine
+		 * control on triggering GPU page faults from the context of a compute kernel
+		 * (execution units) unlike test_exec(), so using SVM for the input buffer only
+		 * is sufficient and simpler.
+		 */
+		compute_input = aligned_alloc(size, size);
+		igt_assert(compute_input);
+		env.input_addr = to_user_pointer(compute_input);
 
-	free(compute_input);
+		memset(compute_input, rand() % 255 + 1, size);
+
+		xe_run_intel_compute_kernel_on_engine(fd, eci, &env, EXECENV_PREF_SYSTEM);
+
+		free(compute_input);
+	}
+
+	read_gt_stats_snapshot(fd, eci, &stats_after);
+
+	if (flags & TOUCH_ONCE) {
+		if (size == SZ_4K) {
+			igt_info("  svm_4K_pagefault_us=%d\n",
+				 (stats_after.svm_4K_pagefault_us -
+				  stats_before.svm_4K_pagefault_us) / loops);
+		} else if (size == SZ_64K) {
+			igt_info("  svm_64K_pagefault_us=%d\n",
+				 (stats_after.svm_64K_pagefault_us -
+				  stats_before.svm_64K_pagefault_us) / loops);
+		} else if (size == SZ_2M) {
+			igt_info("  svm_2M_pagefault_us=%d\n",
+				 (stats_after.svm_2M_pagefault_us -
+				  stats_before.svm_2M_pagefault_us) / loops);
+		}
+	}
+
 	unbind_system_allocator();
 	xe_vm_destroy(fd, vm);
 }
@@ -2289,6 +2338,13 @@ struct section {
 	unsigned long long flags;
 	uint8_t (*fn)(int pat);
 };
+
+static int getenv_int(const char *var, int def_val)
+{
+	char *env = getenv(var);
+
+	return env ? atoi(env) : def_val;
+}
 
 int igt_main()
 {
@@ -2460,7 +2516,7 @@ int igt_main()
 		{ NULL },
 	};
 
-	int fd;
+	int fd, svm_compute_loops = getenv_int("IGT_SVM_COMPUTE_LOOPS", 1);
 
 	igt_fixture() {
 		struct xe_device *xe;
@@ -2677,15 +2733,23 @@ int igt_main()
 	}
 
 	igt_subtest("compute")
-		test_compute(fd, SZ_2M, 0);
+		xe_for_each_engine(fd, hwe)
+			if (hwe->engine_class == DRM_XE_ENGINE_CLASS_COMPUTE)
+				test_compute(fd, hwe, SZ_2M, 0, svm_compute_loops);
 
 	for (const struct section *s = csections; s->name; s++) {
 		igt_subtest_f("eu-fault-4k-%s", s->name)
-			test_compute(fd, SZ_4K, s->flags);
+			xe_for_each_engine(fd, hwe)
+				if (hwe->engine_class == DRM_XE_ENGINE_CLASS_COMPUTE)
+					test_compute(fd, hwe, SZ_4K, s->flags, svm_compute_loops);
 		igt_subtest_f("eu-fault-64k-%s", s->name)
-			test_compute(fd, SZ_64K, s->flags);
+			xe_for_each_engine(fd, hwe)
+				if (hwe->engine_class == DRM_XE_ENGINE_CLASS_COMPUTE)
+					test_compute(fd, hwe, SZ_64K, s->flags, svm_compute_loops);
 		igt_subtest_f("eu-fault-2m-%s", s->name)
-			test_compute(fd, SZ_2M, s->flags);
+			xe_for_each_engine(fd, hwe)
+				if (hwe->engine_class == DRM_XE_ENGINE_CLASS_COMPUTE)
+					test_compute(fd, hwe, SZ_2M, s->flags, svm_compute_loops);
 	}
 
 	igt_fixture() {
