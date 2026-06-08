@@ -78,8 +78,11 @@ static __u64 get_mode_data_rate(drmModeModeInfo *mode)
 	return data_rate;
 }
 
-static bool is_4k(drmModeModeInfo mode)
+static bool is_4k_or_higher(drmModeModeInfo mode)
 {
+	if (mode.hdisplay > HDISPLAY_4K)
+		return true;
+
 	return (mode.hdisplay >= HDISPLAY_4K && mode.vdisplay >= VDISPLAY_4K &&
 	        mode.vrefresh >= VREFRESH);
 }
@@ -146,7 +149,7 @@ static void test_plane_scaling(data_t *data, igt_crtc_t *crtc,
 		igt_output_set_crtc(output,
 				    crtc);
 		mode = *igt_output_get_highres_mode(output);
-		igt_require_f(is_4k(mode), "Mode >= 4K not found on output %s\n",
+		igt_require_f(is_4k_or_higher(mode), "Mode >= 4K not found on output %s\n",
 			      igt_output_name(output));
 
 		igt_output_override_mode(output, &mode);
@@ -199,7 +202,7 @@ static void test_mode_transition(data_t *data, igt_crtc_t *crtc,
 	mode = igt_output_get_mode(output);
 	mode_lo = *get_lowres_mode(output);
 	mode_hi = *igt_output_get_highres_mode(output);
-	igt_require_f(is_4k(mode_hi), "Mode >= 4K not found on output %s\n",
+	igt_require_f(is_4k_or_higher(mode_hi), "Mode >= 4K not found on output %s\n",
 	              igt_output_name(output));
 
 	igt_skip_on_f(has_same_dotclock(mode_hi, mode_lo), "Highest and lowest modes have same dotclock; no CDCLK bump expected\n");
@@ -271,7 +274,7 @@ static void test_mode_transition_on_all_outputs(data_t *data)
 
 	for_each_connected_output(display, output) {
 		mode_highres[count] = *igt_output_get_highres_mode(output);
-		if (!is_4k(mode_highres[count])) {
+		if (!is_4k_or_higher(mode_highres[count])) {
 			igt_info("Mode >= 4K not found on output %s; skipping\n",
 				 igt_output_name(output));
 			continue;
