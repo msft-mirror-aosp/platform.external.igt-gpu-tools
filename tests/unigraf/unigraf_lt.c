@@ -105,12 +105,43 @@ int igt_main()
 
 	igt_subtest_with_dynamic("unigraf-dp-lane-count") {
 		int lane_counts[3] = {1, 2, 4};
+		int max_natural_lanes = 0;
 		int current_lanes;
 
+		/*
+		 * Some drivers dynamically optimize power by downshifting lane
+		 * utilization if the current video mode (e.g., 1080p) has low
+		 * bandwidth requirements, regardless of the physical ceiling.
+		 *
+		 * To avoid pointlessly testing artificially high lane mock
+		 * ceilings (e.g. testing 4 lanes when we know the driver adamantly
+		 * refuses to use more than 1 or 2 for this mode), we first
+		 * perform an unconstrained HPD sequence. We initialize the output
+		 * and observe precisely how many lanes the kernel naturally demands.
+		 */
+		unigraf_reset();
+		unigraf_set_max_lane_count(4);
+		unigraf_hpd_pulse(500000);
+
+		igt_display_require_output(&display);
+		output = igt_output_from_connector(&display, connector);
+		igt_assert(output);
+		igt_dp_force_link_retrain(drm_fd, output, 2);
+		init_output_and_display_pattern(&display, output);
+
+		max_natural_lanes = igt_dp_get_current_lane_count(drm_fd, output);
+		igt_info("Pre-check: Kernel naturally trains a maximum of %d lanes for the current mode.\n",
+			 max_natural_lanes);
+
 		for (i = 0; i < ARRAY_SIZE(lane_counts); i++) {
-			igt_dynamic_f("unigraf-dp-lane-count-%d", lane_counts[i]) {
+			int lane_count = lane_counts[i];
+
+			if (lane_count > max_natural_lanes)
+				continue;
+
+			igt_dynamic_f("unigraf-dp-lane-count-%d", lane_count) {
 				unigraf_reset();
-				unigraf_set_max_lane_count(lane_counts[i]);
+				unigraf_set_max_lane_count(lane_count);
 				unigraf_hpd_pulse(500000);
 
 				igt_display_require_output(&display);
@@ -120,7 +151,7 @@ int igt_main()
 				init_output_and_display_pattern(&display, output);
 
 				current_lanes = igt_dp_get_current_lane_count(drm_fd, output);
-				igt_assert_eq(current_lanes, lane_counts[i]);
+				igt_assert_eq(current_lanes, lane_count);
 			}
 		}
 	}
