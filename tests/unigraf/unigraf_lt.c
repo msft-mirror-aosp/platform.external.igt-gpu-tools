@@ -38,19 +38,45 @@ static void init_output_and_display_pattern(igt_display_t *display, igt_output_t
 	igt_crtc_t *crtc;
 	struct igt_fb fb;
 	igt_plane_t *primary;
-	drmModeModeInfo *mode;
+	drmModeModeInfo *mode = NULL;
 	int fb_id;
+	int retries = 10;
 
 	igt_modeset_disable_all_outputs(display);
 	igt_display_reset(display);
+
+	/* Get the current mode */
+
+	while (retries--) {
+		/* Force an active hardware probe instead of a cached one */
+		drmModeConnector *conn = drmModeGetConnector(display->drm_fd, output->id);
+
+		if (conn && conn->count_modes > 0) {
+			/* Found dynamically probed modes! Update the output config */
+			drmModeFreeConnector(output->config.connector);
+			output->config.connector = conn;
+
+			/* DO NOT call igt_output_refresh here! It would free our probed
+			 * connector and replace it with drmModeGetConnectorCurrent. */
+			mode = &conn->modes[0];
+			if (mode && mode->hdisplay > 0)
+				break;
+		} else if (conn) {
+			drmModeFreeConnector(conn);
+		}
+
+		igt_info("Waiting for connector modes to repopulate after HPD pulse... (%d)\n",
+			 retries);
+		sleep(1);
+	}
+
+	igt_assert(mode);
 
 	igt_output_set_crtc(output, 0);
 	crtc = igt_get_crtc_for_output(display, output);
 	igt_output_set_crtc(output, crtc);
 
-	/* Get the current mode */
-	mode = igt_output_get_mode(output);
-	igt_assert(mode);
+	igt_info("Final Mode: %dx%d\n", mode->hdisplay, mode->vdisplay);
 
 	/* Create a framebuffer with a solid color pattern */
 	fb_id = igt_create_color_pattern_fb(display->drm_fd, mode->hdisplay,
