@@ -94,6 +94,8 @@ int igt_main()
 	igt_fixture() {
 		drm_fd = drm_open_driver(DRIVER_ANY);
 		igt_assert(drm_fd >= 0);
+		igt_require_f(is_intel_device(drm_fd),
+			      "This test relies on Intel-specific debugfs endpoints (e.g., i915_dp_force_link_rate, i915_dp_force_lane_count) for link training verification. Other drivers should implement equivalent generic IGT hooks.\n");
 
 		igt_display_require(&display, drm_fd);
 		unigraf_require_device(drm_fd);
