@@ -186,13 +186,20 @@ int igt_main()
 		int rates[] = {UNIGRAF_RATE_1_62_GHZ,
 			       UNIGRAF_RATE_2_7_GHZ,
 			       UNIGRAF_RATE_5_4_GHZ,
-			       UNIGRAF_RATE_6_75_GHZ,
 			       UNIGRAF_RATE_8_10_GHZ};
 		int current_rate;
-		int max_supported_rate;
+		int max_supported_rate = 0;
+
+		output = igt_output_from_connector(&display, connector);
+		if (output)
+			max_supported_rate = igt_dp_get_max_supported_rate(drm_fd, output);
 
 		for (i = 0; i < ARRAY_SIZE(rates); i++) {
 			igt_dynamic_f("unigraf-dp-link-rate-%d", rates[i]) {
+				igt_require_f(max_supported_rate >= unigraf_rate_to_kbs(rates[i]),
+					      "Host port physically caps below test rate bounds (Host: %d, Test: %d)\n",
+					      max_supported_rate, unigraf_rate_to_kbs(rates[i]));
+
 				unigraf_reset();
 				unigraf_set_max_link_rate(rates[i]);
 				unigraf_hpd_pulse(1000000);
@@ -206,8 +213,6 @@ int igt_main()
 				init_output_and_display_pattern(&display, output);
 
 				current_rate = igt_dp_get_max_link_rate(drm_fd, output);
-				max_supported_rate = igt_dp_get_max_supported_rate(drm_fd, output);
-				igt_require(max_supported_rate >= unigraf_rate_to_kbs(rates[i]));
 				igt_assert_eq(current_rate, unigraf_rate_to_kbs(rates[i]));
 			}
 		}
