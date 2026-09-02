@@ -75,9 +75,6 @@ static const struct asic_info asic_table[] = {
 	{ "gfx1102", FAMILY_GFX1100, AMDGPU_GFX1102_RANGE },
 	{ "gfx1103_r1", FAMILY_GFX1103, AMDGPU_GFX1103_R1_RANGE },
 	{ "gfx1103_r2", FAMILY_GFX1103, AMDGPU_GFX1103_R2_RANGE },
-	{ "navi31", FAMILY_GFX1100, AMDGPU_GFX1100_RANGE },
-	{ "navi32", FAMILY_GFX1100, AMDGPU_GFX1101_RANGE },
-	{ "navi33", FAMILY_GFX1100, AMDGPU_GFX1102_RANGE },
 
 	/* GFX10.3 */
 	{ "sienna_cichlid", FAMILY_NV, AMDGPU_SIENNA_CICHLID_RANGE },
@@ -136,18 +133,62 @@ static const struct asic_info *get_asic_info(const char *name)
 	return NULL;
 }
 
+/* Helper: choose chip id */
+static int get_chip_id(int chip_rev, int chip_external_rev)
+{
+	int chip_id = chip_external_rev > 0 ?  chip_external_rev : chip_rev;
+
+	return chip_id;
+}
+
 /* Helper: Get ASIC name by family/chip */
-static const char *get_asic_name(int family_id, int chip_rev)
+static const char *get_asic_name(int family_id, int chip_rev,
+				 int chip_external_rev)
 {
 	const struct asic_info *info;
 
+	int chip_id = get_chip_id(chip_rev, chip_external_rev);
+
 	for (info = asic_table; info->name; info++) {
 		if (info->family_id == family_id &&
-		    chip_rev >= info->chip_id_min &&
-		    chip_rev < info->chip_id_max)
+		    chip_id >= info->chip_id_min &&
+				chip_id < info->chip_id_max)
 			return info->name;
 	}
 	return "unknown";
+}
+
+static const char *map_device_id_to_gfx11_name(int asic_id)
+{
+	switch (asic_id) {
+	case 0x744c:
+	case 0x7450:
+	case 0x745e:
+		return "gfx1100";
+	case 0x7470:
+	case 0x7471:
+	case 0x7472:
+	case 0x7473:
+	case 0x747e:
+		return "gfx1101";
+	case 0x7480:
+	case 0x7481:
+	case 0x7483:
+	case 0x7485:
+	case 0x7487:
+	case 0x7488:
+	case 0x7489:
+	case 0x748a:
+	case 0x748b:
+	case 0x748c:
+	case 0x748d:
+	case 0x748e:
+	case 0x748f:
+	case 0x7490:
+		return "gfx1102";
+	default:
+		return NULL;
+	}
 }
 
 /* ================================================================
@@ -162,14 +203,18 @@ static const char *amd_get_platform_name(const void *platform_info)
 	if (!gpu_info)
 		return "unknown";
 
-	return get_asic_name(gpu_info->family_id, gpu_info->chip_rev);
+	return get_asic_name(gpu_info->family_id, gpu_info->chip_rev,
+			gpu_info->chip_external_rev);
 }
 
 static bool amd_match_platform(const void *platform_info, const void *platform_data)
 {
 	const struct amdgpu_gpu_info *gpu_info = platform_info;
 	const struct amd_platform_data *amd_data = platform_data;
-	int i;
+
+	int i, chip_rev;
+	const char *gfx11_name;
+	const struct asic_info *navi_info;
 
 	if (!gpu_info || !amd_data)
 		return false;
@@ -181,7 +226,30 @@ static bool amd_match_platform(const void *platform_info, const void *platform_d
 	/* Check if GPU matches any of the ASIC ranges */
 	for (i = 0; i < amd_data->num_ranges && i < MAX_ASIC_RANGES; i++) {
 		if (amd_data->ranges[i].family_id == gpu_info->family_id) {
-			int chip_rev = gpu_info->chip_rev;
+			/*
+			 * w/a for FAMILY_GFX1100
+			 */
+			if (gpu_info->family_id == FAMILY_GFX1100) {
+				gfx11_name = map_device_id_to_gfx11_name(gpu_info->asic_id);
+				if (gfx11_name) {
+					for (navi_info = asic_table; navi_info->name; navi_info++) {
+						if (!strcmp(navi_info->name, gfx11_name) &&
+						    amd_data->ranges[i].chip_id_min ==
+						    navi_info->chip_id_min &&
+						    amd_data->ranges[i].chip_id_max ==
+						    navi_info->chip_id_max)
+							return true;
+					}
+					continue;
+				}
+			}
+
+			/*
+			 * Use external revision for ASIC-range matching when available.
+			 * Fallback to chip_rev for older kernels/devices.
+			 */
+			 chip_rev = get_chip_id(gpu_info->chip_rev,
+						gpu_info->chip_external_rev);
 
 			if (chip_rev >= amd_data->ranges[i].chip_id_min &&
 			    chip_rev < amd_data->ranges[i].chip_id_max) {
@@ -231,8 +299,8 @@ static void amd_dump_platform_data(const void *platform_data)
 	for (i = 0; i < amd_data->num_ranges && i < MAX_ASIC_RANGES; i++) {
 		if (i > 0)
 			printf(", ");
-		printf("{0x%02X, 0x%02X-0x%02X}",
-		       amd_data->ranges[i].family_id,
+		igt_info("{0x%02X, 0x%02X-0x%02X}",
+			 amd_data->ranges[i].family_id,
 		       amd_data->ranges[i].chip_id_min,
 		       amd_data->ranges[i].chip_id_max);
 	}
