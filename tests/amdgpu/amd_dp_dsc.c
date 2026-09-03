@@ -356,6 +356,23 @@ static void test_dsc_slice_dimensions_change(data_t *data)
 	igt_skip_on(test_conn_cnt == 0);
 }
 
+static void reset_link_settings(data_t *data)
+{
+	igt_output_t *output;
+	igt_crtc_t *crtc;
+
+	for_each_crtc(&data->display, crtc) {
+		output = data->output[crtc->crtc_index];
+		if (!output || !igt_output_is_connected(output) ||
+			!is_dsc_capable(&data->mode[crtc->crtc_index]))
+			continue;
+
+		igt_amd_write_link_settings(data->fd, output->name,
+					    LANE_COUNT_UNKNOWN, LINK_RATE_UNKNOWN,
+					    LINK_TRAINING_DEFAULT);
+	}
+}
+
 static void test_dsc_link_settings(data_t *data)
 {
 	igt_output_t *output;
@@ -608,6 +625,9 @@ int igt_main() {
 	igt_describe("Tests various combinations of link_rate + lane_count and logs if DSC enabled/disabled");
 	igt_subtest("dsc-link-settings")
 	    test_dsc_link_settings(&data);
+
+	igt_fixture()
+		reset_link_settings(&data);
 
 	igt_describe("Tests different bpc settings and logs if DSC is enabled/disabled");
 	igt_subtest("dsc-bpc")
