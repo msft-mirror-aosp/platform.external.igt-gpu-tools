@@ -137,6 +137,9 @@ static void test_dsc_enable(data_t *data)
 		igt_output_set_crtc(output,
 				    crtc);
 		igt_plane_set_fb(data->primary[crtc->crtc_index], &ref_fb);
+
+		/* Make sure we are in automatic mode before we start */
+		igt_amd_write_dsc_clock_en(data->fd, output->name, DSC_AUTOMATIC);
 		igt_display_commit_atomic(display, DRM_MODE_ATOMIC_ALLOW_MODESET, 0);
 
 		test_conn_cnt++;
@@ -153,8 +156,12 @@ static void test_dsc_enable(data_t *data)
 		/* Check if DSC is enabled */
 		dsc_on = igt_amd_read_dsc_clock_status(data->fd, output->name) == 1;
 
-		/* Revert DSC to automatic state */
-		igt_amd_write_dsc_clock_en(data->fd, output->name, DSC_FORCE_OFF);
+		/**
+		 * We can only force off if the panel is capable of running with DSC disabled.
+		 * If DSC was ON in automatic mode, we cannot (and should not) force it OFF.
+		 */
+		if (!dsc_before)
+			igt_amd_write_dsc_clock_en(data->fd, output->name, DSC_FORCE_OFF);
 
 		igt_plane_set_fb(data->primary[crtc->crtc_index], &ref_fb);
 		igt_display_commit_atomic(display, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
@@ -286,6 +293,7 @@ static void test_dsc_slice_dimensions_change(data_t *data)
 		igt_output_set_crtc(output,
 				    crtc);
 		igt_plane_set_fb(data->primary[crtc->crtc_index], &ref_fb);
+		igt_amd_write_dsc_clock_en(data->fd, output->name, DSC_AUTOMATIC);
 		igt_display_commit_atomic(display, DRM_MODE_ATOMIC_ALLOW_MODESET, 0);
 
 		test_conn_cnt++;
@@ -316,8 +324,12 @@ static void test_dsc_slice_dimensions_change(data_t *data)
 							     ref_fb);
 		}
 
-		/* Force disable DSC */
-		igt_amd_write_dsc_clock_en(data->fd, output->name, DSC_FORCE_OFF);
+		/**
+		 * We can only force off if the panel is capable of running with DSC disabled.
+		 * If DSC was ON in automatic mode, we cannot (and should not) force it OFF.
+		 */
+		if (!dsc_before)
+			igt_amd_write_dsc_clock_en(data->fd, output->name, DSC_FORCE_OFF);
 
 		igt_plane_set_fb(data->primary[crtc->crtc_index], &ref_fb);
 		igt_display_commit_atomic(display, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
