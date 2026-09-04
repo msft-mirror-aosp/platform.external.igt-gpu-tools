@@ -1076,6 +1076,7 @@ int igt_main()
 		xe_perf_device(fd, xe_device, sizeof(xe_device));
 		num_engines = xe_number_engines(fd);
 		has_engine_active_ticks = has_event(xe_device, "engine-active-ticks");
+		errno = 0;
 	}
 
 	igt_describe("Validate PMU gt-c6 residency counters when idle");

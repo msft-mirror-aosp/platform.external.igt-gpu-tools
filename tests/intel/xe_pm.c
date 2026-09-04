@@ -990,6 +990,7 @@ int igt_main()
 
 		igt_install_exit_handler(igt_drm_debug_mask_reset_exit_handler);
 		update_debug_mask_if_ci(DRM_UT_KMS);
+		errno = 0;
 	}
 
 	for (const struct s_state *s = s_states; s->name; s++) {

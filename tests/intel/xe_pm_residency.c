@@ -574,6 +574,7 @@ int igt_main()
 
 		igt_require(!IS_PONTEVECCHIO(xe_dev_id(fd)));
 		igt_require(xe_sysfs_gt_has_node(fd, 0, "gtidle"));
+		errno = 0;
 	}
 
 	igt_describe("Validate GT C6 on idle");

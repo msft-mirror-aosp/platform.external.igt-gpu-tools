@@ -224,6 +224,7 @@ bool xe_gt_is_in_c6(int fd, int gt)
 		return true;
 
 	igt_debug("GT%d C-state is %s\n", gt, gt_c_state);
+	errno = 0;
 
 	return false;
 }

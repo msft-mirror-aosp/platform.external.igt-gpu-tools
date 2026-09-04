@@ -397,6 +397,7 @@ int igt_main()
 			stash_min[gt] = xe_gt_get_freq(fd, gt, "min");
 			stash_max[gt] = xe_gt_get_freq(fd, gt, "max");
 		}
+		errno = 0;
 	}
 
 	igt_subtest("throttle_basic_api") {
