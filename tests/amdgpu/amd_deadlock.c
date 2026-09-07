@@ -149,7 +149,8 @@ int igt_main()
 		if (arr_cap[AMD_IP_DMA] &&
 			is_reset_enable(AMD_IP_DMA, AMDGPU_RESET_TYPE_PER_QUEUE, &pci)) {
 			igt_dynamic_f("amdgpu-deadlock-sdma-corrupted-header-test")
-			amdgpu_hang_sdma_ring_helper(device, DMA_CORRUPTED_HEADER_HANG, &pci);
+			amdgpu_hang_sdma_ring_helper(device, DMA_CORRUPTED_HEADER_HANG,
+						     &pci, false);
 		}
 		amd_lockdep_end(&lockdep);
 	}
@@ -160,7 +161,7 @@ int igt_main()
 		if (arr_cap[AMD_IP_DMA] &&
 			is_reset_enable(AMD_IP_DMA, AMDGPU_RESET_TYPE_PER_QUEUE, &pci)) {
 			igt_dynamic_f("amdgpu-deadlock-sdma-slow-linear-copy")
-			amdgpu_hang_sdma_ring_helper(device, DMA_SLOW_LINEARCOPY_HANG, &pci);
+			amdgpu_hang_sdma_ring_helper(device, DMA_SLOW_LINEARCOPY_HANG, &pci, false);
 		}
 		amd_lockdep_end(&lockdep);
 	}
@@ -290,6 +291,15 @@ int igt_main()
 			is_reset_enable(AMD_IP_DMA, AMDGPU_RESET_TYPE_PER_QUEUE, &pci)) {
 			igt_dynamic_f("amdgpu-deadlock-sdma-clean-hang-umq")
 			amdgpu_hang_sdma_userq_single_helper(device, AMDGPU_HW_IP_DMA, &pci);
+		}
+	}
+
+	igt_describe("Test-per-queue-reset-by-sdma-corrupted-header-user-queue");
+	igt_subtest_with_dynamic("amdgpu-deadlock-sdma-corrupted-header-umq") {
+		if (enable_test && userq_arr_cap[AMD_IP_DMA] &&
+			is_reset_enable(AMD_IP_DMA, AMDGPU_RESET_TYPE_PER_QUEUE, &pci)) {
+			igt_dynamic_f("amdgpu-deadlock-sdma-corrupted-header-umq")
+			amdgpu_hang_sdma_ring_helper(device, DMA_CORRUPTED_HEADER_HANG, &pci, true);
 		}
 	}
 

@@ -776,7 +776,8 @@ void amdgpu_priv_inst_ring_helper(amdgpu_device_handle device_handle, unsigned i
 #define MAX_DWORD_COUNT 256
 
 static void
-amdgpu_hang_sdma_helper(amdgpu_device_handle device_handle, uint8_t hang_type)
+amdgpu_hang_sdma_helper(amdgpu_device_handle device_handle, uint8_t hang_type,
+			bool user_queue)
 {
 	int j, r;
 	uint32_t *ptr, offset;
@@ -797,26 +798,45 @@ amdgpu_hang_sdma_helper(amdgpu_device_handle device_handle, uint8_t hang_type)
 	ring_context->secure = false;
 	ring_context->res_cnt = 2;
 	ring_context->ring_id = 0;
+	ring_context->user_queue = user_queue;
 	igt_assert(ring_context->pm4);
 
-	r = amdgpu_cs_ctx_create(device_handle, &ring_context->context_handle);
-	igt_assert_eq(r, 0);
+	if (user_queue) {
+		ip_block->funcs->userq_create(device_handle, ring_context, ip_block->type);
+	} else {
+		r = amdgpu_cs_ctx_create(device_handle, &ring_context->context_handle);
+		igt_assert_eq(r, 0);
+	}
 
-	r = amdgpu_bo_alloc_and_map(device_handle, ring_context->write_length, 4096,
-					AMDGPU_GEM_DOMAIN_GTT, 0,
-					&ring_context->bo, (void **)&ring_context->bo_cpu,
-					&ring_context->bo_mc, &ring_context->va_handle);
+	r = amdgpu_bo_alloc_and_map_sync(device_handle, ring_context->write_length, 4096,
+					 AMDGPU_GEM_DOMAIN_GTT, 0, AMDGPU_VM_MTYPE_UC,
+					 &ring_context->bo, (void **)&ring_context->bo_cpu,
+					 &ring_context->bo_mc, &ring_context->va_handle,
+					 ring_context->timeline_syncobj_handle,
+					 ++ring_context->point, user_queue);
 	igt_assert_eq(r, 0);
+	if (user_queue) {
+		r = amdgpu_timeline_syncobj_wait(device_handle,
+						 ring_context->timeline_syncobj_handle,
+						 ring_context->point);
+		igt_assert_eq(r, 0);
+	}
 
 	/* set bo */
 	memset((void *)ring_context->bo_cpu, 0, ring_context->write_length);
-	r = amdgpu_bo_alloc_and_map(device_handle,
-				    ring_context->write_length, 4096,
-				    AMDGPU_GEM_DOMAIN_GTT,
-				    0, &ring_context->bo2,
-				    (void **)&ring_context->bo2_cpu, &ring_context->bo_mc2,
-				    &ring_context->va_handle2);
+	r = amdgpu_bo_alloc_and_map_sync(device_handle, ring_context->write_length, 4096,
+					 AMDGPU_GEM_DOMAIN_GTT, 0, AMDGPU_VM_MTYPE_UC,
+					 &ring_context->bo2, (void **)&ring_context->bo2_cpu,
+					 &ring_context->bo_mc2, &ring_context->va_handle2,
+					 ring_context->timeline_syncobj_handle,
+					 ++ring_context->point, user_queue);
 	igt_assert_eq(r, 0);
+	if (user_queue) {
+		r = amdgpu_timeline_syncobj_wait(device_handle,
+						 ring_context->timeline_syncobj_handle,
+						 ring_context->point);
+		igt_assert_eq(r, 0);
+	}
 
 	/* set bo2 */
 	memset((void *)ring_context->bo2_cpu, 0, ring_context->write_length);
@@ -853,7 +873,14 @@ amdgpu_hang_sdma_helper(amdgpu_device_handle device_handle, uint8_t hang_type)
 		ring_context->pm4_dw = ring_context->pm4_dw * 2 * j;
 	}
 
-	amdgpu_test_exec_cs_helper(device_handle, ip_block->type, ring_context, 1);
+	/*
+	 * For user queues pass expect_failure=0 so the submit waits on the fence
+	 * (UQ_SUBMIT_NORMAL); the hang is then recovered by the driver's per-queue
+	 * reset. Kernel queues keep expect_failure=1 (they already wait on the
+	 * fence via amdgpu_cs_query_fence_status).
+	 */
+	amdgpu_test_exec_cs_helper(device_handle, ip_block->type, ring_context,
+				   user_queue ? 0 : 1);
 	amdgpu_bo_unmap_and_free(ring_context->bo, ring_context->va_handle, ring_context->bo_mc,
 						 ring_context->write_length);
 	amdgpu_bo_unmap_and_free(ring_context->bo2, ring_context->va_handle2, ring_context->bo_mc2,
@@ -861,9 +888,12 @@ amdgpu_hang_sdma_helper(amdgpu_device_handle device_handle, uint8_t hang_type)
 	/* clean resources */
 	free(ring_context->pm4);
 	/* end of test */
-	//r = amdgpu_cs_ctx_free(context_handle);
-	r = amdgpu_cs_ctx_free(ring_context->context_handle);
-	igt_assert_eq(r, 0);
+	if (user_queue) {
+		ip_block->funcs->userq_destroy(device_handle, ring_context, ip_block->type);
+	} else {
+		r = amdgpu_cs_ctx_free(ring_context->context_handle);
+		igt_assert_eq(r, 0);
+	}
 	free_cmd_base(base_cmd);
 }
 
@@ -960,7 +990,8 @@ void bad_access_ring_helper(amdgpu_device_handle device_handle, unsigned int cmd
 
 }
 
-void amdgpu_hang_sdma_ring_helper(amdgpu_device_handle device_handle, uint8_t hang_type, struct pci_addr *pci)
+void amdgpu_hang_sdma_ring_helper(amdgpu_device_handle device_handle, uint8_t hang_type,
+				  struct pci_addr *pci, bool user_queue)
 {
 	int r;
 	FILE *fp;
@@ -975,6 +1006,12 @@ void amdgpu_hang_sdma_ring_helper(amdgpu_device_handle device_handle, uint8_t ha
 	igt_assert_eq(r, 0);
 	if (!info.available_rings)
 		igt_info("SKIP ... as there's no ring for the sdma\n");
+
+	if (user_queue) {
+		/* user queues are scheduled by hardware, no sched mask to iterate */
+		amdgpu_hang_sdma_helper(device_handle, hang_type, true);
+		return;
+	}
 
 	support_page = is_support_page_queue(AMDGPU_HW_IP_DMA, pci);
 	snprintf(sysfs, sizeof(sysfs) - 1, "/sys/kernel/debug/dri/%04x:%02x:%02x.%01x/amdgpu_sdma_sched_mask",
@@ -1020,7 +1057,7 @@ void amdgpu_hang_sdma_ring_helper(amdgpu_device_handle device_handle, uint8_t ha
 			igt_assert_eq(r, 0);
 		}
 
-		amdgpu_hang_sdma_helper(device_handle, hang_type);
+		amdgpu_hang_sdma_helper(device_handle, hang_type, false);
 	}
 
 	/* recover the sched mask */
