@@ -90,7 +90,8 @@ write_mem_address(void *data)
 }
 
 static void
-amdgpu_wait_memory(amdgpu_device_handle device_handle, unsigned int ip_type, uint32_t priority, bool userq)
+amdgpu_wait_memory(amdgpu_device_handle device_handle, unsigned int ip_type,
+		   uint32_t priority, bool userq, int max_jobs)
 {
 	amdgpu_context_handle context_handle;
 	amdgpu_bo_handle ib_result_handle;
@@ -208,7 +209,7 @@ amdgpu_wait_memory(amdgpu_device_handle device_handle, unsigned int ip_type, uin
 			r = amdgpu_cs_submit(context_handle, 0, &ibs_request, 1);
 		}
 		job_count++;
-	} while (r == 0 && job_count < MAX_JOB_COUNT);
+	} while (r == 0 && job_count < max_jobs);
 
 	if (r != 0 && r != -ECANCELED && r != -ENODATA)
 		igt_assert(0);
@@ -271,7 +272,7 @@ void amdgpu_wait_memory_helper(amdgpu_device_handle device_handle, unsigned int 
 		prio = AMDGPU_CTX_PRIORITY_NORMAL;
 
 		/* Skip the scheduler mask manipulation for user queues */
-		amdgpu_wait_memory(device_handle, ip_type, prio, true);
+		amdgpu_wait_memory(device_handle, ip_type, prio, true, MAX_JOB_COUNT);
 		return;
 	}
 
@@ -329,7 +330,7 @@ void amdgpu_wait_memory_helper(amdgpu_device_handle device_handle, unsigned int 
 			igt_assert_eq(r, 0);
 		}
 
-		amdgpu_wait_memory(device_handle, ip_type, prio, false);
+		amdgpu_wait_memory(device_handle, ip_type, prio, false, MAX_JOB_COUNT);
 	}
 
 	/* recover the sched mask */
@@ -340,6 +341,26 @@ void amdgpu_wait_memory_helper(amdgpu_device_handle device_handle, unsigned int 
 		sched_mask_dirty = false;
 	}
 
+}
+
+/*
+ * Hang a single SDMA user queue with one never-satisfied WAIT_REG_MEM and let
+ * the driver recover it with a per-queue reset. Unlike amdgpu_wait_memory_helper
+ * (which floods the ring with jobs), this submits exactly one job, exercising the
+ * clean single-hang reset path.
+ */
+void amdgpu_hang_sdma_userq_single_helper(amdgpu_device_handle device_handle,
+					  unsigned int ip_type, struct pci_addr *pci)
+{
+	struct drm_amdgpu_info_hw_ip info;
+	int r;
+
+	r = amdgpu_query_hw_ip_info(device_handle, ip_type, 0, &info);
+	igt_assert_eq(r, 0);
+	if (!info.available_rings)
+		igt_info("SKIP ... as there's no ring for ip %d\n", ip_type);
+
+	amdgpu_wait_memory(device_handle, ip_type, AMDGPU_CTX_PRIORITY_NORMAL, true, 1);
 }
 
 static void
