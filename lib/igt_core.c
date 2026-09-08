@@ -2105,13 +2105,40 @@ static void write_stderr(const char *str)
 #ifdef HAVE_LIBUNWIND
 static const char hex[] = "0123456789abcdef";
 
+/*
+ * Buffer output and flush it in one write() per line, instead of one
+ * write() per character. Concurrent single-byte writes from multiple
+ * processes/threads (e.g. forked children, or multiple threads of the
+ * same process, all dumping a backtrace after receiving the same
+ * fatal signal) interleave on the shared stderr/runner fd and produce
+ * unreadable, garbled logs. The buffer is thread-local so concurrent
+ * threads don't race on it; plain TLS access is async-signal-safe,
+ * unlike a lock.
+ */
+static __thread char xputch_buf[256];
+static __thread size_t xputch_buf_len;
+
+static void
+xflush(void)
+{
+	if (!xputch_buf_len)
+		return;
+
+	if (runner_connected())
+		log_to_runner_sig_safe(xputch_buf, xputch_buf_len);
+	else
+		igt_ignore_warn(write(STDERR_FILENO, xputch_buf, xputch_buf_len));
+
+	xputch_buf_len = 0;
+}
+
 static void
 xputch(int c)
 {
-	if (runner_connected())
-		log_to_runner_sig_safe((const void *) &c, 1);
-	else
-		igt_ignore_warn(write(STDERR_FILENO, (const void *) &c, 1));
+	xputch_buf[xputch_buf_len++] = c;
+
+	if (c == '\n' || xputch_buf_len == sizeof(xputch_buf))
+		xflush();
 }
 
 static int
@@ -2166,6 +2193,7 @@ xprintfmt(const char *fmt, va_list ap)
 	while (1) {
 		while ((ch = *(const unsigned char *) fmt++) != '%') {
 			if (ch == '\0') {
+				xflush();
 				return;
 			}
 			xputch(ch);
