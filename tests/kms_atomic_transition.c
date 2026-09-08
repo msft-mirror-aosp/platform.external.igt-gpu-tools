@@ -1288,6 +1288,10 @@ int igt_main_args("", long_opts, help_str, opt_handler, &data)
 
 		igt_describe(transition_tests[i].desc);
 		igt_subtest_with_dynamic_f("%s", transition_tests[i].name) {
+			igt_skip_on_f(is_mtk_device(data.drm_fd) &&
+				      !transition_tests[i].nonblocking,
+				      "MTK blocking atomic transition is currently unsupported\n");
+
 			pipe_count = 0;
 
 			for_each_crtc_with_valid_output(&data.display, crtc,
