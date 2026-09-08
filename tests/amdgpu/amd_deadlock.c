@@ -303,6 +303,15 @@ int igt_main()
 		}
 	}
 
+	igt_describe("Test-per-queue-reset-by-sdma-atomic-loop-user-queue");
+	igt_subtest_with_dynamic("amdgpu-deadlock-sdma-atomic-loop-umq") {
+		if (enable_test && userq_arr_cap[AMD_IP_DMA] &&
+			is_reset_enable(AMD_IP_DMA, AMDGPU_RESET_TYPE_PER_QUEUE, &pci)) {
+			igt_dynamic_f("amdgpu-deadlock-sdma-atomic-loop-umq")
+			amdgpu_hang_sdma_ring_helper(device, DMA_ATOMIC_LOOP_HANG, &pci, true);
+		}
+	}
+
 	igt_describe("Test-per-queue-reset-of-a-cleanly-hung-gfx-user-queue");
 	igt_subtest_with_dynamic("amdgpu-deadlock-gfx-umq") {
 		amd_lockdep_begin(&lockdep);

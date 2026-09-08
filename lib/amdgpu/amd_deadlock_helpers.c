@@ -848,6 +848,15 @@ amdgpu_hang_sdma_helper(amdgpu_device_handle device_handle, uint8_t hang_type,
 	if (hang_type == DMA_CORRUPTED_HEADER_HANG) {
 		ip_block->funcs->copy_linear(ip_block->funcs, ring_context, &ring_context->pm4_dw);
 		base_cmd->emit_at_offset(base_cmd, 0x23decd3d, 0);
+	} else if (hang_type == DMA_ATOMIC_LOOP_HANG) {
+		/*
+		 * Atomic CMPSWAP with loop-until-compare-satisfied on memory
+		 * (initialised to 0) whose compare value never matches: a valid
+		 * packet that spins forever, like an app-level SDMA atomic wait
+		 * on a condition that never becomes true.
+		 */
+		ip_block->funcs->write_linear_atomic(ip_block->funcs, ring_context,
+						     &ring_context->pm4_dw);
 	} else {
 		/* Save initialization pm4 */
 		ptr = ring_context->pm4;
