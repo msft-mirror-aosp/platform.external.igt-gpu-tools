@@ -86,10 +86,11 @@ static void userptr_coh_none(int fd)
 				   size, DRM_XE_VM_BIND_OP_MAP_USERPTR, 0, NULL, 0, 0,
 				   intel_get_pat_idx_uc(fd), 0),
 		      -EINVAL);
-	igt_assert_eq(__xe_vm_bind(fd, vm, 0, 0, to_user_pointer(data), 0x40000,
-				   size, DRM_XE_VM_BIND_OP_MAP_USERPTR, 0, NULL, 0, 0,
-				   intel_get_pat_idx_wt(fd), 0),
-		      -EINVAL);
+	if (intel_has_pat_wt(fd))
+		igt_assert_eq(__xe_vm_bind(fd, vm, 0, 0, to_user_pointer(data), 0x40000,
+					   size, DRM_XE_VM_BIND_OP_MAP_USERPTR, 0, NULL, 0, 0,
+					   intel_get_pat_idx_wt(fd), 0),
+			      -EINVAL);
 	igt_assert_eq(__xe_vm_bind(fd, vm, 0, 0, to_user_pointer(data), 0x40000,
 				   size, DRM_XE_VM_BIND_OP_MAP_USERPTR, 0, NULL, 0, 0,
 				   XE_PAT_IDX_XA_UC, 0),
@@ -323,6 +324,7 @@ static void pat_sw_hw_compare(int fd, enum pat_test_opts opts)
  */
 static void pat_index_all(int fd)
 {
+	bool has_wt = intel_has_pat_wt(fd);
 	size_t size = xe_get_default_alignment(fd);
 	struct intel_pat_cache pat_sw_config = {};
 	uint32_t vm, bo;
@@ -339,11 +341,13 @@ static void pat_index_all(int fd)
 		      0);
 	xe_vm_unbind_sync(fd, vm, 0, 0x40000, size);
 
-	igt_assert_eq(__xe_vm_bind(fd, vm, 0, bo, 0, 0x40000,
-				   size, DRM_XE_VM_BIND_OP_MAP, 0, NULL, 0, 0,
-				   intel_get_pat_idx_wt(fd), 0),
-		      0);
-	xe_vm_unbind_sync(fd, vm, 0, 0x40000, size);
+	if (has_wt) {
+		igt_assert_eq(__xe_vm_bind(fd, vm, 0, bo, 0, 0x40000,
+					   size, DRM_XE_VM_BIND_OP_MAP, 0, NULL, 0, 0,
+					   intel_get_pat_idx_wt(fd), 0),
+			      0);
+		xe_vm_unbind_sync(fd, vm, 0, 0x40000, size);
+	}
 
 	igt_assert_eq(__xe_vm_bind(fd, vm, 0, bo, 0, 0x40000,
 				   size, DRM_XE_VM_BIND_OP_MAP, 0, NULL, 0, 0,
@@ -413,10 +417,11 @@ static void pat_index_all(int fd)
 				   intel_get_pat_idx_uc(fd), 0),
 		      -EINVAL);
 
-	igt_assert_eq(__xe_vm_bind(fd, vm, 0, bo, 0, 0x40000,
-				   size, DRM_XE_VM_BIND_OP_MAP, 0, NULL, 0, 0,
-				   intel_get_pat_idx_wt(fd), 0),
-		      -EINVAL);
+	if (has_wt)
+		igt_assert_eq(__xe_vm_bind(fd, vm, 0, bo, 0, 0x40000,
+					   size, DRM_XE_VM_BIND_OP_MAP, 0, NULL, 0, 0,
+					   intel_get_pat_idx_wt(fd), 0),
+			      -EINVAL);
 
 	igt_assert_eq(__xe_vm_bind(fd, vm, 0, bo, 0, 0x40000,
 				   size, DRM_XE_VM_BIND_OP_MAP, 0, NULL, 0, 0,
@@ -878,9 +883,10 @@ static void l2_flush_opt_svm_pat_restrict(int fd)
 					0, DRM_XE_MEM_RANGE_ATTR_PAT,
 					intel_get_pat_idx_uc(fd), 0, 0), -EINVAL);
 
-	igt_assert_eq(__xe_vm_madvise(fd, vm, to_user_pointer(buffer), size,
-					0, DRM_XE_MEM_RANGE_ATTR_PAT,
-					intel_get_pat_idx_wt(fd), 0, 0), -EINVAL);
+	if (intel_has_pat_wt(fd))
+		igt_assert_eq(__xe_vm_madvise(fd, vm, to_user_pointer(buffer), size,
+					      0, DRM_XE_MEM_RANGE_ATTR_PAT,
+					      intel_get_pat_idx_wt(fd), 0, 0), -EINVAL);
 
 	igt_assert_eq(__xe_vm_madvise(fd, vm, to_user_pointer(buffer), size,
 					0, DRM_XE_MEM_RANGE_ATTR_PAT,
