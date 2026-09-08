@@ -284,6 +284,28 @@ uint8_t intel_get_pat_idx_uc_comp(int fd)
 	return pat.uc_comp;
 }
 
+/**
+ * intel_has_pat_wt - Check whether the platform has a write-through PAT index
+ *
+ * @fd: DRM device fd
+ *
+ * Platforms with no write-through entry in their PAT table report the UC
+ * index for XE_CACHE_WT, so a WT index which aliases UC means there is no
+ * write-through mode to exercise. Deriving this from the PAT config rather
+ * than from a list of IP versions keeps it working for platforms added
+ * later.
+ *
+ * Returns: true if the platform has a distinct write-through pat_index
+ */
+bool intel_has_pat_wt(int fd)
+{
+	struct intel_pat_cache pat = {};
+
+	intel_get_pat_idx(fd, &pat);
+
+	return pat.wt != pat.uc;
+}
+
 uint8_t intel_get_pat_idx_wt(int fd)
 {
 	struct intel_pat_cache pat = {};
