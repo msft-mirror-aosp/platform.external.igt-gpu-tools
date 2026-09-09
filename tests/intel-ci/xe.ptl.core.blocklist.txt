@@ -82,11 +82,6 @@ igt@xe_oa@unprivileged-single-ctx-counters
 igt@xe_pm_residency@gt-c6-freeze
 igt@xe_pm_residency@toggle-gt-c6
 ##################################################################
-# Expected skip as PXP is not enabled for PTL upstream
-##################################################################
-igt@xe_pxp@.*
-igt@xe_fault_injection@exec-queue-create-fail-xe_pxp_exec_queue_add
-##################################################################
 # survivability feature not applicable for PTL
 ##################################################################
 igt@.*survivability.*
