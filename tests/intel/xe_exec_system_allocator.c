@@ -1173,6 +1173,24 @@ static void igt_require_hugepages(void)
 		      "No huge pages available!\n");
 }
 
+/**
+ * igt_require_mem_kb:
+ * @needed_kb: minimum required free memory in kB
+ *
+ * Skip the test if MemAvailable is below @needed_kb.  Used to avoid OOM
+ * kills in memory-hungry multi-process subtests (MMAP|NEW without FREE).
+ */
+static void igt_require_mem_kb(uint64_t needed_kb)
+{
+	/* igt_get_meminfo() returns bytes; convert to kB for comparison */
+	uint64_t avail_kb = igt_get_meminfo("MemAvailable") >> 10;
+
+	igt_skip_on_f(avail_kb < needed_kb,
+		      "Not enough memory: need %" PRIu64
+		      " kB, have %" PRIu64 " kB\n",
+		      needed_kb, avail_kb);
+}
+
 static void
 madvise_swizzle_op_exec(int fd, uint32_t vm, struct test_exec_data *data,
 			size_t bo_size, uint64_t addr, int index)
@@ -1508,6 +1526,16 @@ test_exec(int fd, struct drm_xe_engine_class_instance *eci,
 	if (flags & HUGE_PAGE) {
 		enable_hugepage();
 		igt_require_hugepages();
+
+		/*
+		 * MMAP | NEW without FREE accumulates n_execs hugepage buffers
+		 * before cleanup; skip if that would exhaust memory.  The
+		 * PROCESSES path is checked before forking in processes(),
+		 * since igt_skip() is not allowed from a forked child.
+		 */
+		if ((flags & MMAP) && (flags & NEW) && !(flags & FREE) &&
+		    !(flags & PROCESSES))
+			igt_require_mem_kb((uint64_t)n_execs * (SZ_2M / 1024));
 	}
 
 	if (flags & EVERY_OTHER_CHECK)
@@ -2228,6 +2256,17 @@ processes(int fd, int n_exec_queues, int n_execs, size_t bo_size,
 	if (flags & HUGE_PAGE) {
 		enable_hugepage();
 		igt_require_hugepages();
+
+		/*
+		 * MMAP | NEW without FREE accumulates up to n_execs hugepage
+		 * buffers per child process (one per engine), so the worst
+		 * case peak RSS is n_engines * n_execs * SZ_2M.  Check before
+		 * forking and skip if that would exhaust memory, since
+		 * igt_skip() cannot be used from the forked children.
+		 */
+		if ((flags & MMAP) && (flags & NEW) && !(flags & FREE))
+			igt_require_mem_kb(xe_number_engines(fd) *
+					   (uint64_t)n_execs * (SZ_2M / 1024));
 	}
 
 	map_fd = open(sync_file, O_RDWR | O_CREAT, 0x666);
