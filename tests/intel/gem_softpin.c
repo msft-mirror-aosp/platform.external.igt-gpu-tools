@@ -1573,8 +1573,19 @@ int igt_main()
 	}
 
 	igt_describe("Check start offset and alignment detection.");
-	igt_subtest("safe-alignment")
+	igt_subtest("safe-alignment") {
+		/*
+		 * The min-start-offset/alignment probing helpers exist
+		 * solely to bootstrap intel_allocator, which the driver
+		 * itself only relies on under full-ppgtt (see the comment
+		 * in __intel_bb_create()). Without full-ppgtt the kernel
+		 * can't see the ranges intel_allocator considers reserved
+		 * and may hand them out to other users, making the detected
+		 * values meaningless.
+		 */
+		igt_require(gem_uses_full_ppgtt(fd));
 		safe_alignment(fd);
+	}
 
 	igt_describe("Check softpinning of a gem buffer object.");
 	igt_subtest("softpin")
