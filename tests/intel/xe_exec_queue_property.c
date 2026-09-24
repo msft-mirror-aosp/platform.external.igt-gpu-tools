@@ -188,6 +188,8 @@ static void invalid_property(int xe)
 	igt_assert_eq(__xe_exec_queue_create(xe, vm, 1, 1, &instance,
 					     to_user_pointer(&ext), &exec_queue_id), 0);
 
+	xe_exec_queue_destroy(xe, exec_queue_id);
+
 	/* Invalid property should fail */
 	ext.property = invalid_property;
 	igt_assert_eq(__xe_exec_queue_create(xe, vm, 1, 1, &instance,
@@ -197,6 +199,9 @@ static void invalid_property(int xe)
 	ext.property = valid_property;
 	igt_assert_eq(__xe_exec_queue_create(xe, vm, 1, 1, &instance,
 					     to_user_pointer(&ext), &exec_queue_id), 0);
+
+	xe_exec_queue_destroy(xe, exec_queue_id);
+	xe_vm_destroy(xe, vm);
 }
 
 int igt_main()
