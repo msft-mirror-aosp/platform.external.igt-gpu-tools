@@ -348,11 +348,20 @@ int igt_main()
 
 		devid = intel_get_drm_devid(fd);
 		has_64bit_relocations = intel_gen(devid) >= 8;
-		has_softpin = !gem_has_relocations(fd);
-		exec_addr = gem_detect_safe_start_offset(fd);
-		data_addr = gem_detect_safe_alignment(fd);
-		exec_addr = max_t(exec_addr, exec_addr, data_addr);
-		data_addr += exec_addr;
+		/*
+		 * Without full-ppgtt the kernel can't see the ranges the
+		 * detected offsets are meant to reserve and may hand them
+		 * out to other users, so pinning at a detected offset isn't
+		 * meaningful; fall back to relocations in that case, same
+		 * as __intel_bb_create() does.
+		 */
+		has_softpin = !gem_has_relocations(fd) && gem_uses_full_ppgtt(fd);
+		if (has_softpin) {
+			exec_addr = gem_detect_safe_start_offset(fd);
+			data_addr = gem_detect_safe_alignment(fd);
+			exec_addr = max_t(exec_addr, exec_addr, data_addr);
+			data_addr += exec_addr;
+		}
 
 		gpu_count = igt_device_filter_count();
 
