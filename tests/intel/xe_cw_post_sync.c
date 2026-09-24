@@ -272,6 +272,8 @@ static void test_walker_notification(int fd, struct drm_xe_engine_class_instance
 	pthread_barrier_destroy(&t_data.barrier);
 	munmap(t_data.post_sync_ptr, t_data.post_sync->size);
 	intel_buf_destroy(t_data.post_sync);
+	xe_exec_queue_destroy(fd, t_data.exec_queue_id);
+	xe_vm_destroy(fd, t_data.vm);
 }
 
 int igt_main()
