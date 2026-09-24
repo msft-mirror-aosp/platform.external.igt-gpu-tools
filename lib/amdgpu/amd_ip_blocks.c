@@ -898,7 +898,20 @@ user_queue_create(amdgpu_device_handle device_handle, struct amdgpu_ring_context
 				       ctxt->timeline_syncobj_handle, ++ctxt->point);
 	igt_assert_eq(r, 0);
 
-	r = amdgpu_bo_alloc_and_map_uq(device_handle, 8,
+	/*
+	 * The wptr normally sits at offset 0 of its own 8-byte BO. When
+	 * wptr_offset is set, allocate a full page and place the wptr at that
+	 * (8-byte aligned, < PAGE_SIZE) offset instead, so the kernel's wptr
+	 * read path has to account for a wptr that is not at the start of the
+	 * BO. Offset 0 is later poisoned so a kernel that wrongly reads BO
+	 * offset 0 gets a bogus wptr.
+	 */
+	igt_assert_f(ctxt->wptr_offset % sizeof(uint64_t) == 0 &&
+		     ctxt->wptr_offset + sizeof(uint64_t) <= PAGE_SIZE,
+		     "wptr_offset %lu must be 8-byte aligned and fit in a page\n",
+		     (unsigned long)ctxt->wptr_offset);
+	r = amdgpu_bo_alloc_and_map_uq(device_handle,
+				       ctxt->wptr_offset ? PAGE_SIZE : 8,
 				       ALIGNMENT,
 				       AMDGPU_GEM_DOMAIN_GTT,
 				       gtt_flags,
@@ -907,6 +920,16 @@ user_queue_create(amdgpu_device_handle device_handle, struct amdgpu_ring_context
 				       &ctxt->wptr.mc_addr, &ctxt->wptr.va_handle,
 				       ctxt->timeline_syncobj_handle, ++ctxt->point);
 	igt_assert_eq(r, 0);
+	if (ctxt->wptr_offset) {
+		/*
+		 * The wptr BO is not zero-initialized. Clear the real wptr slot
+		 * so the queue starts from a well-defined wptr of 0, then poison
+		 * BO offset 0 so a buggy (offset-ignoring) read is fatal.
+		 */
+		*(volatile uint64_t *)((uint8_t *)ctxt->wptr.ptr +
+				       ctxt->wptr_offset) = 0;
+		*(volatile uint64_t *)ctxt->wptr.ptr = 0xdead0000dead0000ULL;
+	}
 
 	r = amdgpu_bo_alloc_and_map_uq(device_handle, 8,
 				       ALIGNMENT,
@@ -987,7 +1010,12 @@ user_queue_create(amdgpu_device_handle device_handle, struct amdgpu_ring_context
 			      AMDGPU_GEM_DOMAIN_DOORBELL);
 
 	ctxt->doorbell_cpu = (uint64_t *)ctxt->doorbell.ptr;
-	ctxt->wptr_cpu = (uint64_t *)ctxt->wptr.ptr;
+	/*
+	 * wptr_offset shifts the wptr within its BO. The BO struct fields stay
+	 * pristine (destroy unmaps by base addr); only the queue-facing wptr
+	 * address and cpu pointer are offset.
+	 */
+	ctxt->wptr_cpu = (uint64_t *)((uint8_t *)ctxt->wptr.ptr + ctxt->wptr_offset);
 	ctxt->rptr_cpu = (uint64_t *)ctxt->rptr.ptr;
 
 	ctxt->queue_cpu = (uint32_t *)ctxt->queue.ptr;
@@ -1002,7 +1030,7 @@ user_queue_create(amdgpu_device_handle device_handle, struct amdgpu_ring_context
 		r = amdgpu_create_userqueue(device_handle, AMDGPU_HW_IP_GFX,
 					    ctxt->db_handle, GFX_DOORBELL_INDEX,
 					    ctxt->queue.mc_addr, USERMODE_QUEUE_SIZE,
-					    ctxt->wptr.mc_addr, ctxt->rptr.mc_addr,
+					    ctxt->wptr.mc_addr + ctxt->wptr_offset, ctxt->rptr.mc_addr,
 					    mqd, queue_flags, &ctxt->queue_id);
 		igt_assert_eq(r, 0);
 		break;
@@ -1011,7 +1039,7 @@ user_queue_create(amdgpu_device_handle device_handle, struct amdgpu_ring_context
 		r = amdgpu_create_userqueue(device_handle, AMDGPU_HW_IP_COMPUTE,
 					    ctxt->db_handle, DOORBELL_INDEX,
 					    ctxt->queue.mc_addr, USERMODE_QUEUE_SIZE,
-					    ctxt->wptr.mc_addr, ctxt->rptr.mc_addr,
+					    ctxt->wptr.mc_addr + ctxt->wptr_offset, ctxt->rptr.mc_addr,
 					    mqd, queue_flags, &ctxt->queue_id);
 		igt_assert_eq(r, 0);
 		break;
@@ -1022,7 +1050,7 @@ user_queue_create(amdgpu_device_handle device_handle, struct amdgpu_ring_context
 		r = amdgpu_create_userqueue(device_handle, AMDGPU_HW_IP_DMA,
 					    ctxt->db_handle, SDMA_DOORBELL_INDEX,
 					    ctxt->queue.mc_addr, USERMODE_QUEUE_SIZE,
-					    ctxt->wptr.mc_addr, ctxt->rptr.mc_addr,
+					    ctxt->wptr.mc_addr + ctxt->wptr_offset, ctxt->rptr.mc_addr,
 					    mqd, queue_flags, &ctxt->queue_id);
 		igt_assert_eq(r, 0);
 		break;

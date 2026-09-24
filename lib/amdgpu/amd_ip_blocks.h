@@ -339,6 +339,14 @@ struct amdgpu_ring_context {
 	uint32_t db_handle;
 	uint32_t queue_id;
 
+	/*
+	 * Byte offset of the wptr within its BO. 0 (default) keeps the wptr at
+	 * BO offset 0. A non-zero value places the wptr at that offset inside a
+	 * one-page wptr BO, exercising the kernel's handling of a wptr that is
+	 * not at the start of the BO.
+	 */
+	uint64_t wptr_offset;
+
 	uint32_t timeline_syncobj_handle;
 	uint64_t point;
 	bool user_queue;
