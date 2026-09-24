@@ -8,6 +8,7 @@
 #include "lib/amdgpu/amd_ip_blocks.h"
 #include "lib/amdgpu/amd_PM4.h"
 #include "lib/amdgpu/amd_sdma.h"
+#include "lib/amdgpu/amd_command_submission.h"
 #include "lib/ioctl_wrappers.h"
 
 #include <errno.h>
@@ -22,6 +23,17 @@
 
 #define AMD_CONC_THREADS 4
 #define AMD_CONC_ITERS   128
+
+/* Bounded wait so a buggy kernel fails instead of hanging into a GPU reset. */
+#define WPTR_SUBMIT_TIMEOUT_NS (5ULL * 1000 * 1000 * 1000)
+/* 8-byte aligned, < PAGE_SIZE: wptr lands in the middle of its BO. */
+#define WPTR_TEST_OFFSET       2048
+/* Known wptr value placed at WPTR_TEST_OFFSET; distinct from the offset-0
+ * poison so a kernel that ignores the offset returns the wrong value. */
+#define WPTR_TEST_VALUE        32
+/* Poison at BO offset 0, distinct from WPTR_TEST_VALUE: a kernel that ignores
+ * the wptr offset reads this instead of WPTR_TEST_VALUE. */
+#define WPTR_POISON_VALUE      8
 
 #ifdef AMDGPU_USERQ_ENABLED
 struct amd_test_userq_ctx;
@@ -2712,6 +2724,180 @@ amd_userq_concurrent_fuzzing(int fd, amdgpu_device_handle dev,
 			 amd_userq_ip_name(ip_type));
 	}
 }
+
+/*
+ * Directly exercise the wptr read path: the userq wptr may sit at a non-zero
+ * offset inside its BO. USERQ_SIGNAL reads that wptr and uses it as the seqno
+ * of the exported userq fence, which USERQ_WAIT returns as the fence value.
+ * With the wptr at a non-zero BO offset, a kernel that reads BO offset 0 gets
+ * the poison value instead of WPTR_TEST_VALUE, so the returned fence value is
+ * wrong and this test fails.
+ *
+ * The queue is only signalled, never activated (its doorbell is never rung),
+ * so no IB executes. On teardown the kernel finds the queue was never mapped
+ * to a HW slot and force-completes its fence, so destroy does not block. This
+ * checks the wptr read path directly and does not depend on the firmware being
+ * able to schedule the queue.
+ */
+static void
+amd_userq_wptr_offset_fence(amdgpu_device_handle device, unsigned int ip_type)
+{
+	struct amdgpu_ring_context *ring_context;
+	const struct amdgpu_ip_block_version *ip_block;
+	struct drm_amdgpu_userq_fence_info fence_info = { 0 };
+	struct drm_amdgpu_userq_signal signal_data = { 0 };
+	struct drm_amdgpu_userq_wait wait_data = { 0 };
+	uint32_t syncobj;
+	int r;
+
+	ip_block = get_ip_block(device, ip_type);
+	igt_require(ip_block);
+	igt_require(ip_block->funcs->userq_create);
+
+	ring_context = calloc(1, sizeof(*ring_context));
+	igt_assert(ring_context);
+
+	ring_context->user_queue = true;
+	/* Place the wptr away from BO offset 0; the lib poisons offset 0. */
+	ring_context->wptr_offset = WPTR_TEST_OFFSET;
+
+	ip_block->funcs->userq_create(device, ring_context, ip_type);
+
+	r = amdgpu_cs_create_syncobj(device, &syncobj);
+	igt_assert_eq(r, 0);
+
+	/*
+	 * Seed offset 0 with a poison value distinct from WPTR_TEST_VALUE and
+	 * place the real wptr at WPTR_TEST_OFFSET. A kernel that ignores the
+	 * offset reads the poison instead of WPTR_TEST_VALUE.
+	 */
+	*(volatile uint64_t *)((uint8_t *)ring_context->wptr_cpu -
+			       WPTR_TEST_OFFSET) = WPTR_POISON_VALUE;
+	*ring_context->wptr_cpu = WPTR_TEST_VALUE;
+	__sync_synchronize();
+
+	/* USERQ_SIGNAL reads the wptr and uses it as the fence seqno. */
+	signal_data.queue_id = ring_context->queue_id;
+	signal_data.syncobj_handles = (uintptr_t)&syncobj;
+	signal_data.num_syncobj_handles = 1;
+	r = amdgpu_userq_signal(device, &signal_data);
+	igt_assert_eq(r, 0);
+
+	/* USERQ_WAIT returns the fence va/value pair for the syncobj. */
+	wait_data.waitq_id = ring_context->queue_id;
+	wait_data.syncobj_handles = (uintptr_t)&syncobj;
+	wait_data.num_syncobj_handles = 1;
+	wait_data.num_fences = 1;
+	wait_data.out_fences = (uintptr_t)&fence_info;
+	r = amdgpu_userq_wait(device, &wait_data);
+	igt_assert_eq(r, 0);
+
+	igt_assert_eq_u32(wait_data.num_fences, 1);
+
+	amdgpu_cs_destroy_syncobj(device, syncobj);
+
+	/*
+	 * Do not call the explicit USERQ_DESTROY ioctl here: it cancels the
+	 * queue's hang-detect worker and then waits for the last fence, which
+	 * never completes because the queue was never executed. The queue (and
+	 * its fence) are reclaimed when the device fd is closed at the end of
+	 * the test, where the teardown path force-completes the fence. Leak the
+	 * small ring_context allocation to keep the wptr BO mapping alive until
+	 * then.
+	 */
+
+	/*
+	 * The core assertion: the fence value must equal the wptr written at
+	 * WPTR_TEST_OFFSET. A kernel that ignores the offset reads BO offset 0
+	 * and returns the poison value instead.
+	 */
+	igt_assert_eq_u64(fence_info.value, WPTR_TEST_VALUE);
+}
+
+/*
+ * End-to-end variant: submit a real IB with the wptr at a non-zero offset and
+ * wait for completion. Requires firmware that can schedule the user queue. On
+ * a kernel that mishandles the wptr offset the completion fence never signals;
+ * the bounded wait inside submit then fails its igt_assert, failing this test.
+ */
+static void
+amd_userq_wptr_offset_submit(amdgpu_device_handle device, unsigned int ip_type)
+{
+	const int write_length = 128;
+	const int pm4_dw = 256;
+	struct amdgpu_ring_context *ring_context;
+	const struct amdgpu_ip_block_version *ip_block;
+	struct timespec ts = {};
+	int r;
+
+	ip_block = get_ip_block(device, ip_type);
+	igt_require(ip_block);
+	igt_require(ip_block->funcs->userq_create);
+
+	ring_context = calloc(1, sizeof(*ring_context));
+	igt_assert(ring_context);
+
+	ring_context->write_length = write_length;
+	ring_context->pm4 = calloc(pm4_dw, sizeof(*ring_context->pm4));
+	igt_assert(ring_context->pm4);
+	ring_context->pm4_size = pm4_dw;
+	ring_context->res_cnt = 1;
+	ring_context->user_queue = true;
+	/* The knob under test: place the wptr away from BO offset 0. */
+	ring_context->wptr_offset = WPTR_TEST_OFFSET;
+	/*
+	 * Bound the submit wait so a broken kernel fails deterministically.
+	 * amdgpu_cs_syncobj_wait() takes an absolute CLOCK_MONOTONIC deadline,
+	 * so add the bound to the current time rather than passing a relative
+	 * value (which would be a past timestamp and time out immediately).
+	 */
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	ring_context->time_out = ts.tv_sec * NSEC_PER_SEC + ts.tv_nsec +
+				 WPTR_SUBMIT_TIMEOUT_NS;
+
+	ip_block->funcs->userq_create(device, ring_context, ip_type);
+
+	r = amdgpu_bo_alloc_and_map_sync(device,
+					 write_length * sizeof(uint32_t), 4096,
+					 AMDGPU_GEM_DOMAIN_GTT, 0,
+					 AMDGPU_VM_MTYPE_UC,
+					 &ring_context->bo,
+					 (void **)&ring_context->bo_cpu,
+					 &ring_context->bo_mc,
+					 &ring_context->va_handle,
+					 ring_context->timeline_syncobj_handle,
+					 ++ring_context->point, true);
+	igt_assert_eq(r, 0);
+
+	r = amdgpu_timeline_syncobj_wait(device,
+					 ring_context->timeline_syncobj_handle,
+					 ring_context->point);
+	igt_assert_eq(r, 0);
+
+	memset((void *)ring_context->bo_cpu, 0,
+	       write_length * sizeof(uint32_t));
+	ring_context->resources[0] = ring_context->bo;
+
+	ip_block->funcs->write_linear(ip_block->funcs, ring_context,
+				      &ring_context->pm4_dw);
+
+	amdgpu_test_exec_cs_helper(device, ip_type, ring_context, 0);
+
+	/*
+	 * write_length is in bytes; write_linear emits write_length/4 deadbeef
+	 * DWORDs, so compare with div=4 to check exactly the DWORDs written.
+	 */
+	r = ip_block->funcs->compare(ip_block->funcs, ring_context, 4);
+	igt_assert_eq(r, 0);
+
+	amdgpu_bo_unmap_and_free(ring_context->bo, ring_context->va_handle,
+				 ring_context->bo_mc,
+				 write_length * sizeof(uint32_t));
+
+	free(ring_context->pm4);
+	ip_block->funcs->userq_destroy(device, ring_context, ip_type);
+	free(ring_context);
+}
 #endif /* AMDGPU_USERQ_ENABLED */
 
 int igt_main()
@@ -2772,6 +2958,24 @@ int igt_main()
 	igt_describe("USERQ concurrency fuzzing: concurrent CREATE/DESTROY, SIGNAL/WAIT racing DESTROY, double-DESTROY");
 	igt_subtest("concurrent-userq-fuzzing")
 		amd_userq_concurrent_fuzzing(fd, amdgpu_dev, userq_arr_cap);
+
+	igt_describe("USERQ SDMA fence value with the wptr at a non-zero BO offset");
+	igt_subtest("userq-wptr-offset-fence-sdma") {
+		igt_require(userq_arr_cap[AMD_IP_DMA]);
+		amd_userq_wptr_offset_fence(amdgpu_dev, AMD_IP_DMA);
+	}
+
+	igt_describe("USERQ GFX submit with the wptr at a non-zero BO offset");
+	igt_subtest("userq-wptr-offset-gfx") {
+		igt_require(userq_arr_cap[AMD_IP_GFX]);
+		amd_userq_wptr_offset_submit(amdgpu_dev, AMD_IP_GFX);
+	}
+
+	igt_describe("USERQ SDMA submit with the wptr at a non-zero BO offset");
+	igt_subtest("userq-wptr-offset-sdma") {
+		igt_require(userq_arr_cap[AMD_IP_DMA]);
+		amd_userq_wptr_offset_submit(amdgpu_dev, AMD_IP_DMA);
+	}
 #endif
 
 	igt_fixture() {
