@@ -39,13 +39,6 @@ igt@xe_compute@ccs-mode-basic
 ##################################################################
 igt@xe_vm@.*export.*
 ##################################################################
-# Tests not applicable for the platform
-##################################################################
-igt@xe_exec_multi_queue@.*
-igt@xe_evict@.*multi(-)?queue.*
-igt@.*@.*-multi_queue
-igt@.*@.*multi-queue.*
-##################################################################
 # Expected skips, Kernel support not available
 ##################################################################
 igt@xe_eudebug@.*
@@ -79,4 +72,9 @@ igt@xe_fault_injection@exec-queue-create-fail-xe_pxp_exec_queue_add
 # I2c tests needs AMC capable BMG in CI
 ##################################################################
 igt@xe_pm@d3hot-i2c
+##################################################################
+# Expected skip on BMG due to unsupported multi-queue capability
+# Multi-queue is not supported on platforms older than xe3p
+##################################################################
+igt@.*multi.queue.*
 ##################################################################

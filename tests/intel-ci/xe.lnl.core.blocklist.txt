@@ -81,13 +81,6 @@ igt@xe_compute@ccs-mode-compute-kernel
 ##################################################################
 igt@xe_vm@.*export.*
 ##################################################################
-# Tests not applicable for the platform
-##################################################################
-igt@xe_evict@.*multiqueue.*
-igt@xe_exec_multi_queue@.*
-igt@.*@.*-multi_queue
-igt@.*@.*multi-queue.*
-##################################################################
 # Kernel support not available
 ##################################################################
 igt@xe_eudebug@.*
@@ -107,4 +100,9 @@ igt@xe_module_load@force-load
 # I2c tests needs AMC capable machines in CI
 #################################################################
 igt@xe_pm@d3hot-i2c
+##################################################################
+# Expected skip on LNL due to unsupported multi-queue capability
+# Multi-queue is not supported on platforms older than xe3p
+##################################################################
+igt@.*multi.queue.*
 ##################################################################
