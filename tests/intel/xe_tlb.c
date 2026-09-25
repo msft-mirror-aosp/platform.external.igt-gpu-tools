@@ -102,6 +102,10 @@ static void tlb_invalidation(int fd, struct drm_xe_engine_class_instance *eci)
 	sync[1].flags |= DRM_XE_SYNC_FLAG_SIGNAL;
 	xe_exec(fd, &exec);
 	igt_assert(syncobj_wait(fd, &syncobj, 1, INT64_MAX, 0, NULL));
+
+	/* Signal sync[0] on the rebind so the next exec waits for it */
+	syncobj_reset(fd, &sync[0].handle, 1);
+	sync[0].flags |= DRM_XE_SYNC_FLAG_SIGNAL;
 	xe_vm_bind_async(fd, vm, bind_engine, bo2, 0, addr, bo_size, sync, 1);
 	data2 = xe_bo_map(fd, bo2, bo_size);
 
