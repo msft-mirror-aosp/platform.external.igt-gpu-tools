@@ -43,7 +43,7 @@ def set_test_config(test_variants: List[Tuple[int, VfProvisioningMode, VfSchedul
 
 test_variants_1 = [(1, VfProvisioningMode.VGPU_PROFILE, VfSchedulingMode.DEFAULT_PROFILE),
                    (2, VfProvisioningMode.VGPU_PROFILE, VfSchedulingMode.DEFAULT_PROFILE),
-                   (2, VfProvisioningMode.AUTO, VfSchedulingMode.INFINITE)]
+                   (2, VfProvisioningMode.AUTO, VfSchedulingMode.AUTO)]
 
 @pytest.mark.parametrize('setup_vms', set_test_config(test_variants_1), ids=idfn_test_config, indirect=['setup_vms'])
 class TestVmSetup:

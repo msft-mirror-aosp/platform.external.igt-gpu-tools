@@ -44,7 +44,7 @@ class VmmTestingConfig:
     - num_vfs: requested number of VFs to enable
     - max_num_vms: maximal number of VMs (the value can be different than enabled number of VFs)
     - provisioning_mode: auto (fair resources allocation by a driver) or vGPU profile
-    - scheduling_mode: requested vGPU scheduling profile (infinite maps to default 0's)
+    - scheduling_mode: requested vGPU scheduling profile (auto maps to default EQ=16ms and PT=16000us)
     - auto_poweron_vm: assign VFs and power on VMs automatically in setup fixture
     - auto_probe_vm_driver: probe guest DRM driver in setup fixture (VM must be powered on)
     - unload_host_drivers_on_teardown: unload host DRM drivers in teardown fixture
@@ -53,7 +53,7 @@ class VmmTestingConfig:
     num_vfs: int = 1
     max_num_vms: int = 2
     provisioning_mode: VfProvisioningMode = VfProvisioningMode.AUTO
-    scheduling_mode: VfSchedulingMode = VfSchedulingMode.INFINITE
+    scheduling_mode: VfSchedulingMode = VfSchedulingMode.AUTO
 
     auto_poweron_vm: bool = True
     auto_probe_vm_driver: bool = True
@@ -68,8 +68,11 @@ class VmmTestingConfig:
             self.num_vfs = 0 # Actual value set in VmmTestingSetup
 
     def __str__(self) -> str:
-        test_config_id = (f'{self.num_vfs if not self.enable_max_vfs else "Max"}VF'
-                          + f'-(P:{self.provisioning_mode.name} S:{self.scheduling_mode.name})')
+        test_config_id = (f'{self.num_vfs if not self.enable_max_vfs else "Max"}VF')
+
+        if self.provisioning_mode is not VfProvisioningMode.AUTO or self.scheduling_mode is not VfSchedulingMode.AUTO:
+            test_config_id += f'-(P:{self.provisioning_mode.name} S:{self.scheduling_mode.name})'
+
         return test_config_id
 
     def __repr__(self) -> str:
@@ -126,10 +129,11 @@ class VmmTestingSetup:
         self.wsim_wl_dir = vmtb_root_path / vmtb_config.config.wsim_wl_path / self.get_dut().gpu_model.name.lower()
 
         if (self.testing_config.provisioning_mode is VfProvisioningMode.VGPU_PROFILE
-            or self.testing_config.scheduling_mode is not VfSchedulingMode.INFINITE):
+            or self.testing_config.scheduling_mode is not VfSchedulingMode.AUTO):
+            # vGPU profile or auto resources provisioning with concrete scheduling
             self.vgpu_profile: VgpuProfile = self.get_vgpu_profile()
-
-        if self.testing_config.provisioning_mode is VfProvisioningMode.AUTO and self.testing_config.enable_max_vfs:
+        elif self.testing_config.enable_max_vfs:
+            # Auto provisioning (with default/auto scheduling) for max VFs (HW limit)
             self.testing_config.num_vfs = self.total_vfs
 
         # Start maximum requested number of VMs, but not more than VFs supported by the given vGPU profile
@@ -143,17 +147,22 @@ class VmmTestingSetup:
     def get_vgpu_profile(self) -> VgpuProfile:
         configurator = VgpuProfileConfigurator(self.vgpu_profiles_dir, self.get_dut().gpu_model)
         if self.testing_config.enable_max_vfs:
-            # Get a vGPU profile with the most VFs (not necessarily equal to sysfs/sriov_totalvfs)
-            self.testing_config.num_vfs = max(configurator.supported_vgpu_profiles.vf_resources,
-                                              key=lambda profile: profile.vf_count).vf_count
-            logger.debug("Max VFs supported by vGPU profiles: %s", self.testing_config.num_vfs)
+            if self.testing_config.provisioning_mode is VfProvisioningMode.VGPU_PROFILE:
+                # Get a vGPU profile with the most VFs (not necessarily equal to sysfs/sriov_totalvfs)
+                self.testing_config.num_vfs = max(configurator.supported_vgpu_profiles.vf_resources,
+                                                  key=lambda profile: profile.vf_count).vf_count
+                logger.debug("Max VFs supported by vGPU profiles: %s", self.testing_config.num_vfs)
+            else:
+                # Use HW VFs limit (sysfs/sriov_totalvfs) with auto resources provisioning and concrete scheduling
+                self.testing_config.num_vfs = self.total_vfs
 
         try:
+            require_resources = self.testing_config.provisioning_mode is VfProvisioningMode.VGPU_PROFILE
             vgpu_profile = configurator.get_vgpu_profile(self.testing_config.num_vfs,
-                                                         self.testing_config.scheduling_mode)
-        except exceptions.VgpuProfileError as exc:
-            logger.error("Suitable vGPU profile not found: %s", exc)
-            raise exceptions.VgpuProfileError('Invalid test setup - vGPU profile not found!')
+                                                         self.testing_config.scheduling_mode,
+                                                         require_resources)
+        except exceptions.VgpuProfileNotFound as exc:
+            pytest.skip(f'Test config not supported: {exc}')
 
         return vgpu_profile
 
@@ -277,11 +286,12 @@ def fixture_setup_vms(get_vmtb_config, get_cmdline_config, get_host, request):
     else:
         device.driver.restore_auto_provisioning()
 
-    assert device.create_vf(num_vfs) == num_vfs
+    assert num_vfs <= ts.total_vfs, f'Requested number of VFs ({num_vfs}) exceeds total VFs ({ts.total_vfs})'
+    device.create_vf(num_vfs)
 
     if (ts.testing_config.provisioning_mode is VfProvisioningMode.AUTO and
-        ts.testing_config.scheduling_mode is not VfSchedulingMode.INFINITE):
-        # Auto resources provisioning with concrete scheduling (i.e. different than HW default: infinite).
+        ts.testing_config.scheduling_mode is not VfSchedulingMode.AUTO):
+        # Auto resources provisioning with scheduling override (i.e. different than default/auto).
         # Scheduler params override must be done after enabling VFs
         # to allow hard resources auto provisioning by KMD.
         ts.vgpu_profile.print_scheduler_config()

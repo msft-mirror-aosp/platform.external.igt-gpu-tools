@@ -40,6 +40,10 @@ class VgpuProfileError(BenchError):
     pass
 
 
+class VgpuProfileNotFound(VgpuProfileError):
+    pass
+
+
 class NotAvailableError(BenchError):
     pass
 

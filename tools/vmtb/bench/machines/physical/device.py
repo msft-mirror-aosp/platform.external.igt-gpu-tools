@@ -59,7 +59,7 @@ class Device(DeviceInterface):
             driver_module = importlib.import_module(module_name)
             driver_class = getattr(driver_module, class_name)
         except (ImportError, AttributeError) as exc:
-            logging.error("Driver module/class is not available: %s", exc)
+            logger.error("Driver module/class is not available: %s", exc)
             raise exceptions.VmtbConfigError(f'Requested driver module {driver_name} is not available!')
 
         return driver_class(bdf)
@@ -102,7 +102,9 @@ class Device(DeviceInterface):
 
         self.driver.set_numvfs(num)
         ret = self.driver.get_numvfs()
-        assert ret == num
+        if ret != num:
+            logger.error("Failed to create requested number of VFs - expected: %s, got: %s", num, ret)
+            raise exceptions.HostError(f'Failed to create requested number of VFs ({num})')
 
         return ret
 
@@ -114,7 +116,8 @@ class Device(DeviceInterface):
         self.driver.set_numvfs(0)
         ret = self.driver.get_numvfs()
         if ret != 0:
-            raise exceptions.HostError('VFs not disabled after 0 write')
+            logger.error("Failed to disable VFs - expected 0, got: %s", ret)
+            raise exceptions.HostError('Failed to disable all VFs')
 
         logger.debug("[%s] Enable drivers autoprobe", self.pci_info.bdf)
         self.set_drivers_autoprobe(True)

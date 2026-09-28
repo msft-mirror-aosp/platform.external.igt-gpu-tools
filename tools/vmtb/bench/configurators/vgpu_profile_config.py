@@ -23,7 +23,7 @@ class VfProvisioningMode(Enum):
 
 
 class VfSchedulingMode(str, Enum):
-    INFINITE = 'Infinite' # Infinite EQ/PT - HW default
+    AUTO = 'Auto' # Default EQ/PT (set by xe KMD automatically)
     DEFAULT_PROFILE = 'Default_Profile' # Default vGPU scheduler profile
     FLEXIBLE_30FPS = 'Flexible_30fps_GPUTimeSlicing'
     FIXED_30FPS = 'Fixed_30fps_GPUTimeSlicing'
@@ -87,8 +87,8 @@ class VgpuProfileConfigurator:
                 break
 
         if not is_vf_resource_found:
-            logger.error("vGPU VF resources profile %sxVF not found!", requested_num_vfs)
-            raise exceptions.VgpuProfileError(f'vGPU VF resources profile {requested_num_vfs}xVF not found!')
+            logger.warning("vGPU resources profile (%sxVF) not found!", requested_num_vfs)
+            raise exceptions.VgpuProfileNotFound(f'vGPU resources profile ({requested_num_vfs}xVF) not found!')
 
         return vgpu_resources_config
 
@@ -99,7 +99,7 @@ class VgpuProfileConfigurator:
         # pylint: disable=W0123
         vgpu_scheduler_config = VgpuSchedulerConfig()
 
-        if requested_scheduler is VfSchedulingMode.INFINITE:
+        if requested_scheduler is VfSchedulingMode.AUTO:
             return vgpu_scheduler_config
 
         for scheduler in self.supported_vgpu_profiles.scheduler_configs:
@@ -136,13 +136,19 @@ class VgpuProfileConfigurator:
 
         return vgpu_security_config
 
-    def get_vgpu_profile(self, requested_num_vfs: int, requested_scheduler: VfSchedulingMode) -> VgpuProfile:
-        """Get vGPU profile for requested number of VFs, scheduler and security modes."""
+    def get_vgpu_profile(self, requested_num_vfs: int, requested_scheduler: VfSchedulingMode,
+                         require_resources: bool = True) -> VgpuProfile:
+        """Get vGPU profile for requested number of VFs, scheduler and security modes.
+        If require_resources is False, skip VF resources lookup
+        (e.g. for auto provisioning where only the scheduler config is needed).
+        """
         logger.info("Requested vGPU profile: %s VFs / scheduling: %s", requested_num_vfs, requested_scheduler)
 
         vgpu_profile: VgpuProfile = VgpuProfile()
         vgpu_profile.num_vfs = requested_num_vfs
-        vgpu_profile.resources = self.select_vgpu_resources_profile(requested_num_vfs)
+
+        if require_resources:
+            vgpu_profile.resources = self.select_vgpu_resources_profile(requested_num_vfs)
 
         if requested_scheduler is VfSchedulingMode.DEFAULT_PROFILE:
             requested_scheduler = VfSchedulingMode(self.supported_vgpu_profiles.scheduler_config_default)
