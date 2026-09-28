@@ -84,6 +84,7 @@ class VirtualMachine(MachineInterface):
 
         self.migrate_source_image: typing.Optional[str] = None
         self.migrate_destination_vm: bool = False
+        self._migration_ongoing: bool = False
 
         self.dmesg_logger = self.__setup_dmesg_logger()
 
@@ -558,32 +559,57 @@ class VirtualMachine(MachineInterface):
 
         return True
 
-    @Decorators.timeout_signal
-    def save_state(self) -> None:
-        logger.debug('Saving VM%s state (snapshot)', self.vmnum)
+    def save_state_init(self) -> None:
+        """Initiate VM snapshot-save operation (asynchronous)."""
+        logger.debug("Starting VM%s state save (snapshot)", self.vmnum)
         self.qm.save_snapshot()
+        self._migration_ongoing = True
 
-        job_status: str = self.qm.get_qmp_event_job()
-        while job_status != 'concluded':
-            job_status = self.qm.get_qmp_event_job()
+    def load_state_init(self) -> None:
+        """Initiate VM snapshot-load operation (asynchronous)."""
+        logger.debug("Starting VM%s state load (snapshot)", self.vmnum)
+        self.qm.load_snapshot()
+        self._migration_ongoing = True
 
-        job_status, job_error = self.qm.query_jobs('snapshot-save')
-        if job_status == 'concluded' and job_error is not None:
-            raise exceptions.GuestError(f'VM{self.vmnum} state save error: {job_error}')
+    def __is_snapshot_operation_complete(self, op_name: str) -> bool:
+        """Poll VM snapshot save/load job completion."""
+        if not self._migration_ongoing:
+            logger.warning("VM%s migration is not in progress", self.vmnum)
+            return False
 
-        logger.debug('VM%s state save finished successfully', self.vmnum)
+        job_status, job_error = self.qm.query_jobs(f'snapshot-{op_name}')
+        if job_error is not None:
+            logger.error("VM%s snapshot-%s error: %s", self.vmnum, op_name, job_error)
+            return False
+
+        return job_status == 'concluded'
 
     @Decorators.timeout_signal
+    def save_state_check(self, timeout: int = DEFAULT_TIMEOUT) -> None:
+        """Check if previously started snapshot-save has completed successfully."""
+        if not self.__is_snapshot_operation_complete('save'):
+            logger.error("VM%s state save has not completed", self.vmnum)
+            raise exceptions.GuestMigrationError(f'VM{self.vmnum} state save has not completed')
+
+        self._migration_ongoing = False
+        logger.debug("VM%s state save finished successfully", self.vmnum)
+
+    @Decorators.timeout_signal
+    def load_state_check(self, timeout: int = DEFAULT_TIMEOUT) -> None:
+        """Check if previously started snapshot-load has completed successfully."""
+        if not self.__is_snapshot_operation_complete('load'):
+            logger.error("VM%s state load has not completed", self.vmnum)
+            raise exceptions.GuestMigrationError(f'VM{self.vmnum} state load has not completed')
+
+        self._migration_ongoing = False
+        logger.debug("VM%s state load finished successfully", self.vmnum)
+
+    def save_state(self) -> None:
+        """Save VF state - submit snapshot-save and check result (synchronous save)."""
+        self.save_state_init()
+        self.save_state_check()
+
     def load_state(self) -> None:
-        logger.debug('Loading VM state (snapshot)')
-        self.qm.load_snapshot()
-
-        job_status: str = self.qm.get_qmp_event_job()
-        while job_status != 'concluded':
-            job_status = self.qm.get_qmp_event_job()
-
-        job_status, job_error = self.qm.query_jobs('snapshot-load')
-        if job_status == 'concluded' and job_error is not None:
-            raise exceptions.GuestError(f'VM{self.vmnum} state load error: {job_error}')
-
-        logger.debug('VM state load finished successfully')
+        """Load VF state - submit snapshot-load and check result (synchronous load)."""
+        self.load_state_init()
+        self.load_state_check()

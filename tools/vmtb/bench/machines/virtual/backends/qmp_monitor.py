@@ -9,6 +9,8 @@ import threading
 import time
 import typing
 
+from bench.exceptions import QmpError
+
 logger = logging.getLogger('QmpMonitor')
 
 
@@ -46,7 +48,7 @@ class QmpMonitor():
         self.sockf.flush()
 
         ret: typing.Dict = {}
-        while 'status' not in ret:
+        while not ('status' in ret and 'running' in ret):
             qmp_msg = self.qmp_queue.get()
             if 'return' in qmp_msg:
                 ret = qmp_msg.get('return')
@@ -55,26 +57,27 @@ class QmpMonitor():
         logger.debug('Machine status: %s', status)
         return status
 
-    def query_jobs(self, requested_type: str) -> typing.Tuple[str, str]:
+    def query_jobs(self, requested_type: str) -> typing.Tuple[str, typing.Optional[str]]:
         json.dump({'execute': 'query-jobs'}, self.sockf)
         self.sockf.flush()
 
-        job_type: str = ''
-        job_status: str = ''
-        job_error: str = ''
-        ret: typing.Dict = {}
+        job_status: str = 'N/A'
+        job_error: typing.Optional[str] = None
+        is_job_info: bool = False
 
-        qmp_msg = self.qmp_queue.get()
-        # logger.debug('[QMP RSP Queue] -> %s', qmp_msg)
-        if 'return' in qmp_msg:
-            ret = qmp_msg.get('return')
-            for param in ret:
-                job_type = param.get('type')
-                job_status = param.get('status')
-                job_error = param.get('error')
+        while not is_job_info:
+            qmp_msg = self.qmp_queue.get()
+            if 'return' in qmp_msg:
+                ret = qmp_msg.get('return')
+                if not isinstance(ret, list):
+                    continue
 
-                if job_type == requested_type:
-                    break
+                for job_info in ret:
+                    if job_info.get('type') == requested_type:
+                        job_status = job_info.get('status')
+                        job_error = job_info.get('error')
+                        is_job_info = True
+                        break
 
         return (job_status, job_error)
 
@@ -84,15 +87,15 @@ class QmpMonitor():
         event: str = qmp_msg.get('event', '')
         return event
 
-    def get_qmp_event_job(self) -> str:
+    def __wait_for_ack(self, cmd_name: str) -> None:
+        """Consume QMP command acknowledgment (empty return on success).
+        Throw QmpError exception on error response."""
         qmp_msg = self.qmp_queue.get()
-        # logger.debug('[QMP RSP Queue] -> %s', qmp_msg)
-
-        status: str = ''
-        if qmp_msg.get('event') == 'JOB_STATUS_CHANGE':
-            status = qmp_msg.get('data', {}).get('status', '')
-
-        return status
+        while not ('return' in qmp_msg or 'error' in qmp_msg):
+            qmp_msg = self.qmp_queue.get()
+        if 'error' in qmp_msg:
+            desc = qmp_msg['error'].get('desc', 'unknown error')
+            raise QmpError(f'QMP {cmd_name} failed: {desc}')
 
     def system_reset(self) -> None:
         json.dump({'execute': 'system_reset'}, self.sockf)
@@ -105,10 +108,12 @@ class QmpMonitor():
     def stop(self) -> None:
         json.dump({'execute': 'stop'}, self.sockf)
         self.sockf.flush()
+        self.__wait_for_ack('stop')
 
     def cont(self) -> None:
         json.dump({'execute': 'cont'}, self.sockf)
         self.sockf.flush()
+        self.__wait_for_ack('cont')
 
     def quit(self) -> None:
         json.dump({'execute': 'quit'}, self.sockf)
@@ -149,6 +154,7 @@ class QmpMonitor():
             'arguments': {'job-id': job_id, 'tag': snapshot_tag, 'vmstate': node_name, 'devices': [node_name]}},
             self.sockf)
         self.sockf.flush()
+        self.__wait_for_ack('snapshot-save')
 
     def load_snapshot(self) -> None:
         job_id: str = f'loadvm_{time.time()}'
@@ -160,3 +166,4 @@ class QmpMonitor():
             'arguments': {'job-id': job_id, 'tag': snapshot_tag, 'vmstate': node_name, 'devices': [node_name]}},
             self.sockf)
         self.sockf.flush()
+        self.__wait_for_ack('snapshot-load')

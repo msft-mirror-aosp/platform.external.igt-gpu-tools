@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Copyright © 2024 Intel Corporation
+# Copyright © 2024-2026 Intel Corporation
 
 class BenchError(Exception):
     pass
@@ -19,11 +19,19 @@ class GuestAgentError(GuestError):
     pass
 
 
+class GuestMigrationError(GuestError):
+    pass
+
+
 class AlarmTimeoutError(GuestError):
     pass
 
 
 # Generic errors:
+class QmpError(BenchError):
+    pass
+
+
 class GemWsimError(BenchError):
     pass
 
