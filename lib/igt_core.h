@@ -524,6 +524,18 @@ void igt_simple_init_parse_opts(int *argc, char **argv,
 	__attribute__((constructor)) \
 	static void igt_unique(__igt_constructor_l)(void)
 
+/**
+ * igt_destructor:
+ *
+ * Convenience macro to run the provided code block when igt is exiting,
+ * after all tests have been run. This should be used for parts of the igt
+ * library that require de-initialization of objects with global context.
+ * This code block will be executed exactly once.
+ */
+#define igt_destructor \
+	__attribute__((destructor)) \
+	static void igt_unique(__igt_destructor_l)(void)
+
 __noreturn __attribute__((format(printf, 1, 2)))
 void igt_skip(const char *f, ...);
 __noreturn __attribute__((format(printf, 5, 6)))
