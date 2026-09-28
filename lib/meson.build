@@ -398,6 +398,7 @@ igt_deps = [ lib_igt ] + lib_deps
 lin_igt_chipset_build = static_library('igt_chipset',
                                        ['intel_chipset.c',
 					'intel_device_info.c',
+					'igt_map.c',
 					'intel_cmds_info.c'],
                                        include_directories : inc)
 

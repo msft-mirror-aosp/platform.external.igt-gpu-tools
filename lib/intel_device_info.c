@@ -1,8 +1,13 @@
 #include "intel_chipset.h"
 #include "pciids.h"
 #include "i915_pciids_local.h"
+#include "igt_core.h"
+#include "igt_map.h"
 
 #include <ctype.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <strings.h> /* ffs() */
 
 static const struct intel_device_info intel_generic_info = {
@@ -716,6 +721,59 @@ static const struct pci_id_match intel_device_match[] = {
 
 #undef INTEL_PCI_ID_INIT
 
+/*
+ * Process-wide cache of per-devid copies of the static PCI-ID table entries.
+ * Entries can be updated at runtime, e.g. by xe_device_get() with the graphics
+ * IP version reported by GMD_ID. The cache is keyed by PCI device ID, so all
+ * devices sharing a device ID share one entry.
+ *
+ * The map is created lazily on first lookup, so lookups do not depend on
+ * constructor ordering.
+ */
+static struct {
+	pthread_mutex_t mutex;
+	struct igt_map *map;
+} devinfo_cache = {
+	.mutex = PTHREAD_MUTEX_INITIALIZER,
+};
+
+static void free_device_info(struct igt_map_entry *entry)
+{
+	free(entry->data);
+	free((void *)entry->key);
+}
+
+igt_destructor
+{
+	pthread_mutex_lock(&devinfo_cache.mutex);
+	igt_map_destroy(devinfo_cache.map, free_device_info);
+	devinfo_cache.map = NULL;
+	pthread_mutex_unlock(&devinfo_cache.mutex);
+}
+
+/* Caller must hold devinfo_cache.mutex. */
+static struct intel_device_info *devinfo_cache_search(uint16_t devid)
+{
+	uint32_t key = devid;
+
+	if (!devinfo_cache.map)
+		return NULL;
+
+	return igt_map_search(devinfo_cache.map, &key);
+}
+
+static const struct intel_device_info *devinfo_table_lookup(uint16_t devid)
+{
+	int i;
+
+	for (i = 0; intel_device_match[i].device_id != PCI_MATCH_ANY; i++) {
+		if (devid == intel_device_match[i].device_id)
+			break;
+	}
+
+	return (const struct intel_device_info *)intel_device_match[i].match_data;
+}
+
 /**
  * intel_get_device_info:
  * @devid: pci device id
@@ -727,24 +785,52 @@ static const struct pci_id_match intel_device_match[] = {
  */
 const struct intel_device_info *intel_get_device_info(uint16_t devid)
 {
-	static __thread const struct intel_device_info *cache = &intel_generic_info;
-	static __thread uint16_t cached_devid;
-	int i;
+	const struct intel_device_info *table_info;
+	struct intel_device_info *info, *new_info;
+	uint32_t *new_key;
 
-	if (cached_devid == devid)
-		goto out;
+	pthread_mutex_lock(&devinfo_cache.mutex);
+	info = devinfo_cache_search(devid);
+	pthread_mutex_unlock(&devinfo_cache.mutex);
+	if (info)
+		return info;
 
-	/* XXX Presort table and bsearch! */
-	for (i = 0; intel_device_match[i].device_id != PCI_MATCH_ANY; i++) {
-		if (devid == intel_device_match[i].device_id)
-			break;
+	table_info = devinfo_table_lookup(devid);
+
+	new_key = malloc(sizeof(*new_key));
+	new_info = malloc(sizeof(*new_info));
+	if (!new_key || !new_info) {
+		free(new_key);
+		free(new_info);
+		fprintf(stderr, "Failed to allocate device info for devid 0x%04x\n", devid);
+		exit(EXIT_FAILURE);
 	}
 
-	cached_devid = devid;
-	cache = (void *)intel_device_match[i].match_data;
+	*new_key = devid;
+	*new_info = *table_info;
 
-out:
-	return cache;
+	pthread_mutex_lock(&devinfo_cache.mutex);
+	if (!devinfo_cache.map)
+		devinfo_cache.map = igt_map_create(igt_map_hash_32,
+						   igt_map_equal_32);
+	/* Another thread may have inserted while we were allocating. */
+	info = devinfo_cache_search(devid);
+	if (!info && devinfo_cache.map &&
+	    igt_map_insert(devinfo_cache.map, new_key, new_info)) {
+		info = new_info;
+		new_key = NULL;
+		new_info = NULL;
+	}
+	pthread_mutex_unlock(&devinfo_cache.mutex);
+
+	free(new_info);
+	free(new_key);
+	if (!info) {
+		fprintf(stderr, "Failed to cache device info for devid 0x%04x\n", devid);
+		exit(EXIT_FAILURE);
+	}
+
+	return info;
 }
 
 static bool char_eq(char c1, char c2)
