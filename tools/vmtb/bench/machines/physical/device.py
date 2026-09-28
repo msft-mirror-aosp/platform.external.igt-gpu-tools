@@ -91,9 +91,6 @@ class Device(DeviceInterface):
         Disable SRIOV drivers autoprobe to allow VFIO driver override for VFs.
         """
         logger.info("[%s] Enable %s VFs", self.pci_info.bdf, num)
-        if self.get_current_vfs() != 0:
-            self.remove_vfs()
-
         self.numvf = num
 
         # Disable driver autoprobe to avoid driver load on VF (override to vfio is required)
@@ -233,36 +230,6 @@ class Device(DeviceInterface):
             self.driver.set_contexts_quota(fn_num, gt_num, resources_config.vfContexts)
             self.driver.set_doorbells_quota(fn_num, gt_num, resources_config.vfDoorbells)
 
-    def clear_provisioning_attributes(self, num_vfs: int) -> None:
-        """Clear provisioning attributes for a requested number of VFs."""
-        # Provisioning config are likely wiped out by (xe) debugfs/restore_auto_provisioning,
-        # but explicit clear shouldn't harm.
-        self.driver.set_bulk_sched_priority(SchedulingPriority.LOW)
-        self.driver.set_bulk_exec_quantum_ms(0)
-        self.driver.set_bulk_preempt_timeout_us(0)
-
-        for gt_num in range(self.get_num_gts()):
-            self.driver.set_pf_policy_reset_engine(gt_num, 0)
-            self.driver.set_doorbells_quota(0, gt_num, 0)
-            # PF contexts cannot be set from sysfs
-
-            for vf_num in range(1, num_vfs + 1):
-                self.driver.set_contexts_quota(vf_num, gt_num, 0)
-                self.driver.set_doorbells_quota(vf_num, gt_num, 0)
-                if not self.is_gt_media_type(gt_num):
-                    self.driver.set_vram_quota(vf_num, 0)
-                    self.driver.set_ggtt_quota(vf_num, gt_num, 0)
-
-    def reset_provisioning(self, num_vfs: int) -> None:
-        """Clear provisioning config for a given number of VFs and restore auto provisioning mode."""
-        logger.info("[%s] Reset %sxVF provisioning configuration", self.pci_info.bdf, num_vfs)
-        self.clear_provisioning_attributes(num_vfs)
-        self.driver.restore_auto_provisioning()
-
-    def cancel_work(self) -> None:
-        """Drop and reset remaining GPU execution at exit."""
-        self.driver.cancel_work()
-
     def get_scheduling_priority(self, fn_num: int) -> SchedulingPriority:
         """Get scheduling priority for a given VF or PF."""
         return self.driver.get_sched_priority(fn_num)
@@ -274,3 +241,9 @@ class Device(DeviceInterface):
     def set_pf_scheduling_priority(self, val: SchedulingPriority) -> None:
         """Set scheduling priority for PF only. High prioritizes PF execution over VFs."""
         self.driver.set_pf_sched_priority(val)
+
+    def reset_sriov_config(self) -> None:
+        """Clear setup - remove enabled VFs and restore auto provisioning mode."""
+        logger.info("[%s] Reset VFs configuration", self.pci_info.bdf)
+        self.remove_vfs()
+        self.driver.restore_auto_provisioning()

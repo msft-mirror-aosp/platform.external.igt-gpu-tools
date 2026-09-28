@@ -146,6 +146,7 @@ class PfDriverInterface(DriverInterface, abc.ABC):
     def restore_auto_provisioning(self) -> None:
         raise NotImplementedError
 
+    # Deprecated - not used on xe
     @abc.abstractmethod
     def cancel_work(self) -> None:
         raise NotImplementedError

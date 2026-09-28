@@ -62,6 +62,7 @@ class XeDriver(PfDriverInterface):
         path = self.debugfs_path / 'sriov' / 'restore_auto_provisioning'
         self.write_debugfs(str(path), str(1))
 
+    # Deprecated - not used on xe
     def cancel_work(self) -> None:
         # Function to cancel all remaing work on GPU (for test cleanup).
         # Forcing reset (debugfs/gtM/force_reset_sync) shouldn't be used to idle GPU.

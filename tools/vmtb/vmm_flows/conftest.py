@@ -16,6 +16,7 @@ from bench.configurators.vgpu_profile_config import (VfProvisioningMode,
                                                      VfSchedulingMode,
                                                      VgpuProfileConfigurator)
 from bench.configurators.vmtb_config import VmtbConfigurator
+from bench.helpers.cleanup import EnvironmentCleaner
 from bench.helpers.log import HOST_DMESG_FILE
 from bench.machines.host import Device, Host
 from bench.machines.virtual.vm import VirtualMachine
@@ -203,10 +204,7 @@ class VmmTestingSetup:
         except Exception as exc:
             logger.error("Error on test teardown (%s)", exc)
         finally:
-            num_vfs = self.get_dut().get_current_vfs()
-            self.get_dut().remove_vfs()
-            self.get_dut().reset_provisioning(num_vfs)
-            self.get_dut().cancel_work()
+            self.get_dut().reset_sriov_config()
 
             if self.testing_config.unload_host_drivers_on_teardown:
                 self.host.unload_drivers()
@@ -256,12 +254,19 @@ def fixture_setup_vms(get_vmtb_config, get_cmdline_config, get_host, request):
     tc: VmmTestingConfig = request.param
     logger.debug(repr(tc))
 
+    # Pre-test cleanup: remove leftovers from crashed/failed/timed-out tests
+    EnvironmentCleaner().cleanup()
+
     host: Host = get_host
     ts: VmmTestingSetup = VmmTestingSetup(get_vmtb_config, get_cmdline_config, host, tc)
 
     device: Device = ts.get_dut()
     num_vfs = ts.testing_config.num_vfs
     num_vms = ts.get_num_vms()
+
+    if device.get_current_vfs() != 0:
+        logger.debug("Test environment is not clean - remove VFs remains")
+        device.reset_sriov_config()
 
     logger.info('[Test setup: %sVF-%sVM]', num_vfs, num_vms)
 
@@ -282,9 +287,6 @@ def fixture_setup_vms(get_vmtb_config, get_cmdline_config, get_host, request):
         # restore original value after vGPU profile applied
         if tc.wa_reduce_vf_lmem and device.has_lmem():
             ts.vgpu_profile.resources.vfLmem = org_vgpu_profile_vfLmem
-
-    else:
-        device.driver.restore_auto_provisioning()
 
     assert num_vfs <= ts.total_vfs, f'Requested number of VFs ({num_vfs}) exceeds total VFs ({ts.total_vfs})'
     device.create_vf(num_vfs)
@@ -320,8 +322,17 @@ def fixture_setup_vms(get_vmtb_config, get_cmdline_config, get_host, request):
 @pytest.fixture(scope='function')
 def create_1host_1vm(get_vmtb_config, get_cmdline_config, get_host):
     num_vfs, num_vms = 1, 1
+
+    # Pre-test cleanup: remove leftovers from crashed/failed/timed-out tests
+    EnvironmentCleaner().cleanup()
+
     ts: VmmTestingSetup = VmmTestingSetup(get_vmtb_config, get_cmdline_config, get_host,
                                           VmmTestingConfig(num_vfs, num_vms))
+
+    device: Device = ts.get_dut()
+    if device.get_current_vfs() != 0:
+        logger.debug("Test environment is not clean - remove VFs remains")
+        device.reset_sriov_config()
 
     logger.info('[Test setup: %sVF-%sVM]', num_vfs, num_vms)
     logger.debug(repr(ts.testing_config))
@@ -336,8 +347,17 @@ def create_1host_1vm(get_vmtb_config, get_cmdline_config, get_host):
 @pytest.fixture(scope='function')
 def create_1host_2vm(get_vmtb_config, get_cmdline_config, get_host):
     num_vfs, num_vms = 2, 2
+
+    # Pre-test cleanup: remove leftovers from crashed/failed/timed-out tests
+    EnvironmentCleaner().cleanup()
+
     ts: VmmTestingSetup = VmmTestingSetup(get_vmtb_config, get_cmdline_config, get_host,
                                           VmmTestingConfig(num_vfs, num_vms))
+
+    device: Device = ts.get_dut()
+    if device.get_current_vfs() != 0:
+        logger.debug("Test environment is not clean - remove VFs remains")
+        device.reset_sriov_config()
 
     logger.info('[Test setup: %sVF-%sVM]', num_vfs, num_vms)
     logger.debug(repr(ts.testing_config))
