@@ -2,6 +2,7 @@
 # Copyright © 2024-2026 Intel Corporation
 
 import base64
+import inspect
 import json
 import logging
 import re
@@ -34,13 +35,39 @@ class VirtualMachine(MachineInterface):
 
         @classmethod
         def timeout_signal(cls, func: typing.Callable) -> typing.Callable:
+            timeout_default: int = DEFAULT_TIMEOUT
+
+            # Check for timeout provided as function signature default
+            func_sig = inspect.signature(func)
+            timeout_param = func_sig.parameters.get('timeout')
+            if timeout_param and isinstance(timeout_param.default, int):
+                timeout_default = timeout_param.default
+
+            # Check timeout parameter positional index
+            # (to avoid repeated introspection on every call)
+            timeout_positional_idx: typing.Optional[int] = None
+            positional_params = [
+                name for name, param in func_sig.parameters.items()
+                if param.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD
+            ]
+            if 'timeout' in positional_params:
+                timeout_positional_idx = positional_params.index('timeout')
+
             def timeout_wrapper(*args: typing.Any, **kwargs: typing.Optional[typing.Any]) -> typing.Any:
-                timeout: int = DEFAULT_TIMEOUT
-                if len(args) > 2:
-                    timeout = args[2] # Argument position in execute_wait(self, pid, timeout)
-                elif kwargs.get('timeout') is not None:
-                    if isinstance(kwargs['timeout'], int):
-                        timeout = kwargs['timeout']
+                timeout: int = timeout_default
+
+                # Resolve timeout in this order:
+                # 1. Explicit keyword value, e.g. vm.func(timeout=60)
+                # 2. Explicit positional value, e.g. vm.func(..., 60)
+                # 3. Default function signature value, e.g. def func(self, timeout=60)
+                # 4. Default global value (DEFAULT_TIMEOUT)
+                timeout_kwarg = kwargs.get('timeout')
+                if isinstance(timeout_kwarg, int):
+                    timeout = timeout_kwarg
+                elif (timeout_positional_idx is not None
+                      and len(args) > timeout_positional_idx
+                      and isinstance(args[timeout_positional_idx], int)):
+                    timeout = args[timeout_positional_idx]
 
                 # mypy: silence the following problem in signal.signal() call:
                 # error: Argument 2 to "signal" has incompatible type "Callable[[Signals, FrameType], Any]";
@@ -89,7 +116,8 @@ class VirtualMachine(MachineInterface):
         self.dmesg_logger = self.__setup_dmesg_logger()
 
     def __str__(self) -> str:
-        return f'VM{self.vmnum}-VF:{self.passed_vf_bdfs[0] if self.passed_vf_bdfs else 'N/A'}'
+        vf_bdf = self.passed_vf_bdfs[0] if self.passed_vf_bdfs else 'N/A'
+        return f'VM{self.vmnum}-VF:{vf_bdf}'
 
     def __del__(self) -> None:
         if not self.is_running():
@@ -250,7 +278,7 @@ class VirtualMachine(MachineInterface):
 
         # Look for a directory name with a PCI BDF (e.g. 0000:1a:00.0)
         for bdf in dev_dir_ls:
-            match = re.match(r'\d{4}(?::[0-9a-z-A-Z]{2}){2}.[0-7]', bdf)
+            match = re.fullmatch(r'[0-9a-fA-F]{4}(?::[0-9a-fA-F]{2}){2}\.[0-7]', bdf)
             if match:
                 device = VirtualDevice(bdf, self)
                 detected_devices.append(device)
@@ -328,7 +356,7 @@ class VirtualMachine(MachineInterface):
         return False
 
     @Decorators.timeout_signal
-    def poweroff(self) -> None:
+    def poweroff(self, timeout: int = 60) -> None:
         """Power off VM via the Guest-Agent guest-shutdown(powerdown) command."""
         logger.debug('Powering off VM%s', self.vmnum)
         assert self.process
@@ -343,7 +371,7 @@ class VirtualMachine(MachineInterface):
             while event != 'SHUTDOWN':
                 event = self.qm.get_qmp_event()
         except exceptions.AlarmTimeoutError:
-            logger.warning('VM%s hanged on poweroff. Initiating forced termination', self.vmnum)
+            logger.warning('VM%s has not responded to power off request - force termination', self.vmnum)
             self.process.terminate()
         finally:
             # Wait and make sure that qemu shutdown
