@@ -1,3 +1,96 @@
+Release 2.6 (2026-09-28)
+------------------------
+
+General changes:
+
+- Removed xe_eudebug from meson. (Dominik Karol Piątkowski)
+
+Devops changes:
+
+- Bumped Debian version to bookworm and Fedora to latest 44 (Kamil Konieczny)
+
+Runner changes:
+
+- New igt_runner option --save-results-after-each-test. (Kamil Konieczny)
+
+Library changes:
+
+- Continued refactor of display library code. (Jani Nikula)
+
+- New platform filtering helpers for skipping tests without modifying test
+  source code. (Vitaly Prosyak)
+
+- Improved setting up the render and compute pipelines for Intel GPUs. (Jan
+  Maslak)
+
+Test changes:
+
+- Improved display testing during suspend. (Michał Grzelak)
+
+- Added subtest for BACKGROUND_COLOR crtc property. (Maarten Lankhorst)
+
+- New test for HDMI TMDS audio bandwidth constraints on Intel GPUs. (Swati
+  Sharma)
+
+- Added subtest for Content Match Refresh Rate (CMRR) across both fixed and
+  video timing display modes. (Naladala Ramanaidu)
+
+- New Xe page offline tests on Intel CRI GPUs. (Tejas Upadhyay)
+
+- Added test coverage for FIXED_MATRIX colorops for CSC. (Harry Wentland)
+
+- Added GT reset submit stress subtest. (Nishit Sharma)
+
+- New tests for SRIOV GGTT accesses by PF and VFs on Xe. (Piotr Piórkowski,
+  Marcin Bernatowicz and Lukasz Laguna).
+
+- Added FIXED_MATRIX colorop subtests. (Swati Sharma)
+
+- Added UHBR-to-HBR fallback subtest for UHBR-capable DP connectors.(Sowmiya S)
+
+- Improved KMS tests on MediaTek. (Jason-JH Lin)
+
+- Added user fence no signal subtest for Intel Xe driver. (Priyanka Dandamudi)
+
+- Improved userptr stress test for amdgpu. (Vitaly Prosyak)
+
+- Improved Xe OA testing. (Umesh Nerlige Ramappa)
+
+- Improved FBC handling in display tests. (Vinod Govindapillai)
+
+- Improved amdgpu reset tests. (Jesse Zhang)
+
+- Added subtest to validate YUV420 with DC3CO. (Jeevan B)
+
+- Ported dmabuf tests to KUnit. (Krzysztof Niemiec)
+
+- Added display feature discovery subtests for HDR, VRR and DSC. (Swati Sharma)
+
+- Added Panthor sparse VM_BIND tests. (Adrián Larumbe)
+
+- Extended BO tests to cover GEM_INFO and cache flags on MSM. (Jitta Vignan)
+
+- New tests for PERFCNTR_CONFIG ioctl on MSM GPUs. (Rob Clark)
+
+- New tests for PowerVR Imagination GPUs. (Donald Robson, Matt Coster,
+  Robert Mazur, Frank Binns and Sarah Walker)
+
+Tools changes:
+
+- Fixed gputop on Panthor. (Deborah Brouwer)
+
+- Renamed AMD tool to igt_hdmi_compliance and improved it to work on Intel GPUs
+  (Swati Sharma)
+
+- Improvements in amd_hdmi_compliance. (Fangzhi Zuo and Mark Broadworth)
+
+- Decreased number of dynamically linked libraries in many tools. (Sebastian
+  Brzezinka)
+
+
+And many other bug fixes, improvements, cleanups and new tests.
+
+
 Release 2.5 (2026-06-30)
 ------------------------
 
