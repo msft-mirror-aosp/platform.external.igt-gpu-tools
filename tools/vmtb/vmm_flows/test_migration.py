@@ -233,7 +233,9 @@ class BaseTestBusyMigration:
         logger.debug("Execute migration in-flight workload on source VM")
         migration_wl = run_source_workload
         time.sleep(IGT_INIT_DELAY)
-        assert migration_wl.is_running(), 'IGT/wsim migration workload is not running on source VM'
+        if not migration_wl.is_running():
+            migration_wl.check_results()
+            assert False, 'IGT/wsim migration workload is not running on source VM'
 
         # Pause VM and save snapshot
         logger.debug("Pause execution and save source VM state")
@@ -267,10 +269,7 @@ class BaseTestBusyMigration:
 
         # Patch the source IgtExecutor/GemWsim instance with the current VM
         migration_wl.target = vm_dst
-        if isinstance(migration_wl, IgtExecutor):
-            # Clear IGT test results cache - remove post-save source VM results
-            # TODO: implement common IgtExecutor/GemWsim results clear interface to avoid instance type check
-            migration_wl.results.clear()
+        migration_wl.clear_results()
 
         # Load the source state snapshot
         logger.debug("Restore source state on the destination VM")
@@ -281,7 +280,10 @@ class BaseTestBusyMigration:
         sync_value = random.randint(1, 0xFFFF)
         assert vm_dst.ga.sync(sync_value)['return'] == sync_value
 
-        assert migration_wl.is_running(), 'IGT/wsim migration workload is not running on destination VM'
+        if not migration_wl.is_running():
+            migration_wl.check_results()
+            assert False, 'IGT/wsim migration workload is not running on destination VM'
+
         time.sleep(IGT_RESTORE_DELAY)
 
         assert migration_wl.check_results(), 'VF migration workload failed on destination VM (post-restore)'
@@ -824,7 +826,9 @@ class BaseTestDoubleMigration:
         logger.debug("Execute throughout-migration workload on source VM")
         migration_wl: GemWsim = run_source_workload
         time.sleep(IGT_INIT_DELAY)
-        assert migration_wl.is_running(), 'IGT/wsim migration workload is not running on source VM'
+        if not migration_wl.is_running():
+            migration_wl.check_results()
+            assert False, 'IGT/wsim migration workload is not running on source VM'
 
         # Pause source VM and save snapshot
         logger.debug("Pause execution and save source VM state (snapshot #1)")
@@ -1113,7 +1117,9 @@ def test_2vm_pause_resume(create_1host_2vm):
 
     # Allow wsim WL to run some time
     time.sleep(IGT_INIT_DELAY)
-    assert gem_wsim_vm0.is_running()
+    if not gem_wsim_vm0.is_running():
+        gem_wsim_vm0.check_results()
+        assert False, 'IGT/wsim workload is not running on VM0'
 
     logger.debug("Submit IGT WL (gem_spin_batch) on VM1")
     igt_vm1 = IgtExecutor(vm1, IgtType.SPIN_BATCH)

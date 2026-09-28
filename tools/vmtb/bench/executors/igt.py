@@ -119,6 +119,7 @@ class IgtExecutor(ExecutorInterface):
     def __init__(self, target: MachineInterface,
                  test: typing.Union[str, IgtType],
                  num_repeats: int = 1,
+                 env_vars: typing.Optional[typing.List[str]] = None,
                  timeout: int = DEFAULT_TIMEOUT) -> None:
         self.igt_config = target.get_igt_config()
 
@@ -126,7 +127,9 @@ class IgtExecutor(ExecutorInterface):
         #ld_library_path = f'LD_LIBRARY_PATH={igt_config.lib_dir}'
         runner = posixpath.join(self.igt_config.tool_dir, 'igt_runner')
         testlist = '/tmp/igt_executor.testlist'
-        command = f'{runner} {self.igt_config.options} ' \
+        # Set test environment variables via igt_runner: --environment KEY=VALUE (or KEY)
+        env_options = ''.join(f'--environment {env} ' for env in env_vars) if env_vars else ''
+        command = f'{runner} {self.igt_config.options} {env_options}' \
                   f'--test-list {testlist} {self.igt_config.test_dir} {self.igt_config.result_dir}'
         self.results: typing.Dict[str, typing.Any] = {}
         self.target: MachineInterface = target
@@ -175,6 +178,11 @@ class IgtExecutor(ExecutorInterface):
 
         logger.error("[%s] IGT failed: %s", self.target, self.proc_result)
         return False
+
+    def clear_results(self) -> None:
+        """Clear IGT results cache."""
+        self.proc_result = ProcessResult()
+        self.results.clear()
 
     def get_results_log(self) -> typing.Dict:
         # Results are cached

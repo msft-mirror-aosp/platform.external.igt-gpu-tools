@@ -8,7 +8,7 @@ from pathlib import Path
 
 from bench import exceptions
 from bench.executors.shell import ShellExecutor
-from bench.machines.machine_interface import DEFAULT_TIMEOUT, MachineInterface
+from bench.machines.machine_interface import (DEFAULT_TIMEOUT, MachineInterface, ProcessResult)
 
 logger = logging.getLogger('GemWsim')
 
@@ -44,26 +44,45 @@ class GemWsim(ShellExecutor):
 
         wsim_path = Path(target.get_igt_config().test_dir) / 'benchmarks' / 'gem_wsim'
         command = f'{wsim_path} -w {workload} -c {num_clients} -r {num_repeats}'
+        self.proc_result = ProcessResult()
 
         super().__init__(target, command, timeout)
 
     def __str__(self) -> str:
         return f'gem_wsim({self.machine_id}:{self.pid})'
 
+    # ShellExecutor overrides
+    def status(self) -> ProcessResult:
+        if self.proc_result.exited:
+            return self.proc_result
+
+        self.proc_result = super().status()
+        return self.proc_result
+
+    def wait(self) -> ProcessResult:
+        if self.proc_result.exited:
+            return self.proc_result
+
+        self.proc_result = super().wait()
+        return self.proc_result
+
+    # IGT/WSIM specific methods
     def is_running(self) -> bool:
         return not self.status().exited
 
     def wait_results(self) -> GemWsimResult:
-        proc_result = self.wait()
-        if proc_result.exit_code == 0:
-            logger.info('%s: %s', self, proc_result.stdout)
+        if not self.proc_result.exited:
+            self.proc_result = self.wait()
+
+        if self.proc_result.exit_code == 0:
+            logger.info('%s: %s', self, self.proc_result.stdout)
             # Try parse output ex.: 19.449s elapsed (102.836 workloads/s)
             pattern = r'(?P<elapsed>\d+(\.\d*)?|\.\d+)s elapsed \((?P<wps>\d+(\.\d*)?|\.\d+) workloads/s\)'
-            match = re.search(pattern, proc_result.stdout, re.MULTILINE)
+            match = re.search(pattern, self.proc_result.stdout, re.MULTILINE)
             if match:
                 return GemWsimResult(float(match.group('elapsed')), float(match.group('wps')))
-        raise exceptions.GemWsimError(f'{self}: exit_code: {proc_result.exit_code}'
-                                      f' stdout: {proc_result.stdout} stderr: {proc_result.stderr}')
+        raise exceptions.GemWsimError(f'{self}: exit_code: {self.proc_result.exit_code}'
+                                      f' stdout: {self.proc_result.stdout} stderr: {self.proc_result.stderr}')
 
     def check_results(self) -> bool:
         """Verify gem_wsim execution results. Return True for workload success, False on fail."""
@@ -77,6 +96,11 @@ class GemWsim(ShellExecutor):
         logger.debug("[%s] WSIM passed in %ss (%s WL/s)",
                       self.target, wl_results.elapsed_sec, wl_results.workloads_per_sec)
         return True
+
+    def clear_results(self) -> None:
+        """Clear gem_wsim results cache."""
+        self.proc_result = ProcessResult()
+        self.machine_id = str(self.target)
 
 
 def gem_wsim_parallel_exec_and_check(vms: typing.List[MachineInterface], workload: str, iterations: int,
