@@ -412,6 +412,23 @@ struct xe_device *xe_device_get(int fd)
 	for (int gt = 0; gt < xe_dev->gt_list->num_gt; gt++)
 		xe_dev->gt_mask |= (1ull << xe_dev->gt_list->gt_list[gt].gt_id);
 
+	/* On GMD_ID platforms, the MAIN GT reports the graphics IP version */
+	for (int gt = 0; gt < xe_dev->gt_list->num_gt; gt++) {
+		const struct drm_xe_gt *gt_info = &xe_dev->gt_list->gt_list[gt];
+
+		if (gt_info->type != DRM_XE_QUERY_GT_TYPE_MAIN || !gt_info->ip_ver_major)
+			continue;
+
+		igt_debug("GMD_ID graphics IP version %u.%02u for dev_id 0x%x\n",
+			  gt_info->ip_ver_major, gt_info->ip_ver_minor, xe_dev->dev_id);
+		igt_assert_f(!xe_dev_update_graphics_ver(xe_dev->dev_id,
+							 gt_info->ip_ver_major,
+							 gt_info->ip_ver_minor),
+			     "Failed to update graphics version for dev_id 0x%x\n",
+			     xe_dev->dev_id);
+		break;
+	}
+
 	/* Tile IDs may be non-consecutive; keep a mask of valid IDs */
 	for (int gt = 0; gt < xe_dev->gt_list->num_gt; gt++)
 		xe_dev->tile_mask |= (1ull << xe_dev->gt_list->gt_list[gt].tile_id);

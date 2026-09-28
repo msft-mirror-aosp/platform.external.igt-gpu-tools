@@ -110,6 +110,7 @@ const struct intel_cmds_info *intel_get_cmds_info(uint16_t devid) __attribute__(
 unsigned intel_gen(uint16_t devid) __attribute__((pure));
 unsigned intel_graphics_ver(uint16_t devid) __attribute__((pure));
 unsigned intel_display_ver(uint16_t devid) __attribute__((pure));
+int xe_dev_update_graphics_ver(uint16_t devid, unsigned int major, unsigned int minor);
 
 extern enum pch_type intel_pch;
 

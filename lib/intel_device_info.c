@@ -5,6 +5,7 @@
 #include "igt_map.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -772,6 +773,48 @@ static const struct intel_device_info *devinfo_table_lookup(uint16_t devid)
 	}
 
 	return (const struct intel_device_info *)intel_device_match[i].match_data;
+}
+
+/**
+ * xe_dev_update_graphics_ver:
+ * @devid: pci device id
+ * @major: new major graphics version
+ * @minor: new minor graphics version
+ *
+ * Updates the cached graphics version of the device with the specified @devid.
+ * On Xe platforms with GMD_ID, the graphics major and minor versions are read
+ * from the hardware and override the values from the static PCI-ID table.
+ *
+ * The cache is keyed by @devid, so all devices sharing a PCI device ID share
+ * one entry; with several such devices reporting different IP versions, the
+ * last update wins.
+ *
+ * Readers of intel_get_device_info() do not take the cache lock. This is fine
+ * because the entry is only written when a device is first probed by
+ * xe_device_get(), and only if the version actually changes.
+ *
+ * Returns:
+ * 0 on success, -ENOENT if there is no cache entry for @devid.
+ */
+int xe_dev_update_graphics_ver(uint16_t devid, unsigned int major, unsigned int minor)
+{
+	struct intel_device_info *info;
+	int ret = 0;
+
+	if (intel_graphics_ver(devid) == IP_VER(major, minor))
+		return 0;
+
+	pthread_mutex_lock(&devinfo_cache.mutex);
+	info = devinfo_cache_search(devid);
+	if (info) {
+		info->graphics_ver = major;
+		info->graphics_rel = minor;
+	} else {
+		ret = -ENOENT;
+	}
+	pthread_mutex_unlock(&devinfo_cache.mutex);
+
+	return ret;
 }
 
 /**
