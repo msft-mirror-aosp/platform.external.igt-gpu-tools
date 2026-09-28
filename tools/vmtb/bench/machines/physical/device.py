@@ -125,10 +125,14 @@ class Device(DeviceInterface):
         return ret
 
     def bind_driver(self) -> None:
-        self.driver.bind(self.pci_info.bdf)
+        self.driver.bind()
 
     def unbind_driver(self) -> None:
-        self.driver.unbind(self.pci_info.bdf)
+        self.driver.unbind()
+
+    def reset(self) -> None:
+        logger.debug("[%s] Trigger reset (PF FLR)", self.pci_info.bdf)
+        self.driver.flr()
 
     def override_vf_driver(self, vf_num: int) -> str:
         """Set VFIO as VF driver."""
@@ -224,8 +228,8 @@ class Device(DeviceInterface):
             self.driver.set_pf_doorbells_spare(gt_num, resources_config.pfDoorbells)
         else:
             if not self.is_gt_media_type(gt_num):
+                self.driver.set_vram_quota(fn_num, resources_config.vfLmem)
                 self.driver.set_ggtt_quota(fn_num, gt_num, resources_config.vfGgtt)
-                self.driver.set_lmem_quota(fn_num, gt_num, resources_config.vfLmem)
             self.driver.set_contexts_quota(fn_num, gt_num, resources_config.vfContexts)
             self.driver.set_doorbells_quota(fn_num, gt_num, resources_config.vfDoorbells)
 
@@ -246,8 +250,8 @@ class Device(DeviceInterface):
                 self.driver.set_contexts_quota(vf_num, gt_num, 0)
                 self.driver.set_doorbells_quota(vf_num, gt_num, 0)
                 if not self.is_gt_media_type(gt_num):
+                    self.driver.set_vram_quota(vf_num, 0)
                     self.driver.set_ggtt_quota(vf_num, gt_num, 0)
-                    self.driver.set_lmem_quota(vf_num, gt_num, 0)
 
     def reset_provisioning(self, num_vfs: int) -> None:
         """Clear provisioning config for a given number of VFs and restore auto provisioning mode."""

@@ -140,7 +140,27 @@ class XeDriver(PfDriverInterface):
         path = self.__helper_create_debugfs_path(0, gt_num, '', 'sample_period_ms')
         self.write_debugfs(path, str(val))
 
-    # VF and PF provisioning parameters
+    # VF provisioning parameters
+    # Sysfs location: [SRIOV sysfs base path]/sriov_admin/[vfN]/profile
+    # @vf_num: VF number (1-based) or 0 for PF
+    def get_vram_quota(self, vf_num: int) -> int:
+        if vf_num == 0:
+            logger.warning("PF vram_quota not available")
+            return 0
+
+        sriov_admin_path = self.__helper_create_sriov_admin_path(vf_num, 'vram_quota')
+        return int(self.read_sysfs(self.sysfs_device_path / sriov_admin_path)) if self.has_lmem() else 0
+
+    def set_vram_quota(self, vf_num: int, val: int) -> None:
+        if vf_num == 0:
+            logger.warning("PF vram_quota not available")
+            return
+
+        sriov_admin_path = self.__helper_create_sriov_admin_path(vf_num, 'vram_quota')
+        if self.has_lmem():
+            self.write_sysfs(self.sysfs_device_path / sriov_admin_path, str(val))
+
+    # VF provisioning parameters (debugfs)
     # Debugfs location: [SRIOV debugfs base path]/gtM/[pf|vfN]
     # @vf_num: VF number (1-based) or 0 for PF
     def get_ggtt_quota(self, vf_num: int, gt_num: int) -> int:
@@ -158,23 +178,6 @@ class XeDriver(PfDriverInterface):
 
         path = self.__helper_create_debugfs_path(vf_num, gt_num, '', 'ggtt_quota')
         self.write_debugfs(path, str(val))
-
-    def get_lmem_quota(self, vf_num: int, gt_num: int) -> int:
-        if vf_num == 0:
-            logger.warning("PF lmem_quota not available")
-            return 0
-
-        path = self.__helper_create_debugfs_path(vf_num, gt_num, '', 'lmem_quota')
-        return int(self.read_debugfs(path)) if self.has_lmem() else 0
-
-    def set_lmem_quota(self, vf_num: int, gt_num: int, val: int) -> None:
-        if vf_num == 0:
-            logger.warning("PF lmem_quota not available")
-            return
-
-        path = self.__helper_create_debugfs_path(vf_num, gt_num, '', 'lmem_quota')
-        if self.has_lmem():
-            self.write_debugfs(path, str(val))
 
     def get_contexts_quota(self, vf_num: int, gt_num: int) -> int:
         if vf_num == 0:

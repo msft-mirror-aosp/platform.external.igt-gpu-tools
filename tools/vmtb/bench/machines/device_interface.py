@@ -10,8 +10,15 @@ class DeviceInterface(abc.ABC):
     """
     @abc.abstractmethod
     def bind_driver(self) -> None:
+        """Bind driver to device."""
         raise NotImplementedError
 
     @abc.abstractmethod
     def unbind_driver(self) -> None:
+        """Unbind driver from device."""
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def reset(self) -> None:
+        """Reset device (trigger FLR)."""
         raise NotImplementedError

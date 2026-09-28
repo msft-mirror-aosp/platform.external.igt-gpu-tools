@@ -68,6 +68,10 @@ class VirtualDevice(DeviceInterface):
                      self.vm.get_drm_driver_name(), self.pci_info.bdf)
         self.driver.unbind()
 
+    def reset(self) -> None:
+        logger.debug("[%s] Trigger reset (VF FLR)", self.pci_info.bdf)
+        self.driver.flr() # VF FLR from guest's sysfs
+
     @property
     def lmem_size(self) -> typing.Optional[int]:
         if self._lmem_size is None:

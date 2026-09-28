@@ -201,19 +201,19 @@ class PfDriverInterface(DriverInterface, abc.ABC):
 
     # VF provisioning
     @abc.abstractmethod
+    def get_vram_quota(self, vf_num: int) -> int:
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def set_vram_quota(self, vf_num: int, val: int) -> None:
+        raise NotImplementedError
+
+    @abc.abstractmethod
     def get_ggtt_quota(self, vf_num: int, gt_num: int) -> int:
         raise NotImplementedError
 
     @abc.abstractmethod
     def set_ggtt_quota(self, vf_num: int, gt_num: int, val: int) -> None:
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def get_lmem_quota(self, vf_num: int, gt_num: int) -> int:
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def set_lmem_quota(self, vf_num: int, gt_num: int, val: int) -> None:
         raise NotImplementedError
 
     @abc.abstractmethod
