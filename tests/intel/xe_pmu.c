@@ -982,7 +982,7 @@ static void test_gt_frequency(int fd, struct drm_xe_engine_class_instance *eci)
 
 static unsigned int enable_and_provision_vfs(int fd)
 {
-	unsigned int num_vfs, vf;
+	unsigned int num_vfs, vf, total_vfs;
 	uint32_t pf_exec_quantum_ms = 64, vf_exec_quantum_ms = 32;
 	uint32_t pf_preempt_timeout_us = 64000, vf_preempt_timeout_us = 32000;
 
@@ -995,11 +995,13 @@ static unsigned int enable_and_provision_vfs(int fd)
 				       NULL);
 	autoprobe = igt_sriov_is_driver_autoprobe_enabled(fd);
 
+	total_vfs = igt_sriov_get_total_vfs(fd);
+	num_vfs = total_vfs > 2 ? 2 : total_vfs;
+
 	/* Enable VF's */
 	igt_sriov_disable_driver_autoprobe(fd);
-	igt_sriov_enable_vfs(fd, 2);
-	num_vfs = igt_sriov_get_enabled_vfs(fd);
-	igt_require(num_vfs == 2);
+	igt_sriov_enable_vfs(fd, num_vfs);
+	igt_require(igt_sriov_get_enabled_vfs(fd) == num_vfs);
 
 	/* Set 32ms for VF execution quantum and 64ms for PF execution quantum */
 	xe_sriov_admin_bulk_set_exec_quantum_ms(fd, vf_exec_quantum_ms);
