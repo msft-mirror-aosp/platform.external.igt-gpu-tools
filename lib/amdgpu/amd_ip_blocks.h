@@ -89,10 +89,10 @@
 * - __ring_start holds DWORD index of the write pointer
 */
 #define amdgpu_sdma_pkt_begin() \
-    uint32_t __num_dw_written = 0, __ring_start = 0; \
-    if (ring_context->wptr_cpu) \
-        *ring_context->wptr_cpu = (*ring_context->wptr_cpu & USERMODE_QUEUE_SIZE_DW_MASK) >> 2; \
-    __ring_start = *ring_context->wptr_cpu;
+	uint32_t __num_dw_written = 0, __ring_start = 0; \
+	if (ring_context->wptr_cpu) \
+		*ring_context->wptr_cpu = (*ring_context->wptr_cpu & USERMODE_QUEUE_SIZE_DW_MASK) >> 2; \
+	__ring_start = *ring_context->wptr_cpu;
 
 /*
 * amdgpu_pkt_add_dw(value)
@@ -119,8 +119,9 @@
 *
 * The wptr remains in DWORD units (unlike SDMA).
 */
-#define amdgpu_pkt_end() \
-	*ring_context->wptr_cpu = (*ring_context->wptr_cpu + __num_dw_written) & USERMODE_QUEUE_SIZE_DW_MASK
+#define amdgpu_pkt_end() do { \
+	*ring_context->wptr_cpu = (*ring_context->wptr_cpu + __num_dw_written) & USERMODE_QUEUE_SIZE_DW_MASK; \
+} while (0)
 
 /*
 * amdgpu_sdma_pkt_end()
@@ -130,8 +131,9 @@
 * - Wrap with mask
 * - Convert back to a byte offset (<< 2) because SDMA uses byte-based wptrs.
 */
-#define amdgpu_sdma_pkt_end() \
-	*ring_context->wptr_cpu = (((*ring_context->wptr_cpu + __num_dw_written ) & USERMODE_QUEUE_SIZE_DW_MASK) << 2)
+#define amdgpu_sdma_pkt_end() do { \
+	*ring_context->wptr_cpu = (((*ring_context->wptr_cpu + __num_dw_written) & USERMODE_QUEUE_SIZE_DW_MASK) << 2); \
+} while (0)
 
 enum amd_ip_block_type {
 	AMD_IP_GFX = 0,
@@ -171,8 +173,7 @@ enum  cmd_error_type {
 
 #define _MAX_NUM_ASIC_ID_EXCLUDE_FILTER 3
 
-struct asic_id_filter
-{
+struct asic_id_filter {
 	int family_id;
 	int chip_id_begin;
 	int chip_id_end;
@@ -208,7 +209,7 @@ enum uq_submission_mode {
 	UQ_SUBMIT_NO_SYNC,       /* Skip sync for error injection */
 };
 
-#define for_each_test(t, T) for(typeof(*T) *t = T; t->name; t++)
+#define for_each_test(t, T) for (typeof(*T) *t = T; t->name; t++)
 
 /* set during execution */
 struct amdgpu_cs_err_codes {

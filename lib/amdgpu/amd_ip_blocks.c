@@ -627,8 +627,8 @@ int wait_for_packet_consumption(struct amdgpu_ring_context *ring_context)
 
 static
 int create_sync_signal(amdgpu_device_handle device,
-                             struct amdgpu_ring_context *ring_context,
-                             uint64_t timeout)
+			struct amdgpu_ring_context *ring_context,
+			uint64_t timeout)
 {
 	uint32_t syncarray[1];
 	struct drm_amdgpu_userq_signal signal_data;
@@ -1188,7 +1188,7 @@ amdgpu_device_ip_block_ex_setup(struct amdgpu_ip_block_version *ip_block_version
 	if (ip_block_version->funcs &&
 		(!ip_block_version->funcs->gfx_program_compute ||
 		 !ip_block_version->funcs->gfx_dispatch_direct ||
-		 !ip_block_version->funcs->gfx_write_confirm )) {
+		 !ip_block_version->funcs->gfx_write_confirm)) {
 		amd_ip_blocks_ex_init(ip_block_version->funcs);
 	}
 	return 0;
@@ -1784,7 +1784,7 @@ is_reset_enable(enum amd_ip_block_type ip_type, uint32_t reset_type, const struc
 		enable = true;
 	else
 		igt_kmsg("***FAILURE mask found 0x%x(%s) requested 0x%x operation %s is not supported LINE %d FILE %s\n",
-				mask, buffer2, reset_type, ip_type == AMD_IP_GFX ? "GFX": ip_type == AMD_IP_COMPUTE ? "COMPUTE" : "SDMA",
+				mask, buffer2, reset_type, ip_type == AMD_IP_GFX ? "GFX" : ip_type == AMD_IP_COMPUTE ? "COMPUTE" : "SDMA",
 						__LINE__, __FILE__);
 
 	pclose(fp);
