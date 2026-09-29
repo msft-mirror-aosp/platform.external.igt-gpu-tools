@@ -291,8 +291,8 @@ run_drm_ioctl_field_cases(int fd, const char *ioctl_name, unsigned long request,
 		errno = 0;
 		ret = drmIoctl(fd, request, buf);
 		igt_assert_f(ret != 0,
-                     "%s unexpectedly succeeded for %s (arg=%p)\n",
-                     ioctl_name, cases[i].case_name, buf);
+			     "%s unexpectedly succeeded for %s (arg=%p)\n",
+			     ioctl_name, cases[i].case_name, buf);
 	}
 
 	free(buf);
@@ -452,8 +452,8 @@ amd_kgd_multi_ioctl_field_fuzzing(int fd, amdgpu_device_handle amdgpu_dev)
 		{
 			int ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_BO_LIST, &base);
 			igt_assert_f(ret != 0,
-                     "%s unexpectedly succeeded for %s (arg=%p)\n",
-                     "DRM_IOCTL_AMDGPU_BO_LIST", "bo_list.bo_number.huge", &base);
+				     "%s unexpectedly succeeded for %s (arg=%p)\n",
+				     "DRM_IOCTL_AMDGPU_BO_LIST", "bo_list.bo_number.huge", &base);
 		}
 
 		/* bo_info_size cannot be zero. */
@@ -466,8 +466,8 @@ amd_kgd_multi_ioctl_field_fuzzing(int fd, amdgpu_device_handle amdgpu_dev)
 		{
 			int ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_BO_LIST, &base);
 			igt_assert_f(ret != 0,
-                     "%s unexpectedly succeeded for %s (arg=%p)\n",
-                     "DRM_IOCTL_AMDGPU_BO_LIST", "bo_list.bo_info_size.zero", &base);
+				     "%s unexpectedly succeeded for %s (arg=%p)\n",
+				     "DRM_IOCTL_AMDGPU_BO_LIST", "bo_list.bo_info_size.zero", &base);
 		}
 
 		/* DESTROY should not require bo_info payload fields for a valid handle. */
@@ -747,8 +747,8 @@ amd_kgd_multi_ioctl_field_fuzzing(int fd, amdgpu_device_handle amdgpu_dev)
 		{
 			int ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_WAIT_FENCES, &base);
 			igt_assert_f(ret != 0,
-                     "%s unexpectedly succeeded for %s (arg=%p)\n",
-                     "DRM_IOCTL_AMDGPU_WAIT_FENCES", "wait_fences.fence_count.zero", &base);
+				     "%s unexpectedly succeeded for %s (arg=%p)\n",
+				     "DRM_IOCTL_AMDGPU_WAIT_FENCES", "wait_fences.fence_count.zero", &base);
 		}
 
 		/* fence_count=0 must be rejected regardless of wait_all selector. */
@@ -758,8 +758,8 @@ amd_kgd_multi_ioctl_field_fuzzing(int fd, amdgpu_device_handle amdgpu_dev)
 		{
 			int ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_WAIT_FENCES, &base);
 			igt_assert_f(ret != 0,
-                     "%s unexpectedly succeeded for %s (arg=%p)\n",
-                     "DRM_IOCTL_AMDGPU_WAIT_FENCES", "wait_fences.fence_count.zero_wait_all", &base);
+				     "%s unexpectedly succeeded for %s (arg=%p)\n",
+				     "DRM_IOCTL_AMDGPU_WAIT_FENCES", "wait_fences.fence_count.zero_wait_all", &base);
 		}
 
 		/* Non-zero fence_count with NULL fences pointer must fault copy-from-user. */
@@ -770,8 +770,8 @@ amd_kgd_multi_ioctl_field_fuzzing(int fd, amdgpu_device_handle amdgpu_dev)
 		{
 			int ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_WAIT_FENCES, &base);
 			igt_assert_f(ret != 0,
-                     "%s unexpectedly succeeded for %s (arg=%p)\n",
-                     "DRM_IOCTL_AMDGPU_WAIT_FENCES", "wait_fences.fences.nonzero_count_null", &base);
+				     "%s unexpectedly succeeded for %s (arg=%p)\n",
+				     "DRM_IOCTL_AMDGPU_WAIT_FENCES", "wait_fences.fences.nonzero_count_null", &base);
 		}
 	}
 
@@ -924,24 +924,24 @@ amd_kgd_multi_ioctl_field_fuzzing(int fd, amdgpu_device_handle amdgpu_dev)
 		errno = 0;
 		ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_USERQ_SIGNAL, &arg);
 		igt_assert_f(ret != 0,
-                     "%s unexpectedly succeeded for %s (arg=%p)\n",
-                     "DRM_IOCTL_AMDGPU_USERQ_SIGNAL", "userq_signal.syncobj_handles.zero_count_nonnull", &arg);
+			     "%s unexpectedly succeeded for %s (arg=%p)\n",
+			     "DRM_IOCTL_AMDGPU_USERQ_SIGNAL", "userq_signal.syncobj_handles.zero_count_nonnull", &arg);
 
 		memset(&arg, 0, sizeof(arg));
 		arg.bo_read_handles = 0x1;
 		errno = 0;
 		ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_USERQ_SIGNAL, &arg);
 		igt_assert_f(ret != 0,
-                     "%s unexpectedly succeeded for %s (arg=%p)\n",
-                     "DRM_IOCTL_AMDGPU_USERQ_SIGNAL", "userq_signal.bo_read_handles.zero_count_nonnull", &arg);
+			     "%s unexpectedly succeeded for %s (arg=%p)\n",
+			     "DRM_IOCTL_AMDGPU_USERQ_SIGNAL", "userq_signal.bo_read_handles.zero_count_nonnull", &arg);
 
 		memset(&arg, 0, sizeof(arg));
 		arg.bo_write_handles = 0x1;
 		errno = 0;
 		ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_USERQ_SIGNAL, &arg);
 		igt_assert_f(ret != 0,
-                     "%s unexpectedly succeeded for %s (arg=%p)\n",
-                     "DRM_IOCTL_AMDGPU_USERQ_SIGNAL", "userq_signal.bo_write_handles.zero_count_nonnull", &arg);
+			     "%s unexpectedly succeeded for %s (arg=%p)\n",
+			     "DRM_IOCTL_AMDGPU_USERQ_SIGNAL", "userq_signal.bo_write_handles.zero_count_nonnull", &arg);
 
 		/* non-zero count + NULL user pointer must fail in copy-from-user path */
 		memset(&arg, 0, sizeof(arg));
@@ -949,24 +949,24 @@ amd_kgd_multi_ioctl_field_fuzzing(int fd, amdgpu_device_handle amdgpu_dev)
 		errno = 0;
 		ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_USERQ_SIGNAL, &arg);
 		igt_assert_f(ret != 0,
-                     "%s unexpectedly succeeded for %s (arg=%p)\n",
-                     "DRM_IOCTL_AMDGPU_USERQ_SIGNAL", "userq_signal.syncobj_handles.nonzero_count_null", &arg);
+			     "%s unexpectedly succeeded for %s (arg=%p)\n",
+			     "DRM_IOCTL_AMDGPU_USERQ_SIGNAL", "userq_signal.syncobj_handles.nonzero_count_null", &arg);
 
 		memset(&arg, 0, sizeof(arg));
 		arg.num_bo_read_handles = 1;
 		errno = 0;
 		ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_USERQ_SIGNAL, &arg);
 		igt_assert_f(ret != 0,
-                     "%s unexpectedly succeeded for %s (arg=%p)\n",
-                     "DRM_IOCTL_AMDGPU_USERQ_SIGNAL", "userq_signal.bo_read_handles.nonzero_count_null", &arg);
+			     "%s unexpectedly succeeded for %s (arg=%p)\n",
+			     "DRM_IOCTL_AMDGPU_USERQ_SIGNAL", "userq_signal.bo_read_handles.nonzero_count_null", &arg);
 
 		memset(&arg, 0, sizeof(arg));
 		arg.num_bo_write_handles = 1;
 		errno = 0;
 		ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_USERQ_SIGNAL, &arg);
 		igt_assert_f(ret != 0,
-                     "%s unexpectedly succeeded for %s (arg=%p)\n",
-                     "DRM_IOCTL_AMDGPU_USERQ_SIGNAL", "userq_signal.bo_write_handles.nonzero_count_null", &arg);
+			     "%s unexpectedly succeeded for %s (arg=%p)\n",
+			     "DRM_IOCTL_AMDGPU_USERQ_SIGNAL", "userq_signal.bo_write_handles.nonzero_count_null", &arg);
 
 		/* queue lookup path: invalid queue_id with no dependency arrays */
 		memset(&arg, 0, sizeof(arg));
@@ -974,8 +974,8 @@ amd_kgd_multi_ioctl_field_fuzzing(int fd, amdgpu_device_handle amdgpu_dev)
 		errno = 0;
 		ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_USERQ_SIGNAL, &arg);
 		igt_assert_f(ret != 0,
-                     "%s unexpectedly succeeded for %s (arg=%p)\n",
-                     "DRM_IOCTL_AMDGPU_USERQ_SIGNAL", "userq_signal.queue_id.invalid_empty", &arg);
+			     "%s unexpectedly succeeded for %s (arg=%p)\n",
+			     "DRM_IOCTL_AMDGPU_USERQ_SIGNAL", "userq_signal.queue_id.invalid_empty", &arg);
 	}
 
 	/*
@@ -997,8 +997,8 @@ amd_kgd_multi_ioctl_field_fuzzing(int fd, amdgpu_device_handle amdgpu_dev)
 		errno = 0;
 		ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_USERQ_WAIT, &arg);
 		igt_assert_f(ret != 0,
-                     "%s unexpectedly succeeded for %s (arg=%p)\n",
-                     "DRM_IOCTL_AMDGPU_USERQ_WAIT", "userq_wait.syncobj_handles.zero_count_nonnull", &arg);
+			     "%s unexpectedly succeeded for %s (arg=%p)\n",
+			     "DRM_IOCTL_AMDGPU_USERQ_WAIT", "userq_wait.syncobj_handles.zero_count_nonnull", &arg);
 
 		/* syncobj_timeline_handles: non-NULL + zero timeline count */
 		memset(&arg, 0, sizeof(arg));
@@ -1006,8 +1006,8 @@ amd_kgd_multi_ioctl_field_fuzzing(int fd, amdgpu_device_handle amdgpu_dev)
 		errno = 0;
 		ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_USERQ_WAIT, &arg);
 		igt_assert_f(ret != 0,
-                     "%s unexpectedly succeeded for %s (arg=%p)\n",
-                     "DRM_IOCTL_AMDGPU_USERQ_WAIT", "userq_wait.timeline_handles.zero_count_nonnull", &arg);
+			     "%s unexpectedly succeeded for %s (arg=%p)\n",
+			     "DRM_IOCTL_AMDGPU_USERQ_WAIT", "userq_wait.timeline_handles.zero_count_nonnull", &arg);
 
 		/* syncobj_timeline_points: non-NULL + zero timeline count */
 		memset(&arg, 0, sizeof(arg));
@@ -1015,8 +1015,8 @@ amd_kgd_multi_ioctl_field_fuzzing(int fd, amdgpu_device_handle amdgpu_dev)
 		errno = 0;
 		ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_USERQ_WAIT, &arg);
 		igt_assert_f(ret != 0,
-                     "%s unexpectedly succeeded for %s (arg=%p)\n",
-                     "DRM_IOCTL_AMDGPU_USERQ_WAIT", "userq_wait.timeline_points.zero_count_nonnull", &arg);
+			     "%s unexpectedly succeeded for %s (arg=%p)\n",
+			     "DRM_IOCTL_AMDGPU_USERQ_WAIT", "userq_wait.timeline_points.zero_count_nonnull", &arg);
 
 		/* bo_read_handles: non-NULL + zero count */
 		memset(&arg, 0, sizeof(arg));
@@ -1024,8 +1024,8 @@ amd_kgd_multi_ioctl_field_fuzzing(int fd, amdgpu_device_handle amdgpu_dev)
 		errno = 0;
 		ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_USERQ_WAIT, &arg);
 		igt_assert_f(ret != 0,
-                     "%s unexpectedly succeeded for %s (arg=%p)\n",
-                     "DRM_IOCTL_AMDGPU_USERQ_WAIT", "userq_wait.bo_read_handles.zero_count_nonnull", &arg);
+			     "%s unexpectedly succeeded for %s (arg=%p)\n",
+			     "DRM_IOCTL_AMDGPU_USERQ_WAIT", "userq_wait.bo_read_handles.zero_count_nonnull", &arg);
 
 		/* bo_write_handles: non-NULL + zero count */
 		memset(&arg, 0, sizeof(arg));
@@ -1033,8 +1033,8 @@ amd_kgd_multi_ioctl_field_fuzzing(int fd, amdgpu_device_handle amdgpu_dev)
 		errno = 0;
 		ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_USERQ_WAIT, &arg);
 		igt_assert_f(ret != 0,
-                     "%s unexpectedly succeeded for %s (arg=%p)\n",
-                     "DRM_IOCTL_AMDGPU_USERQ_WAIT", "userq_wait.bo_write_handles.zero_count_nonnull", &arg);
+			     "%s unexpectedly succeeded for %s (arg=%p)\n",
+			     "DRM_IOCTL_AMDGPU_USERQ_WAIT", "userq_wait.bo_write_handles.zero_count_nonnull", &arg);
 
 		/* out_fences: non-NULL + zero fence count */
 		memset(&arg, 0, sizeof(arg));
@@ -1042,8 +1042,8 @@ amd_kgd_multi_ioctl_field_fuzzing(int fd, amdgpu_device_handle amdgpu_dev)
 		errno = 0;
 		ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_USERQ_WAIT, &arg);
 		igt_assert_f(ret != 0,
-                     "%s unexpectedly succeeded for %s (arg=%p)\n",
-                     "DRM_IOCTL_AMDGPU_USERQ_WAIT", "userq_wait.out_fences.zero_count_nonnull", &arg);
+			     "%s unexpectedly succeeded for %s (arg=%p)\n",
+			     "DRM_IOCTL_AMDGPU_USERQ_WAIT", "userq_wait.out_fences.zero_count_nonnull", &arg);
 
 		/* non-zero count + NULL user pointer must fail in copy-from-user path */
 		memset(&arg, 0, sizeof(arg));
@@ -1051,16 +1051,16 @@ amd_kgd_multi_ioctl_field_fuzzing(int fd, amdgpu_device_handle amdgpu_dev)
 		errno = 0;
 		ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_USERQ_WAIT, &arg);
 		igt_assert_f(ret != 0,
-                     "%s unexpectedly succeeded for %s (arg=%p)\n",
-                     "DRM_IOCTL_AMDGPU_USERQ_WAIT", "userq_wait.syncobj_handles.nonzero_count_null", &arg);
+			     "%s unexpectedly succeeded for %s (arg=%p)\n",
+			     "DRM_IOCTL_AMDGPU_USERQ_WAIT", "userq_wait.syncobj_handles.nonzero_count_null", &arg);
 
 		memset(&arg, 0, sizeof(arg));
 		arg.num_syncobj_timeline_handles = 1;
 		errno = 0;
 		ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_USERQ_WAIT, &arg);
 		igt_assert_f(ret != 0,
-                     "%s unexpectedly succeeded for %s (arg=%p)\n",
-                     "DRM_IOCTL_AMDGPU_USERQ_WAIT", "userq_wait.timeline_handles.nonzero_count_null", &arg);
+			     "%s unexpectedly succeeded for %s (arg=%p)\n",
+			     "DRM_IOCTL_AMDGPU_USERQ_WAIT", "userq_wait.timeline_handles.nonzero_count_null", &arg);
 
 		memset(&arg, 0, sizeof(arg));
 		arg.num_syncobj_timeline_handles = 1;
@@ -1068,24 +1068,24 @@ amd_kgd_multi_ioctl_field_fuzzing(int fd, amdgpu_device_handle amdgpu_dev)
 		errno = 0;
 		ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_USERQ_WAIT, &arg);
 		igt_assert_f(ret != 0,
-                     "%s unexpectedly succeeded for %s (arg=%p)\n",
-                     "DRM_IOCTL_AMDGPU_USERQ_WAIT", "userq_wait.timeline_points.nonzero_count_null", &arg);
+			     "%s unexpectedly succeeded for %s (arg=%p)\n",
+			     "DRM_IOCTL_AMDGPU_USERQ_WAIT", "userq_wait.timeline_points.nonzero_count_null", &arg);
 
 		memset(&arg, 0, sizeof(arg));
 		arg.num_bo_read_handles = 1;
 		errno = 0;
 		ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_USERQ_WAIT, &arg);
 		igt_assert_f(ret != 0,
-                     "%s unexpectedly succeeded for %s (arg=%p)\n",
-                     "DRM_IOCTL_AMDGPU_USERQ_WAIT", "userq_wait.bo_read_handles.nonzero_count_null", &arg);
+			     "%s unexpectedly succeeded for %s (arg=%p)\n",
+			     "DRM_IOCTL_AMDGPU_USERQ_WAIT", "userq_wait.bo_read_handles.nonzero_count_null", &arg);
 
 		memset(&arg, 0, sizeof(arg));
 		arg.num_bo_write_handles = 1;
 		errno = 0;
 		ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_USERQ_WAIT, &arg);
 		igt_assert_f(ret != 0,
-                     "%s unexpectedly succeeded for %s (arg=%p)\n",
-                     "DRM_IOCTL_AMDGPU_USERQ_WAIT", "userq_wait.bo_write_handles.nonzero_count_null", &arg);
+			     "%s unexpectedly succeeded for %s (arg=%p)\n",
+			     "DRM_IOCTL_AMDGPU_USERQ_WAIT", "userq_wait.bo_write_handles.nonzero_count_null", &arg);
 
 		/* wait queue lookup path: invalid waitq_id when out_fences requested */
 		memset(&arg, 0, sizeof(arg));
@@ -1095,8 +1095,8 @@ amd_kgd_multi_ioctl_field_fuzzing(int fd, amdgpu_device_handle amdgpu_dev)
 		errno = 0;
 		ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_USERQ_WAIT, &arg);
 		igt_assert_f(ret != 0,
-                     "%s unexpectedly succeeded for %s (arg=%p)\n",
-                     "DRM_IOCTL_AMDGPU_USERQ_WAIT", "userq_wait.waitq_id.invalid_out_fences", &arg);
+			     "%s unexpectedly succeeded for %s (arg=%p)\n",
+			     "DRM_IOCTL_AMDGPU_USERQ_WAIT", "userq_wait.waitq_id.invalid_out_fences", &arg);
 	}
 	/*
 	 * USERQ_WAIT timeline points are 64-bit in UAPI.  Verify that the
@@ -2209,8 +2209,7 @@ amd_test_try_create_userq(int fd, amdgpu_device_handle amdgpu_dev, uint32_t ip_t
 
 	(void)fd;
 
-	if (!amdgpu_dev || !userq)
-	{
+	if (!amdgpu_dev || !userq) {
 		igt_info("userq create failed: invalid args dev=%p userq=%p ip=%u\n",
 			 amdgpu_dev, userq, ip_type);
 		return false;
