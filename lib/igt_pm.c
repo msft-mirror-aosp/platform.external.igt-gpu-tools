@@ -1555,7 +1555,7 @@ uint32_t igt_get_dc_counter(const char *dc_data)
 {
 	char *e;
 	long ret;
-	char *s = strchr(dc_data, ':');
+	const char *s = strchr(dc_data, ':');
 
 	igt_assert(s);
 	s++;
@@ -1586,9 +1586,9 @@ bool igt_support_dc6(int debugfs_fd)
  *
  * Searches for DC6 counter information in the DMC info buffer.
  */
-char *igt_get_dc6_counter(const char *buf)
+const char *igt_get_dc6_counter(const char *buf)
 {
-	char *str;
+	const char *str;
 
 	str = strstr(buf, "DC5 -> DC6 count");
 	if (!str)
@@ -1607,7 +1607,7 @@ char *igt_get_dc6_counter(const char *buf)
 uint32_t igt_read_dc_counter(int debugfs_fd, int dc_flag)
 {
 	char buf[4096];
-	char *str;
+	const char *str;
 
 	igt_debugfs_simple_read(debugfs_fd, "i915_dmc_info", buf, sizeof(buf));
 
@@ -1669,7 +1669,7 @@ const char *igt_dc_state_name(int dc_flag)
  */
 void igt_require_dc_counter(int debugfs_fd, int dc_flag)
 {
-	char *str;
+	const char *str;
 	char buf[4096];
 
 	igt_debugfs_simple_read(debugfs_fd, "i915_dmc_info",

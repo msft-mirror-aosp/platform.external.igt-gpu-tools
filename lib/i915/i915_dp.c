@@ -49,7 +49,7 @@
  */
 static int i915_dp_parse_marked_value(const char *buf, char marked_char, int *result)
 {
-	char *marked_ptr, *val_ptr;
+	const char *marked_ptr, *val_ptr;
 
 	/*
 	 * Look for the marked character

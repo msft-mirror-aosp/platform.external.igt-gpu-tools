@@ -1188,7 +1188,7 @@ static int common_init(int *argc, char **argv,
 
 	/* Check for conflicts and calculate space for passed-in extra long options */
 	for  (extra_opt_count = 0; extra_long_opts && extra_long_opts[extra_opt_count].name; extra_opt_count++) {
-		char *conflicting_char;
+		const char *conflicting_char;
 
 		/* check for conflicts with standard long option values */
 		for (i = 0; long_options[i].name; i++) {

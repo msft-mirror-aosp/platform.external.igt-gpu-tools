@@ -114,7 +114,8 @@ static int parse_region(const char *name, struct drm_client_fdinfo *info,
 			const char **region_map, unsigned int region_entries,
 			uint64_t *val)
 {
-	char *p;
+	const char *p;
+	char *end;
 	ssize_t name_len;
 	int found = -1;
 	unsigned int i;
@@ -160,8 +161,8 @@ static int parse_region(const char *name, struct drm_client_fdinfo *info,
 		goto out;
 
 	p++;
-	*val = strtoull(p, &p, 10);
-	p = (char *)ignore_space(p);
+	*val = strtoull(p, &end, 10);
+	p = ignore_space(end);
 	if (!*p)
 		goto out;
 

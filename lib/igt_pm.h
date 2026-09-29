@@ -108,7 +108,7 @@ bool igt_has_pci_pm_capability(struct pci_device *pci_dev);
 void igt_pm_dpms_toggle(igt_output_t *output);
 uint32_t igt_get_dc_counter(const char *dc_data);
 bool igt_support_dc6(int debugfs_fd);
-char *igt_get_dc6_counter(const char *buf);
+const char *igt_get_dc6_counter(const char *buf);
 uint32_t igt_read_dc_counter(int debugfs_fd, int dc_flag);
 bool igt_dc_state_wait_entry(int debugfs_fd, int dc_flag, int prev_dc_count);
 const char *igt_dc_state_name(int dc_flag);
