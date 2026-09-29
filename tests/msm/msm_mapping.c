@@ -102,7 +102,7 @@ wait_for_stall_on_fault(int drm_fd)
  * Helper to find named buffer address
  */
 
-static const char *
+static char *
 get_line(char **buf)
 {
 	char *ret, *eol;
@@ -123,7 +123,7 @@ get_line(char **buf)
 }
 
 static bool
-endswith(const char *str, const char *end)
+endswith(char *str, const char *end)
 {
 	char *p = strstr(str, end);
 
@@ -166,7 +166,7 @@ get_bo_addr(int drm_fd, const char *name)
 	 */
 
 	while (*p) {
-		const char *line = get_line(&p);
+		char *line = get_line(&p);
 
 		if (endswith(line, name)) {
 			uint64_t addr, dummy;
