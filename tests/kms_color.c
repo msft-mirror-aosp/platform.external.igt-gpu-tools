@@ -994,6 +994,8 @@ run_background_color_tests_for_crtc(data_t *data, igt_crtc_t *crtc, igt_output_t
 
 	mode = igt_output_get_mode(output);
 
+	igt_require(crtc_output_combo_valid(data, crtc));
+
 	igt_create_fb(data->drm_fd, mode->hdisplay, mode->vdisplay,
 		      DRM_FORMAT_XRGB8888, DRM_FORMAT_MOD_LINEAR, &fb);
 
