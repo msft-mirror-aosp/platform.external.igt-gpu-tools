@@ -36,6 +36,7 @@
 #include <sys/ioctl.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/mount.h>
 #include <signal.h>
 #include <pciaccess.h>
 #include <getopt.h>
@@ -704,14 +705,60 @@ void igt_kmsg(const char *format, ...)
 	fclose(file);
 }
 
+static void cleanup_fclose(FILE **f)
+{
+	if (*f)
+		fclose(*f);
+}
+
+static const char *__igt_tracefs_mount(void)
+{
+	FILE *f __attribute__((__cleanup__(cleanup_fclose))) = NULL;
+	char line[1024];
+
+	f = fopen("/proc/mounts", "r");
+	if (!f)
+		return NULL;
+
+	while (fgets(line, sizeof(line), f)) {
+		char *dev, *dir, *save;
+
+		dev = strtok_r(line, " ", &save);
+		dir = strtok_r(NULL, " ", &save);
+
+		if (strcmp(dev, "tracefs") == 0)
+			return strdup(dir);
+	}
+
+	/* Doesn't appear to be mounted yet; try to mount it manually */
+	if (mount("tracefs", "/sys/kernel/tracing", "tracefs", 0, 0) == 0)
+		return "/sys/kernel/tracing";
+
+	return NULL;
+}
+
+static const char *igt_tracefs_mount(void)
+{
+	static const char *path;
+
+	if (!path)
+		path = __igt_tracefs_mount();
+
+	return path;
+}
+
 void igt_trace(const char *format, ...)
 {
 	char path[128];
+	const char *tracefs;
 	va_list ap;
 	FILE *file;
 
-	snprintf(path, sizeof(path), "%s/tracing/trace_marker",
-		 igt_debugfs_mount());
+	tracefs = igt_tracefs_mount();
+	if (!tracefs)
+		return;
+
+	snprintf(path, sizeof(path), "%s/trace_marker", tracefs);
 
 	file = fopen(path, "w");
 	if (file == NULL)
