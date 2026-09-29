@@ -228,6 +228,7 @@ static bool ignore_line(const char *line)
 
 static char *include_file(const char *line, const char *source)
 {
+	const char *source_dir;
 	char *filename, *p;
 
 	line = skip_space(line);
@@ -239,9 +240,9 @@ static char *include_file(const char *line, const char *source)
 	if (!filename)
 		return NULL;
 
-	p = strrchr(source, '/');
-	if (p && *line != '/') {
-		int len = p - source + 1;
+	source_dir = strrchr(source, '/');
+	if (source_dir && *line != '/') {
+		int len = source_dir - source + 1;
 
 		memcpy(filename, source, len);
 		strcpy(filename + len, line);
