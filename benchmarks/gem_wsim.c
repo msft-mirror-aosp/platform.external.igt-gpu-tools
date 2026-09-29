@@ -587,7 +587,7 @@ static intel_engine_t str_to_engine(const char *str)
 	}
 
 	if (str[pos]) {
-		char *s = strchr(&str[pos], '-');
+		const char *s = strchr(&str[pos], '-');
 		char *endptr = NULL;
 		long id;
 
