@@ -120,7 +120,7 @@ dbg_get_status_section(const char *title, char **first, char **last)
 static bool
 dbg_has_line(const char *first, const char *last, const char *name)
 {
-	char *pos = strstr(first, name);
+	const char *pos = strstr(first, name);
 
 	return pos != NULL && pos < last;
 }
@@ -128,7 +128,7 @@ dbg_has_line(const char *first, const char *last, const char *name)
 static int
 dbg_get_int(const char *first, const char *last, const char *name)
 {
-	char *pos;
+	const char *pos;
 
 	pos = strstr(first, name);
 	igt_assert(pos != NULL);
@@ -137,13 +137,13 @@ dbg_get_int(const char *first, const char *last, const char *name)
 	pos += 2;
 	igt_assert(pos != last);
 
-	return strtol(pos, &pos, 10);
+	return strtol(pos, NULL, 10);
 }
 
 static bool
 dbg_get_bool(const char *first, const char *last, const char *name)
 {
-	char *pos;
+	const char *pos;
 
 	pos = strstr(first, name);
 	igt_assert(pos != NULL);
