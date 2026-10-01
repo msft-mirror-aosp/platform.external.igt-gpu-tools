@@ -72,9 +72,7 @@ static int check_condition_with_timeout(int drm_fd, igt_output_t *output,
 static void assert_link_status_good(data_t *data, bool mst)
 {
 	igt_output_t *outputs[IGT_MAX_PIPES];
-	uint32_t link_status_prop_id;
 	uint64_t link_status_value;
-	drmModePropertyPtr link_status_prop;
 	int count = 0;
 	int i;
 
@@ -83,30 +81,52 @@ static void assert_link_status_good(data_t *data, bool mst)
 								 &data->display, data->output,
 								 outputs, &count) == 0,
 								 "Unable to find MST outputs\n");
-
-		for (i = 0; i < count; i++) {
-			kmstest_get_property(data->drm_fd,
-					     outputs[i]->config.connector->connector_id,
-					     DRM_MODE_OBJECT_CONNECTOR,
-					     "link-status",
-					     &link_status_prop_id,
-					     &link_status_value,
-					     &link_status_prop);
-
-			igt_assert_eq(link_status_value,
-				      DRM_MODE_LINK_STATUS_GOOD);
-		}
 	} else {
-		kmstest_get_property(data->drm_fd,
-				     data->output->config.connector->connector_id,
-				     DRM_MODE_OBJECT_CONNECTOR,
-				     "link-status",
-				     &link_status_prop_id,
-				     &link_status_value,
-				     &link_status_prop);
+		outputs[0] = data->output;
+		count = 1;
+	}
+
+	for (i = 0; i < count; i++) {
+		igt_assert_f(kmstest_get_property(data->drm_fd,
+						  outputs[i]->config.connector->connector_id,
+						  DRM_MODE_OBJECT_CONNECTOR,
+						  "link-status", NULL,
+						  &link_status_value, NULL),
+			     "No link-status property on %s\n",
+			     igt_output_name(outputs[i]));
 
 		igt_assert_eq(link_status_value, DRM_MODE_LINK_STATUS_GOOD);
 	}
+}
+
+/*
+ * train_link_config - Force one link configuration, re-establish the link and
+ * check that the configuration took effect.
+ */
+static void train_link_config(data_t *data, bool mst,
+			      const struct i915_dp_link_config *config)
+{
+	int current_link_rate;
+	char rate_str[32];
+	char lane_str[32];
+
+	snprintf(rate_str, sizeof(rate_str), "%d", config->link_rate);
+	snprintf(lane_str, sizeof(lane_str), "%d", config->lane_count);
+	igt_info("Training %s at %d lanes, rate %d\n",
+		 igt_output_name(data->output), config->lane_count,
+		 config->link_rate);
+
+	i915_dp_set_link_params(data->drm_fd, data->output, rate_str, lane_str);
+	i915_dp_force_link_retrain(data->drm_fd, data->output, RETRAIN_COUNT);
+	igt_assert_eq(check_condition_with_timeout(data->drm_fd, data->output,
+						   i915_dp_get_pending_retrain,
+						   1.0, 20.0), 0);
+	assert_link_status_good(data, mst);
+
+	current_link_rate = i915_dp_get_current_link_rate(data->drm_fd, data->output);
+	igt_info("Current link rate is %d\n", current_link_rate);
+	igt_assert_f(current_link_rate == config->link_rate,
+		     "Link training did not succeed at the forced link rate.\n");
 }
 
 /*
@@ -188,12 +208,8 @@ static void do_modeset(data_t *data, bool mst)
  */
 static bool run_link_rate_test(data_t *data, bool mst, bool uhbr)
 {
-	int max_link_rate;
-	int max_lane_count;
-	int current_link_rate;
+	struct i915_dp_link_config config;
 	bool is_uhbr_output;
-	char rate_str[32];
-	char lane_str[32];
 
 	igt_display_reset(&data->display);
 	i915_dp_reset_link_params(data->drm_fd, data->output);
@@ -208,12 +224,12 @@ static bool run_link_rate_test(data_t *data, bool mst, bool uhbr)
 
 	/* FIXME : Driver may lie max link rate or max lane count */
 	/* Read max_link_rate and max_lane_count */
-	max_link_rate = i915_dp_get_max_link_rate(data->drm_fd, data->output);
-	max_lane_count = i915_dp_get_max_lane_count(data->drm_fd, data->output);
+	config.link_rate = i915_dp_get_max_link_rate(data->drm_fd, data->output);
+	config.lane_count = i915_dp_get_max_lane_count(data->drm_fd, data->output);
 
 	/* Check sink supports uhbr or not */
-	is_uhbr_output = i915_dp_is_uhbr_rate(max_link_rate);
-	if ((uhbr && !is_uhbr_output) || (!uhbr && is_uhbr_output)) {
+	is_uhbr_output = i915_dp_is_uhbr_rate(config.link_rate);
+	if (uhbr != is_uhbr_output) {
 		igt_info("Test expects %s, but output %s is %s.\n",
 			 uhbr ? "UHBR" : "NON-UHBR",
 			 data->output->name,
@@ -222,26 +238,9 @@ static bool run_link_rate_test(data_t *data, bool mst, bool uhbr)
 		return false;
 	}
 
-	snprintf(rate_str, sizeof(rate_str), "%d", max_link_rate);
-	snprintf(lane_str, sizeof(lane_str), "%d", max_lane_count);
-	igt_info("Max link rate for %s is %s, lane count = %d\n",
-		 data->output->name, rate_str, max_lane_count);
-
 	/* Force retrain at max link params */
-	i915_dp_set_link_params(data->drm_fd, data->output, rate_str, lane_str);
-	i915_dp_force_link_retrain(data->drm_fd, data->output, RETRAIN_COUNT);
-	igt_assert_eq(check_condition_with_timeout(data->drm_fd, data->output,
-						   i915_dp_get_pending_retrain,
-						   1.0, 20.0), 0);
-	assert_link_status_good(data, mst);
+	train_link_config(data, mst, &config);
 
-	current_link_rate = i915_dp_get_current_link_rate(data->drm_fd, data->output);
-	igt_info("Current link rate is %d\n", current_link_rate);
-	igt_assert_f(current_link_rate == max_link_rate,
-		     "Link training did not succeed at max link rate.\n");
-	igt_assert_f(i915_dp_is_uhbr_rate(current_link_rate) == is_uhbr_output,
-		     is_uhbr_output ? "Link training didn't happen at uhbr rates" :
-		     "Link training didn't happen at non-uhbr rates");
 	igt_info("----------------------------------------------------\n");
 	return true;
 }
