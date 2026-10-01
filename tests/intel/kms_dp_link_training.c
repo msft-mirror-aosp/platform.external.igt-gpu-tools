@@ -55,8 +55,11 @@
  *              link.
  */
 
+#include <string.h>
+
 #include "i915/i915_dp.h"
 #include "igt.h"
+#include "igt_dp.h"
 #include "igt_kms.h"
 #include "intel/kms_joiner_helper.h"
 #include "intel/kms_mst_helper.h"
@@ -80,6 +83,7 @@ typedef struct {
 	uint32_t devid;
 	igt_display_t display;
 	igt_output_t *output;
+	int aux_fd;
 } data_t;
 
 /*
@@ -326,6 +330,79 @@ static void assert_link_retrain_not_disabled(data_t *data,
 }
 
 /*
+ * open_link_aux - Open the AUX device at the near end of the link.
+ *
+ * An MST stream connector's AUX reaches the far sink over sideband rather than
+ * the link partner, which is the end of the link being trained, so for MST it
+ * is the topology's root connector that has to be asked. The root reads
+ * disconnected while MST is active, so it is found by id rather than by
+ * walking the connected outputs.
+ */
+static int open_link_aux(data_t *data, bool mst)
+{
+	igt_output_t *output = data->output;
+
+	if (mst) {
+		int root_id = igt_get_dp_mst_connector_id(data->output);
+		int i;
+
+		output = NULL;
+
+		for (i = 0; i < data->display.n_outputs; i++) {
+			igt_output_t *root = &data->display.outputs[i];
+
+			if (root->config.connector &&
+			    root->config.connector->connector_id == root_id) {
+				output = root;
+				break;
+			}
+		}
+
+		if (!output)
+			return -ENOENT;
+	}
+
+	return igt_dp_aux_open(data->drm_fd, output);
+}
+
+/*
+ * assert_sink_agrees - Ask the sink whether the link is really up.
+ *
+ * Everything else the test checks is read back from the driver. This is the
+ * only check that the sink agrees, and the only direct evidence of which
+ * channel coding reached the wire.
+ *
+ * A DPCD the test could open but cannot read leaves the case unverified, so
+ * skip rather than report it as trained. A missing AUX device does not: AUX is
+ * out of band and answers whether or not the link trained, so a read that
+ * fails once the device is open is a result in itself, while
+ * CONFIG_DRM_DISPLAY_DP_AUX_CHARDEV not being enabled - it is not by default -
+ * says nothing about the link and would take every driver side check down with
+ * it.
+ */
+static void assert_sink_agrees(data_t *data,
+			       const struct i915_dp_link_config *config)
+{
+	bool uhbr = i915_dp_is_uhbr_rate(config->link_rate);
+	int ret;
+
+	if (data->aux_fd < 0)
+		return;
+
+	ret = igt_dp_channel_coding_ok(data->aux_fd, uhbr);
+	igt_skip_on_f(ret < 0, "Unable to read the sink's channel coding: %s\n",
+		      strerror(-ret));
+	igt_assert_f(ret, "Sink is not set to %s at rate %d\n",
+		     uhbr ? "128b/132b" : "8b/10b", config->link_rate);
+
+	ret = igt_dp_link_status_ok(data->aux_fd, config->lane_count, uhbr);
+	igt_skip_on_f(ret < 0, "Unable to read the sink's link status: %s\n",
+		      strerror(-ret));
+	igt_assert_f(ret, "Sink does not report %d lanes locked at rate %d\n",
+		     config->lane_count, config->link_rate);
+}
+
+/*
  * train_link_config - Force one link configuration, re-establish the link and
  * check that the configuration took effect and survived training.
  */
@@ -368,6 +445,8 @@ static void train_link_config(data_t *data, bool mst,
 	 * count resets the recovery state, which would mask the failure.
 	 */
 	assert_link_retrain_not_disabled(data, config);
+
+	assert_sink_agrees(data, config);
 }
 
 /*
@@ -569,6 +648,11 @@ static bool run_link_rate_test(data_t *data, bool mst, bool uhbr)
 							       data->output),
 		      "Kernel has no intel_dp_allowed_link_configs debugfs\n");
 
+	data->aux_fd = open_link_aux(data, mst);
+	if (data->aux_fd < 0)
+		igt_info("%s: no AUX device (%s), sink side checks are skipped\n",
+			 igt_output_name(data->output), strerror(-data->aux_fd));
+
 	/*
 	 * Enumerate with the forced parameters reset, or the set being read is
 	 * the forced one rather than the one the driver would pick from.
@@ -605,6 +689,11 @@ static bool run_link_rate_test(data_t *data, bool mst, bool uhbr)
 	if (!num_dynamics)
 		igt_info("Output %s allows no %sUHBR link config\n",
 			 igt_output_name(data->output), uhbr ? "" : "non-");
+
+	if (data->aux_fd >= 0) {
+		close(data->aux_fd);
+		data->aux_fd = -1;
+	}
 
 	igt_info("----------------------------------------------------\n");
 	return num_dynamics > 0;
@@ -721,7 +810,7 @@ IGT_TEST_DESCRIPTION("Test to validate link training on SST/MST with "
 
 int igt_main()
 {
-	data_t data = {};
+	data_t data = { .aux_fd = -1 };
 
 	igt_fixture() {
 		data.drm_fd = drm_open_driver_master(DRIVER_INTEL | DRIVER_XE);
