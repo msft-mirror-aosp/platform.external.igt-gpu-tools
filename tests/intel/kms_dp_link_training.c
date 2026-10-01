@@ -39,12 +39,26 @@
  */
 #define LINK_RECOVERY_TIMEOUT	5.0
 
+#define MAX_LINKS		16
+
 typedef struct {
 	int drm_fd;
 	uint32_t devid;
 	igt_display_t display;
 	igt_output_t *output;
 } data_t;
+
+/*
+ * struct dp_link - One trainable DP link.
+ *
+ * @output is the output the link is driven through, which for MST is the first
+ * of the topology's streams. The classification is discovered, never chosen.
+ */
+struct dp_link {
+	igt_output_t *output;
+	bool mst;
+	enum i915_dp_tc_mode tc_mode;
+};
 
 /*
  * check_condition_with_timeout - Polls check_fn until it returns 0
@@ -535,42 +549,95 @@ static bool run_link_rate_test(data_t *data, bool mst, bool uhbr)
  * early, then calls run_link_rate_test(). Returns true if it ran on at
  * least one matching output.
  */
+/*
+ * discover_links - Collapse the connected DP outputs into links.
+ *
+ * One link is one trainable DP link, so a whole MST topology becomes a single
+ * entry, represented by the first of its streams. Forcing link parameters on
+ * one stream affects every stream in the topology, so training a topology once
+ * per stream would train the same link repeatedly.
+ */
+static int discover_links(data_t *data, struct dp_link *links, int max_links)
+{
+	igt_output_t *output;
+	int num_links = 0;
+	int i;
+
+	for_each_connected_output(&data->display, output) {
+		bool mst, seen = false;
+
+		if (output->config.connector->connector_type !=
+		    DRM_MODE_CONNECTOR_DisplayPort) {
+			igt_info("Skipping non-DisplayPort output %s\n",
+				 igt_output_name(output));
+			continue;
+		}
+
+		mst = igt_check_output_is_dp_mst(output);
+
+		if (mst) {
+			int root = igt_get_dp_mst_connector_id(output);
+
+			for (i = 0; i < num_links; i++)
+				if (links[i].mst &&
+				    igt_get_dp_mst_connector_id(links[i].output) == root) {
+					seen = true;
+					break;
+				}
+		}
+
+		if (seen) {
+			igt_info("Skipping %s: same MST topology as %s\n",
+				 igt_output_name(output),
+				 igt_output_name(links[i].output));
+			continue;
+		}
+
+		if (num_links == max_links) {
+			igt_info("Skipping %s: more than %d DP links connected\n",
+				 igt_output_name(output), max_links);
+			continue;
+		}
+
+		links[num_links].output = output;
+		links[num_links].mst = mst;
+		links[num_links].tc_mode = i915_dp_get_tc_mode(data->drm_fd,
+							       output, NULL, NULL);
+		num_links++;
+	}
+
+	return num_links;
+}
+
 static bool test_link_rate(data_t *data, bool mst, bool uhbr)
 {
-	bool ran_any_output = false, is_mst = false;
-	igt_output_t *tmp_output;
+	struct dp_link links[MAX_LINKS];
+	bool ran_any_link = false;
+	int num_links;
+	int i;
 
 	igt_skip_on_f(!is_intel_device(data->drm_fd),
 		      "Test supported only on Intel platforms.\n");
 
-	for_each_connected_output(&data->display, tmp_output) {
-		if (tmp_output->config.connector->connector_type !=
-		    DRM_MODE_CONNECTOR_DisplayPort) {
-			igt_info("Skipping non-DisplayPort output %s\n",
-					tmp_output->name);
+	num_links = discover_links(data, links, ARRAY_SIZE(links));
+
+	for (i = 0; i < num_links; i++) {
+		if (links[i].mst != mst) {
+			igt_info("Skipping %s: %s requested but it's %s.\n",
+				 igt_output_name(links[i].output),
+				 mst ? "MST" : "SST",
+				 links[i].mst ? "MST" : "SST");
 			igt_info("----------------------------------------------------\n");
 			continue;
 		}
 
-		/* Early skip if MST vs. SST does not match. */
-		is_mst = igt_check_output_is_dp_mst(tmp_output);
-		if (mst && !is_mst) {
-			igt_info("Skipping %s: MST requested but it's SST.\n",
-					tmp_output->name);
-			igt_info("----------------------------------------------------\n");
-			continue;
-		} else if (!mst && is_mst) {
-			igt_info("Skipping %s: SST requested but it's MST.\n",
-					tmp_output->name);
-			igt_info("----------------------------------------------------\n");
-			continue;
-		}
-		data->output = tmp_output;
+		data->output = links[i].output;
 		igt_info("Running link training test for %s\n",
-			 data->output->name);
-		ran_any_output = ran_any_output | run_link_rate_test(data, mst, uhbr);
+			 igt_output_name(data->output));
+		ran_any_link |= run_link_rate_test(data, mst, uhbr);
 	}
-	return ran_any_output;
+
+	return ran_any_link;
 }
 
 IGT_TEST_DESCRIPTION("Test to validate link training on SST/MST with "
