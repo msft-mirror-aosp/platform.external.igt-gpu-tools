@@ -281,3 +281,106 @@ int igt_dp_dpcd_read_byte(int aux_fd, unsigned int offset, uint8_t *val)
 
 	return ret == 1 ? 0 : -EIO;
 }
+
+/*
+ * DPCD registers and bits used by the sink side link checks, mirroring the
+ * kernel's include/drm/display/drm_dp.h.
+ */
+#define DPCD_MAIN_LINK_CHANNEL_CODING_SET	0x108
+#define  DPCD_SET_ANSI_8B10B			(1 << 0)
+#define  DPCD_SET_ANSI_128B132B			(1 << 1)
+
+#define DPCD_LANE0_1_STATUS			0x202
+#define DPCD_LINK_STATUS_SIZE			6
+#define  DPCD_LANE_CR_DONE			(1 << 0)
+#define  DPCD_LANE_CHANNEL_EQ_DONE		(1 << 1)
+#define  DPCD_LANE_SYMBOL_LOCKED		(1 << 2)
+
+/* DP_LANE_ALIGN_STATUS_UPDATED, the third byte of the status block. */
+#define  DPCD_INTERLANE_ALIGN_DONE		(1 << 0)
+#define  DPCD_128B132B_LT_FAILED		(1 << 4)
+
+static uint8_t dpcd_lane_status(const uint8_t link_status[DPCD_LINK_STATUS_SIZE],
+				int lane)
+{
+	return (link_status[lane / 2] >> (4 * (lane % 2))) & 0xf;
+}
+
+/**
+ * igt_dp_channel_coding_ok: Check the channel coding the sink was told to use
+ * @aux_fd:	AUX channel device file descriptor from igt_dp_aux_open()
+ * @uhbr:	Whether 128b/132b is expected
+ *
+ * Read MAIN_LINK_CHANNEL_CODING_SET and check that it selects the encoding the
+ * link rate implies. This is the only direct evidence that the coding a UHBR
+ * rate implies is the coding that reached the wire.
+ *
+ * Returns:
+ * 1 when the expected coding is selected, 0 when it is not, or a negative
+ * error code when the DPCD could not be read.
+ */
+int igt_dp_channel_coding_ok(int aux_fd, bool uhbr)
+{
+	uint8_t coding;
+	int ret;
+
+	ret = igt_dp_dpcd_read_byte(aux_fd, DPCD_MAIN_LINK_CHANNEL_CODING_SET,
+				    &coding);
+	if (ret < 0)
+		return ret;
+
+	return !!(coding & (uhbr ? DPCD_SET_ANSI_128B132B : DPCD_SET_ANSI_8B10B));
+}
+
+/**
+ * igt_dp_link_status_ok: Check the sink considers the link trained
+ * @aux_fd:	AUX channel device file descriptor from igt_dp_aux_open()
+ * @lane_count:	Number of lanes in use
+ * @uhbr:	Whether the link runs at a UHBR rate, i.e. uses 128b/132b
+ *
+ * Read the link status block at DP_LANE0_1_STATUS and check that every lane in
+ * use is locked and the lanes are aligned.
+ *
+ * 128b/132b reports this differently from 8b/10b: there is no clock recovery
+ * bit, and a training failure has its own bit in
+ * DP_LANE_ALIGN_STATUS_UPDATED. Mirrors drm_dp_channel_eq_ok() and the
+ * drm_dp_128b132b_* predicates.
+ *
+ * Returns:
+ * 1 when the sink considers the link trained, 0 when it does not, or a
+ * negative error code when the DPCD could not be read.
+ */
+int igt_dp_link_status_ok(int aux_fd, int lane_count, bool uhbr)
+{
+	uint8_t link_status[DPCD_LINK_STATUS_SIZE];
+	uint8_t lane_mask;
+	uint8_t align;
+	int ret;
+	int lane;
+
+	ret = igt_dp_dpcd_read(aux_fd, DPCD_LANE0_1_STATUS, link_status,
+			       sizeof(link_status));
+	if (ret < 0)
+		return ret;
+	if (ret != sizeof(link_status))
+		return -EIO;
+
+	align = link_status[2];
+
+	if (uhbr && (align & DPCD_128B132B_LT_FAILED))
+		return 0;
+
+	if (!(align & DPCD_INTERLANE_ALIGN_DONE))
+		return 0;
+
+	/* 128b/132b has no clock recovery phase, so no CR_DONE bit. */
+	lane_mask = DPCD_LANE_CHANNEL_EQ_DONE | DPCD_LANE_SYMBOL_LOCKED;
+	if (!uhbr)
+		lane_mask |= DPCD_LANE_CR_DONE;
+
+	for (lane = 0; lane < lane_count; lane++)
+		if ((dpcd_lane_status(link_status, lane) & lane_mask) != lane_mask)
+			return 0;
+
+	return 1;
+}

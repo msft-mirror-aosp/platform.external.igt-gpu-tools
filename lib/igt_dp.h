@@ -36,4 +36,8 @@ int igt_dp_dpcd_read(int aux_fd, unsigned int offset, void *buf, size_t size);
 
 int igt_dp_dpcd_read_byte(int aux_fd, unsigned int offset, uint8_t *val);
 
+int igt_dp_channel_coding_ok(int aux_fd, bool uhbr);
+
+int igt_dp_link_status_ok(int aux_fd, int lane_count, bool uhbr);
+
 #endif
