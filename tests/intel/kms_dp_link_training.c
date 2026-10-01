@@ -27,11 +27,6 @@
 #include "intel/kms_joiner_helper.h"
 #include "intel/kms_mst_helper.h"
 
-/*
- * DP Spec defines 10, 13.5, and 20 Gbps as UHBR.
- * Anything below that is considered NON-UHBR.
- */
-#define UHBR_LINK_RATE	1000000
 #define RETRAIN_COUNT	1
 
 typedef struct {
@@ -217,7 +212,7 @@ static bool run_link_rate_test(data_t *data, bool mst, bool uhbr)
 	max_lane_count = i915_dp_get_max_lane_count(data->drm_fd, data->output);
 
 	/* Check sink supports uhbr or not */
-	is_uhbr_output = (max_link_rate >= UHBR_LINK_RATE);
+	is_uhbr_output = i915_dp_is_uhbr_rate(max_link_rate);
 	if ((uhbr && !is_uhbr_output) || (!uhbr && is_uhbr_output)) {
 		igt_info("Test expects %s, but output %s is %s.\n",
 			 uhbr ? "UHBR" : "NON-UHBR",
@@ -244,9 +239,7 @@ static bool run_link_rate_test(data_t *data, bool mst, bool uhbr)
 	igt_info("Current link rate is %d\n", current_link_rate);
 	igt_assert_f(current_link_rate == max_link_rate,
 		     "Link training did not succeed at max link rate.\n");
-	igt_assert_f(is_uhbr_output ?
-		     current_link_rate >= UHBR_LINK_RATE :
-		     current_link_rate < UHBR_LINK_RATE,
+	igt_assert_f(i915_dp_is_uhbr_rate(current_link_rate) == is_uhbr_output,
 		     is_uhbr_output ? "Link training didn't happen at uhbr rates" :
 		     "Link training didn't happen at non-uhbr rates");
 	igt_info("----------------------------------------------------\n");
