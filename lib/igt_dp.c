@@ -6,7 +6,13 @@
  *   Louis Chauvet <louis.chauvet@bootlin.com>
  */
 
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
 #include <stdint.h>
+#include <string.h>
+#include <unistd.h>
 
 #include "drmtest.h"
 #include "i915/i915_dp.h"
@@ -172,4 +178,106 @@ void igt_dp_wait_pending_retrain(int drm_fd, igt_output_t *output)
 		usleep(10000);
 	}
 	igt_assert_f(false, "Timeout waiting for pending retrain to complete\n");
+}
+
+/**
+ * igt_dp_aux_open: Open the AUX channel device of a display port
+ * @drm_fd: DRM file descriptor
+ * @output: igt_output_t object representing the display port
+ *
+ * The AUX channel of a connector is exposed as a character device when the
+ * kernel is built with CONFIG_DRM_DISPLAY_DP_AUX_CHARDEV. The device is
+ * parented to the connector, so it is the connector's own sysfs directory
+ * which is scanned here and not /dev, and there is at most one entry in it to
+ * match. /dev is only where the matched entry is then opened from.
+ *
+ * Returns:
+ * A file descriptor for the AUX channel device, or a negative error code on
+ * failure.
+ */
+int igt_dp_aux_open(int drm_fd, igt_output_t *output)
+{
+	struct dirent *entry;
+	int aux_fd = -ENOENT;
+	int dir_fd;
+	DIR *dir;
+
+	dir_fd = igt_connector_sysfs_open(drm_fd, output->config.connector);
+	if (dir_fd < 0)
+		return -ENOENT;
+
+	dir = fdopendir(dir_fd);
+	if (!dir) {
+		/* Save the error before close() gets a chance to overwrite it. */
+		int err = -errno;
+
+		close(dir_fd);
+		return err;
+	}
+
+	errno = 0;
+
+	while ((entry = readdir(dir))) {
+		char path[NAME_MAX + sizeof("/dev/")];
+
+		if (strncmp(entry->d_name, "drm_dp_aux", strlen("drm_dp_aux")))
+			continue;
+
+		snprintf(path, sizeof(path), "/dev/%s", entry->d_name);
+
+		aux_fd = open(path, O_RDONLY);
+		if (aux_fd < 0)
+			aux_fd = -errno;
+
+		break;
+	}
+
+	/* readdir() reports both the end of the directory and an error as NULL. */
+	if (!entry && errno)
+		aux_fd = -errno;
+
+	closedir(dir);
+
+	return aux_fd;
+}
+
+/**
+ * igt_dp_dpcd_read: Read from the DPCD of a display port
+ * @aux_fd:	AUX channel device file descriptor from igt_dp_aux_open()
+ * @offset:	DPCD offset to read from
+ * @buf:	Buffer to read into
+ * @size:	Number of bytes to read
+ *
+ * Returns:
+ * The number of bytes read, or a negative error code on failure.
+ */
+int igt_dp_dpcd_read(int aux_fd, unsigned int offset, void *buf, size_t size)
+{
+	ssize_t ret;
+
+	ret = pread(aux_fd, buf, size, offset);
+	if (ret < 0)
+		return -errno;
+
+	return ret;
+}
+
+/**
+ * igt_dp_dpcd_read_byte: Read a single byte from the DPCD of a display port
+ * @aux_fd:	AUX channel device file descriptor from igt_dp_aux_open()
+ * @offset:	DPCD offset to read from
+ * @val:	Location to store the value read
+ *
+ * Returns:
+ * 0 on success, or a negative error code on failure.
+ */
+int igt_dp_dpcd_read_byte(int aux_fd, unsigned int offset, uint8_t *val)
+{
+	int ret;
+
+	ret = igt_dp_dpcd_read(aux_fd, offset, val, sizeof(*val));
+	if (ret < 0)
+		return ret;
+
+	return ret == 1 ? 0 : -EIO;
 }
