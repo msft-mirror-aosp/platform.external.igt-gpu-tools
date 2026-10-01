@@ -35,7 +35,9 @@
 
 #include "i915_dp.h"
 #include "igt_core.h"
+#include "igt_debugfs.h"
 #include "igt_kms.h"
+#include "igt_sysfs.h"
 
 /*
  * The driver allows at most 10 link rates over 3 lane counts, i.e. 30 entries
@@ -526,4 +528,113 @@ int i915_dp_get_next_lower_rate(int drm_fd, igt_output_t *output, int rate)
 	}
 
 	return next;
+}
+
+/**
+ * i915_dp_tc_mode_name:
+ * @mode: Connector mode
+ *
+ * Returns: The driver's name for @mode, for use in a log line
+ */
+const char *i915_dp_tc_mode_name(enum i915_dp_tc_mode mode)
+{
+	switch (mode) {
+	case I915_DP_TC_DISCONNECTED:
+		return "disconnected";
+	case I915_DP_TC_LEGACY:
+		return "legacy";
+	case I915_DP_TC_DP_ALT:
+		return "dp-alt";
+	case I915_DP_TC_TBT_ALT:
+		return "tbt-alt";
+	default:
+		return "native";
+	}
+}
+
+/**
+ * i915_dp_get_tc_mode:
+ * @drm_fd: A drm file descriptor
+ * @output: Target output
+ * @pin_assignment: Where to store the Type-C pin assignment, or NULL
+ * @max_lanes: Where to store the Type-C max lane count, or NULL
+ *
+ * Read the connector mode of @output out of the TC Port line the driver
+ * prints for every connected Type-C connector in the i915_display_info
+ * debugfs file:
+ *
+ *	TC Port TC1: mode: tbt-alt, pin assignment: D, max lanes: 4
+ *
+ * @pin_assignment and @max_lanes are only written when the line is present.
+ *
+ * Returns: The connector mode, or I915_DP_TC_NONE when @output has no TC Port
+ * line, i.e. it is on a combo or native PHY
+ */
+enum i915_dp_tc_mode i915_dp_get_tc_mode(int drm_fd, igt_output_t *output,
+					 char *pin_assignment, int *max_lanes)
+{
+	enum i915_dp_tc_mode mode = I915_DP_TC_NONE;
+	char marker[32];
+	char mode_str[32];
+	char *info, *block, *next_block, *line;
+	char pin;
+	int lanes;
+	int dir;
+
+	dir = igt_debugfs_dir(drm_fd);
+	igt_assert_fd(dir);
+	info = igt_sysfs_get(dir, "i915_display_info");
+	close(dir);
+	igt_assert_f(info, "Unable to read i915_display_info\n");
+
+	/*
+	 * i915_display_info is a per-device file that lists the CRTCs first
+	 * and the connectors after them. The CRTC section names the connectors
+	 * of every active output, so the search has to start at the connector
+	 * section, or an active output's first match is that reference rather
+	 * than the connector's own block and the TC Port line is never
+	 * reached. The block ends where the next connector's begins.
+	 */
+	snprintf(marker, sizeof(marker), "[CONNECTOR:%d:",
+		 output->config.connector->connector_id);
+
+	block = strstr(info, "Connector info");
+	if (!block)
+		goto out;
+
+	block = strstr(block, marker);
+	if (!block)
+		goto out;
+
+	next_block = strstr(block + strlen(marker), "[CONNECTOR:");
+	if (next_block)
+		*next_block = '\0';
+
+	line = strstr(block, "TC Port ");
+	if (!line)
+		goto out;
+
+	if (sscanf(line,
+		   "TC Port %*[^:]: mode: %31[^,], pin assignment: %c, max lanes: %d",
+		   mode_str, &pin, &lanes) != 3)
+		goto out;
+
+	if (!strcmp(mode_str, "tbt-alt"))
+		mode = I915_DP_TC_TBT_ALT;
+	else if (!strcmp(mode_str, "dp-alt"))
+		mode = I915_DP_TC_DP_ALT;
+	else if (!strcmp(mode_str, "legacy"))
+		mode = I915_DP_TC_LEGACY;
+	else
+		mode = I915_DP_TC_DISCONNECTED;
+
+	if (pin_assignment)
+		*pin_assignment = pin;
+	if (max_lanes)
+		*max_lanes = lanes;
+
+out:
+	free(info);
+
+	return mode;
 }

@@ -24,6 +24,27 @@ struct i915_dp_link_config {
 };
 
 /**
+ * enum i915_dp_tc_mode:
+ * @I915_DP_TC_NONE: not a Type-C port, i.e. a combo or native PHY
+ * @I915_DP_TC_DISCONNECTED: Type-C port with nothing connected
+ * @I915_DP_TC_LEGACY: fixed DP connection on a Type-C port
+ * @I915_DP_TC_DP_ALT: USB-C DP alt mode, driven by the PHY PLL
+ * @I915_DP_TC_TBT_ALT: DP tunneled over USB4/Thunderbolt, driven by the
+ *			Thunderbolt PLL
+ *
+ * The connector mode of a DP output, as reported by the i915_display_info
+ * debugfs file. Only I915_DP_TC_TBT_ALT takes its link clock from the
+ * Thunderbolt PLL; every other value uses the PHY PLL.
+ */
+enum i915_dp_tc_mode {
+	I915_DP_TC_NONE,
+	I915_DP_TC_DISCONNECTED,
+	I915_DP_TC_LEGACY,
+	I915_DP_TC_DP_ALT,
+	I915_DP_TC_TBT_ALT,
+};
+
+/**
  * i915_dp_is_uhbr_rate:
  * @link_rate: DP link rate in 10 kbit/s units, as reported by the
  *	       i915_dp_*_link_rate debugfs files
@@ -58,5 +79,8 @@ int i915_dp_get_allowed_link_configs(int drm_fd, igt_output_t *output,
 				     struct i915_dp_link_config *configs,
 				     int max_configs);
 int i915_dp_get_next_lower_rate(int drm_fd, igt_output_t *output, int rate);
+enum i915_dp_tc_mode i915_dp_get_tc_mode(int drm_fd, igt_output_t *output,
+					 char *pin_assignment, int *max_lanes);
+const char *i915_dp_tc_mode_name(enum i915_dp_tc_mode mode);
 
 #endif
