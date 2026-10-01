@@ -291,6 +291,71 @@ static void train_link_config(data_t *data, bool mst,
 }
 
 /*
+ * log_link_inventory - Describe every connected DP link once.
+ *
+ * With the configuration in the subtest name, most subtests skip on any one
+ * machine. This is what tells a missing monitor apart from a monitor behind a
+ * dock that offers no UHBR configuration, without having to re-run by hand.
+ */
+static void log_link_inventory(data_t *data)
+{
+	igt_output_t *output;
+
+	for_each_connected_output(&data->display, output) {
+		struct i915_dp_link_config configs[MAX_LINK_CONFIGS];
+		enum i915_dp_tc_mode tc_mode;
+		char configs_str[512];
+		char pin_assignment;
+		int tc_max_lanes;
+		int num_configs;
+		int len = 0;
+		int i;
+
+		if (output->config.connector->connector_type !=
+		    DRM_MODE_CONNECTOR_DisplayPort)
+			continue;
+
+		tc_mode = i915_dp_get_tc_mode(data->drm_fd, output,
+					      &pin_assignment, &tc_max_lanes);
+
+		if (tc_mode == I915_DP_TC_NONE)
+			igt_info("%s: %s, %s\n", igt_output_name(output),
+				 igt_check_output_is_dp_mst(output) ? "MST" : "SST",
+				 i915_dp_tc_mode_name(tc_mode));
+		else
+			igt_info("%s: %s, %s, pin assignment %c, TC max lanes %d\n",
+				 igt_output_name(output),
+				 igt_check_output_is_dp_mst(output) ? "MST" : "SST",
+				 i915_dp_tc_mode_name(tc_mode),
+				 pin_assignment, tc_max_lanes);
+
+		if (!i915_dp_has_allowed_link_configs_debugfs(data->drm_fd, output)) {
+			igt_info("%s: no allowed link configs debugfs\n",
+				 igt_output_name(output));
+			continue;
+		}
+
+		/*
+		 * Enumerate with the forced parameters reset, or the set read
+		 * back is the forced one rather than the real one.
+		 */
+		i915_dp_reset_link_params(data->drm_fd, output);
+
+		num_configs = i915_dp_get_allowed_link_configs(data->drm_fd, output,
+							       configs,
+							       ARRAY_SIZE(configs));
+
+		for (i = 0; i < num_configs && len < (int)sizeof(configs_str); i++)
+			len += snprintf(configs_str + len, sizeof(configs_str) - len,
+					" %dx%d", configs[i].lane_count,
+					configs[i].link_rate);
+
+		igt_info("%s: allowed configs:%s\n", igt_output_name(output),
+			 num_configs ? configs_str : " none");
+	}
+}
+
+/*
  * override_lowest_mode - Drive the mode with the lowest pixel clock, so that
  * the largest number of link configurations can carry it.
  */
@@ -527,6 +592,9 @@ int igt_main()
 		 */
 		igt_assert_f(igt_ignore_long_hpd(data.drm_fd, false),
 			     "Unable to disable ignore long hpd\n");
+
+		if (is_intel_device(data.drm_fd))
+			log_link_inventory(&data);
 	}
 
 	igt_describe("Test we can drive UHBR rates over SST");
