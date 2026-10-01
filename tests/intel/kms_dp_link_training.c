@@ -186,6 +186,25 @@ static void train_link_config(data_t *data, bool mst,
 }
 
 /*
+ * override_lowest_mode - Drive the mode with the lowest pixel clock, so that
+ * the largest number of link configurations can carry it.
+ */
+static void override_lowest_mode(data_t *data, igt_output_t *output)
+{
+	drmModeConnector *connector = output->config.connector;
+	drmModeModeInfo *mode = NULL;
+	int i;
+
+	for (i = 0; i < connector->count_modes; i++)
+		if (!mode || connector->modes[i].clock < mode->clock)
+			mode = &connector->modes[i];
+
+	igt_assert_f(mode, "No mode on output %s\n", igt_output_name(output));
+
+	igt_output_override_mode(output, mode);
+}
+
+/*
  * setup_planes_fbs - Create solid-color FBs and attach them to the primary plane.
  */
 static void setup_planes_fbs(data_t *data, igt_output_t *outs[],
@@ -224,6 +243,7 @@ static void do_modeset(data_t *data, bool mst)
 	int n_pipes = 0;
 	int out_count = 0;
 	igt_crtc_t *crtc;
+	int i;
 
 	for_each_crtc(&data->display, crtc) {
 		valid_pipes_mask |= BIT(crtc->hardware_pipe);
@@ -242,6 +262,9 @@ static void do_modeset(data_t *data, bool mst)
 	}
 
 	igt_assert_f(out_count > 0, "Require at least one output\n");
+
+	for (i = 0; i < out_count; i++)
+		override_lowest_mode(data, outs[i]);
 
 	igt_set_all_master_pipes_for_platform(&data->display, &master_pipes_mask);
 
