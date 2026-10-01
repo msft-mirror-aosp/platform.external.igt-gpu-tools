@@ -21,6 +21,40 @@
  * Description: Test we can drive non-UHBR rates over MST.
  */
 
+/**
+ * SUBTEST: uhbr-sst-tbtalt-train
+ * Description: Test we can drive UHBR rates over an SST link tunneled over
+ *              USB4/Thunderbolt.
+ *
+ * SUBTEST: uhbr-mst-tbtalt-train
+ * Description: Test we can drive UHBR rates over an MST link tunneled over
+ *              USB4/Thunderbolt.
+ *
+ * SUBTEST: uhbr-sst-direct-train
+ * Description: Test we can drive UHBR rates over a directly connected SST
+ *              link.
+ *
+ * SUBTEST: uhbr-mst-direct-train
+ * Description: Test we can drive UHBR rates over a directly connected MST
+ *              link.
+ *
+ * SUBTEST: non-uhbr-sst-tbtalt-train
+ * Description: Test we can drive non-UHBR rates over an SST link tunneled over
+ *              USB4/Thunderbolt.
+ *
+ * SUBTEST: non-uhbr-mst-tbtalt-train
+ * Description: Test we can drive non-UHBR rates over an MST link tunneled over
+ *              USB4/Thunderbolt.
+ *
+ * SUBTEST: non-uhbr-sst-direct-train
+ * Description: Test we can drive non-UHBR rates over a directly connected SST
+ *              link.
+ *
+ * SUBTEST: non-uhbr-mst-direct-train
+ * Description: Test we can drive non-UHBR rates over a directly connected MST
+ *              link.
+ */
+
 #include "i915/i915_dp.h"
 #include "igt.h"
 #include "igt_kms.h"
@@ -59,6 +93,38 @@ struct dp_link {
 	bool mst;
 	enum i915_dp_tc_mode tc_mode;
 };
+
+/*
+ * enum phy_filter - Which links a subtest selects.
+ *
+ * PHY_ANY is the PHY agnostic scope of the original subtests. The split
+ * between PHY_TBTALT and PHY_DIRECT is where the link clock comes from: only a
+ * tbt-alt link is clocked by the Thunderbolt PLL, native, DP alt mode and
+ * legacy all use the PHY PLL, so folding the latter three together does not
+ * change which driver code runs.
+ */
+enum phy_filter {
+	PHY_ANY,
+	PHY_TBTALT,
+	PHY_DIRECT,
+};
+
+static const char *phy_filter_name(enum phy_filter phy)
+{
+	return phy == PHY_TBTALT ? "tbt-alt" : "direct";
+}
+
+static bool link_matches_phy(const struct dp_link *link, enum phy_filter phy)
+{
+	switch (phy) {
+	case PHY_TBTALT:
+		return link->tc_mode == I915_DP_TC_TBT_ALT;
+	case PHY_DIRECT:
+		return link->tc_mode != I915_DP_TC_TBT_ALT;
+	default:
+		return true;
+	}
+}
 
 /*
  * check_condition_with_timeout - Polls check_fn until it returns 0
@@ -609,7 +675,8 @@ static int discover_links(data_t *data, struct dp_link *links, int max_links)
 	return num_links;
 }
 
-static bool test_link_rate(data_t *data, bool mst, bool uhbr)
+static bool test_link_rate(data_t *data, bool mst, bool uhbr,
+			   enum phy_filter phy)
 {
 	struct dp_link links[MAX_LINKS];
 	bool ran_any_link = false;
@@ -627,6 +694,15 @@ static bool test_link_rate(data_t *data, bool mst, bool uhbr)
 				 igt_output_name(links[i].output),
 				 mst ? "MST" : "SST",
 				 links[i].mst ? "MST" : "SST");
+			igt_info("----------------------------------------------------\n");
+			continue;
+		}
+
+		if (!link_matches_phy(&links[i], phy)) {
+			igt_info("Skipping %s: %s requested but it's %s.\n",
+				 igt_output_name(links[i].output),
+				 phy_filter_name(phy),
+				 i915_dp_tc_mode_name(links[i].tc_mode));
 			igt_info("----------------------------------------------------\n");
 			continue;
 		}
@@ -668,7 +744,7 @@ int igt_main()
 	igt_subtest_with_dynamic("uhbr-sst") {
 		igt_require_f(intel_display_ver(data.devid) > 13,
 			      "UHBR not supported on platform\n");
-		igt_require_f(test_link_rate(&data, false, true),
+		igt_require_f(test_link_rate(&data, false, true, PHY_ANY),
 			      "Didn't find any SST output with UHBR rates.\n");
 	}
 
@@ -676,20 +752,76 @@ int igt_main()
 	igt_subtest_with_dynamic("uhbr-mst") {
                 igt_require_f(intel_display_ver(data.devid) > 13,
                               "UHBR not supported on platform\n");
-		igt_require_f(test_link_rate(&data, true, true),
+		igt_require_f(test_link_rate(&data, true, true, PHY_ANY),
 			      "Didn't find any MST output with UHBR rates.\n");
 	}
 
 	igt_describe("Test we can drive NON-UHBR rates over SST");
 	igt_subtest_with_dynamic("non-uhbr-sst") {
-		igt_require_f(test_link_rate(&data, false, false),
+		igt_require_f(test_link_rate(&data, false, false, PHY_ANY),
 			      "Didn't find any SST output with NON-UHBR rates.\n");
 	}
 
 	igt_describe("Test we can drive NON-UHBR rates over MST");
 	igt_subtest_with_dynamic("non-uhbr-mst") {
-		igt_require_f(test_link_rate(&data, true, false),
+		igt_require_f(test_link_rate(&data, true, false, PHY_ANY),
 			      "Didn't find any MST output with NON-UHBR rates.\n");
+	}
+
+	igt_describe("Test we can drive UHBR rates over a tunneled SST link");
+	igt_subtest_with_dynamic("uhbr-sst-tbtalt-train") {
+		igt_require_f(intel_display_ver(data.devid) > 13,
+			      "UHBR not supported on platform\n");
+		igt_require_f(test_link_rate(&data, false, true, PHY_TBTALT),
+			      "No tbt-alt DP SST link allows a UHBR config\n");
+	}
+
+	igt_describe("Test we can drive UHBR rates over a tunneled MST link");
+	igt_subtest_with_dynamic("uhbr-mst-tbtalt-train") {
+		igt_require_f(intel_display_ver(data.devid) > 13,
+			      "UHBR not supported on platform\n");
+		igt_require_f(test_link_rate(&data, true, true, PHY_TBTALT),
+			      "No tbt-alt DP MST link allows a UHBR config\n");
+	}
+
+	igt_describe("Test we can drive UHBR rates over a direct SST link");
+	igt_subtest_with_dynamic("uhbr-sst-direct-train") {
+		igt_require_f(intel_display_ver(data.devid) > 13,
+			      "UHBR not supported on platform\n");
+		igt_require_f(test_link_rate(&data, false, true, PHY_DIRECT),
+			      "No direct DP SST link allows a UHBR config\n");
+	}
+
+	igt_describe("Test we can drive UHBR rates over a direct MST link");
+	igt_subtest_with_dynamic("uhbr-mst-direct-train") {
+		igt_require_f(intel_display_ver(data.devid) > 13,
+			      "UHBR not supported on platform\n");
+		igt_require_f(test_link_rate(&data, true, true, PHY_DIRECT),
+			      "No direct DP MST link allows a UHBR config\n");
+	}
+
+	igt_describe("Test we can drive non-UHBR rates over a tunneled SST link");
+	igt_subtest_with_dynamic("non-uhbr-sst-tbtalt-train") {
+		igt_require_f(test_link_rate(&data, false, false, PHY_TBTALT),
+			      "No tbt-alt DP SST link allows a non-UHBR config\n");
+	}
+
+	igt_describe("Test we can drive non-UHBR rates over a tunneled MST link");
+	igt_subtest_with_dynamic("non-uhbr-mst-tbtalt-train") {
+		igt_require_f(test_link_rate(&data, true, false, PHY_TBTALT),
+			      "No tbt-alt DP MST link allows a non-UHBR config\n");
+	}
+
+	igt_describe("Test we can drive non-UHBR rates over a direct SST link");
+	igt_subtest_with_dynamic("non-uhbr-sst-direct-train") {
+		igt_require_f(test_link_rate(&data, false, false, PHY_DIRECT),
+			      "No direct DP SST link allows a non-UHBR config\n");
+	}
+
+	igt_describe("Test we can drive non-UHBR rates over a direct MST link");
+	igt_subtest_with_dynamic("non-uhbr-mst-direct-train") {
+		igt_require_f(test_link_rate(&data, true, false, PHY_DIRECT),
+			      "No direct DP MST link allows a non-UHBR config\n");
 	}
 
 	igt_fixture() {
