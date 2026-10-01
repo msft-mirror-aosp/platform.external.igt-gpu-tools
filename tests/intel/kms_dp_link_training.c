@@ -29,6 +29,9 @@
 
 #define RETRAIN_COUNT	1
 
+/* The driver allows at most 10 link rates over 3 lane counts. */
+#define MAX_LINK_CONFIGS	32
+
 /*
  * How long the driver's link recovery is given to reach a verdict, in seconds.
  * The automatic retrain is queued without a delay, so this only has to cover
@@ -107,6 +110,103 @@ static void assert_link_status_good(data_t *data, bool mst)
 }
 
 /*
+ * set_link_status_good - Clear a latched BAD link-status.
+ *
+ * The property latches BAD when the driver falls back and only userspace can
+ * clear it, so without clearing it before every attempt a single fallback
+ * anywhere in the run poisons every later assertion.
+ */
+static void set_link_status_good(data_t *data, bool mst)
+{
+	igt_output_t *outputs[IGT_MAX_PIPES];
+	int count = 0;
+	int i;
+
+	if (mst) {
+		igt_assert_f(igt_find_all_mst_output_in_topology(data->drm_fd,
+								 &data->display, data->output,
+								 outputs, &count) == 0,
+								 "Unable to find MST outputs\n");
+	} else {
+		outputs[0] = data->output;
+		count = 1;
+	}
+
+	for (i = 0; i < count; i++)
+		igt_output_set_prop_value(outputs[i], IGT_CONNECTOR_LINK_STATUS,
+					  DRM_MODE_LINK_STATUS_GOOD);
+
+	igt_display_commit2(&data->display, COMMIT_ATOMIC);
+}
+
+/*
+ * link_config_data_rate - Data rate a link configuration carries, in
+ * 10 kbit/s units.
+ *
+ * Channel coding efficiency is in 1ppm units, matching the kernel's
+ * drm_dp_bw_channel_coding_efficiency(): 96.71% for 128b/132b and 80% for
+ * 8b/10b. 8b/10b MST is 78.75% instead, because of the 1-in-64 MTPH overhead
+ * that helper deliberately does not account for. Using 80% there overestimates
+ * the available bandwidth and turns a correct driver rejection into a failure.
+ */
+static int link_config_data_rate(const struct i915_dp_link_config *config,
+				 bool mst)
+{
+	uint64_t symbol_rate = (uint64_t)config->link_rate * config->lane_count;
+	int efficiency;
+
+	if (i915_dp_is_uhbr_rate(config->link_rate))
+		efficiency = 967100;
+	else
+		efficiency = mst ? 787500 : 800000;
+
+	return symbol_rate * efficiency / 1000000;
+}
+
+/*
+ * mode_data_rate - Data rate a mode needs, in 10 kbit/s units.
+ *
+ * Uncompressed 8 bpc, which is what the smallest mode of a DP sink is driven
+ * at. Deliberately pessimistic: overestimating what the mode needs makes a
+ * borderline configuration skip rather than fail.
+ */
+static int mode_data_rate(const drmModeModeInfo *mode)
+{
+	return DIV_ROUND_UP(mode->clock * 24, 10);
+}
+
+/*
+ * link_min_data_rate - Data rate the link has to carry, in 10 kbit/s units.
+ *
+ * do_modeset() drives every stream of an MST topology, so the link carries all
+ * of them at once. Summing them is what tells a configuration that cannot
+ * carry the whole payload apart from one that can, which a single stream's
+ * requirement would let through and turn into a false link training failure.
+ */
+static int link_min_data_rate(data_t *data, bool mst)
+{
+	igt_output_t *outputs[IGT_MAX_PIPES];
+	int count = 0;
+	int rate = 0;
+	int i;
+
+	if (mst) {
+		igt_assert_f(igt_find_all_mst_output_in_topology(data->drm_fd,
+								 &data->display, data->output,
+								 outputs, &count) == 0,
+								 "Unable to find MST outputs\n");
+	} else {
+		outputs[0] = data->output;
+		count = 1;
+	}
+
+	for (i = 0; i < count; i++)
+		rate += mode_data_rate(igt_output_get_mode(outputs[i]));
+
+	return rate;
+}
+
+/*
  * assert_link_retrain_not_disabled - Let the driver's link recovery reach a
  * verdict and check it did not give up on the link.
  *
@@ -162,6 +262,8 @@ static void train_link_config(data_t *data, bool mst,
 		 igt_output_name(data->output), config->lane_count,
 		 config->link_rate);
 
+	set_link_status_good(data, mst);
+
 	i915_dp_set_link_params(data->drm_fd, data->output, rate_str, lane_str);
 	i915_dp_force_link_retrain(data->drm_fd, data->output, RETRAIN_COUNT);
 	igt_assert_eq(check_condition_with_timeout(data->drm_fd, data->output,
@@ -173,6 +275,9 @@ static void train_link_config(data_t *data, bool mst,
 	igt_info("Current link rate is %d\n", current_link_rate);
 	igt_assert_f(current_link_rate == config->link_rate,
 		     "Link training did not succeed at the forced link rate.\n");
+	igt_assert_f(i915_dp_get_current_lane_count(data->drm_fd, data->output) ==
+		     config->lane_count,
+		     "Link training did not succeed at the forced lane count.\n");
 
 	/*
 	 * The link parameters read back above are the ones the driver asked
@@ -282,14 +387,17 @@ static void do_modeset(data_t *data, bool mst)
 }
 
 /*
- * run_link_rate_test - Main link training routine. Expects the MST vs. SST check
- * to be done beforehand. Returns true if tested at the correct rate.
+ * setup_link - Bring the link up at the parameters the driver picks itself.
+ *
+ * Runs per dynamic subtest rather than once per link: everything it does can
+ * fail, and a failure in a igt_subtest_with_dynamic() container aborts the
+ * whole test instead of yielding a dynamic subtest result. For the same
+ * reason the reset here is the only one between configurations, and what the
+ * last configuration forced is left to the exit handler that
+ * i915_dp_set_link_params() installs.
  */
-static bool run_link_rate_test(data_t *data, bool mst, bool uhbr)
+static void setup_link(data_t *data, bool mst)
 {
-	struct i915_dp_link_config config;
-	bool is_uhbr_output;
-
 	igt_display_reset(&data->display);
 	i915_dp_reset_link_params(data->drm_fd, data->output);
 	do_modeset(data, mst);
@@ -300,27 +408,61 @@ static bool run_link_rate_test(data_t *data, bool mst, bool uhbr)
 						   i915_dp_get_pending_retrain,
 						   1.0, 20.0), 0);
 	assert_link_status_good(data, mst);
+}
 
-	/* Read max_link_rate and max_lane_count */
-	config.link_rate = i915_dp_get_max_link_rate(data->drm_fd, data->output);
-	config.lane_count = i915_dp_get_max_lane_count(data->drm_fd, data->output);
+/*
+ * run_link_rate_test - Main link training routine. Expects the MST vs. SST check
+ * to be done beforehand. Returns true if tested at the correct rate.
+ */
+static bool run_link_rate_test(data_t *data, bool mst, bool uhbr)
+{
+	struct i915_dp_link_config configs[MAX_LINK_CONFIGS];
+	int num_configs, num_dynamics = 0;
+	int i;
 
-	/* Check sink supports uhbr or not */
-	is_uhbr_output = i915_dp_is_uhbr_rate(config.link_rate);
-	if (uhbr != is_uhbr_output) {
-		igt_info("Test expects %s, but output %s is %s.\n",
-			 uhbr ? "UHBR" : "NON-UHBR",
-			 data->output->name,
-			 is_uhbr_output ? "UHBR" : "NON-UHBR");
-		igt_info("----------------------------------------------------\n");
-		return false;
+	igt_require_f(i915_dp_has_allowed_link_configs_debugfs(data->drm_fd,
+							       data->output),
+		      "Kernel has no intel_dp_allowed_link_configs debugfs\n");
+
+	/*
+	 * Enumerate with the forced parameters reset, or the set being read is
+	 * the forced one rather than the one the driver would pick from.
+	 */
+	i915_dp_reset_link_params(data->drm_fd, data->output);
+	num_configs = i915_dp_get_allowed_link_configs(data->drm_fd, data->output,
+						       configs, ARRAY_SIZE(configs));
+
+	for (i = 0; i < num_configs; i++) {
+		char name[64];
+
+		if (i915_dp_is_uhbr_rate(configs[i].link_rate) != uhbr)
+			continue;
+
+		snprintf(name, sizeof(name), "%s-%dx%d",
+			 igt_output_name(data->output),
+			 configs[i].lane_count, configs[i].link_rate);
+
+		num_dynamics++;
+
+		igt_dynamic(name) {
+			setup_link(data, mst);
+
+			igt_require_f(link_config_data_rate(&configs[i], mst) >=
+				      link_min_data_rate(data, mst),
+				      "%d lanes, rate %d is too narrow for the mode\n",
+				      configs[i].lane_count,
+				      configs[i].link_rate);
+
+			train_link_config(data, mst, &configs[i]);
+		}
 	}
 
-	/* Force retrain at max link params */
-	train_link_config(data, mst, &config);
+	if (!num_dynamics)
+		igt_info("Output %s allows no %sUHBR link config\n",
+			 igt_output_name(data->output), uhbr ? "" : "non-");
 
 	igt_info("----------------------------------------------------\n");
-	return true;
+	return num_dynamics > 0;
 }
 
 /*
@@ -388,7 +530,7 @@ int igt_main()
 	}
 
 	igt_describe("Test we can drive UHBR rates over SST");
-	igt_subtest("uhbr-sst") {
+	igt_subtest_with_dynamic("uhbr-sst") {
 		igt_require_f(intel_display_ver(data.devid) > 13,
 			      "UHBR not supported on platform\n");
 		igt_require_f(test_link_rate(&data, false, true),
@@ -396,7 +538,7 @@ int igt_main()
 	}
 
 	igt_describe("Test we can drive UHBR rates over MST");
-	igt_subtest("uhbr-mst") {
+	igt_subtest_with_dynamic("uhbr-mst") {
                 igt_require_f(intel_display_ver(data.devid) > 13,
                               "UHBR not supported on platform\n");
 		igt_require_f(test_link_rate(&data, true, true),
@@ -404,13 +546,13 @@ int igt_main()
 	}
 
 	igt_describe("Test we can drive NON-UHBR rates over SST");
-	igt_subtest("non-uhbr-sst") {
+	igt_subtest_with_dynamic("non-uhbr-sst") {
 		igt_require_f(test_link_rate(&data, false, false),
 			      "Didn't find any SST output with NON-UHBR rates.\n");
 	}
 
 	igt_describe("Test we can drive NON-UHBR rates over MST");
-	igt_subtest("non-uhbr-mst") {
+	igt_subtest_with_dynamic("non-uhbr-mst") {
 		igt_require_f(test_link_rate(&data, true, false),
 			      "Didn't find any MST output with NON-UHBR rates.\n");
 	}
