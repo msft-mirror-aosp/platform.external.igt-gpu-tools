@@ -37,6 +37,12 @@
 #include "igt_core.h"
 #include "igt_kms.h"
 
+/*
+ * The driver allows at most 10 link rates over 3 lane counts, i.e. 30 entries
+ * of at most "4x2000000 ", so 1024 has plenty of room to spare.
+ */
+#define LINK_CONFIGS_BUF_SIZE	1024
+
 /**
  * i915_dp_parse_marked_value:
  * @buf: Buffer containing the content to parse
@@ -389,6 +395,81 @@ int i915_dp_get_max_supported_rate(int drm_fd, const igt_output_t *output)
 	}
 
 	return max_rate;
+}
+
+/**
+ * i915_dp_has_allowed_link_configs_debugfs:
+ * @drm_fd: A drm file descriptor
+ * @output: Target output
+ *
+ * Checks if the allowed link configs debugfs is available for a specific
+ * output.
+ *
+ * Returns: True if the debugfs is available, false otherwise
+ */
+bool i915_dp_has_allowed_link_configs_debugfs(int drm_fd, igt_output_t *output)
+{
+	char buf[LINK_CONFIGS_BUF_SIZE];
+
+	return igt_debugfs_read_connector_file(drm_fd, igt_output_name(output),
+					       "intel_dp_allowed_link_configs",
+					       buf, sizeof(buf)) == 0;
+}
+
+/**
+ * i915_dp_get_allowed_link_configs:
+ * @drm_fd: A drm file descriptor
+ * @output: Target output
+ * @configs: Array to store the allowed link configurations in
+ * @max_configs: Number of entries in @configs
+ *
+ * Read the link configurations the driver currently allows on @output, i.e.
+ * the intersection of the source rates, the rates the sink advertises and the
+ * current link limits.
+ *
+ * The driver lists them in the order it would pick them, which differs between
+ * SST and MST and depends on earlier link training results, so callers have to
+ * treat the result as an unordered set.
+ *
+ * Returns: The number of configurations stored in @configs
+ */
+int i915_dp_get_allowed_link_configs(int drm_fd, igt_output_t *output,
+				     struct i915_dp_link_config *configs,
+				     int max_configs)
+{
+	char buf[LINK_CONFIGS_BUF_SIZE];
+	char *token, *saveptr = NULL;
+	int count = 0;
+	int res;
+
+	res = igt_debugfs_read_connector_file(drm_fd, igt_output_name(output),
+					      "intel_dp_allowed_link_configs",
+					      buf, sizeof(buf));
+	igt_assert_f(res == 0, "Unable to read %s/intel_dp_allowed_link_configs\n",
+		     igt_output_name(output));
+
+	/* An empty set of allowed configurations reads back as a bare newline. */
+	buf[strcspn(buf, "\n")] = '\0';
+
+	for (token = strtok_r(buf, " ", &saveptr); token;
+	     token = strtok_r(NULL, " ", &saveptr)) {
+		int lane_count, link_rate;
+		char extra;
+
+		igt_assert_f(count < max_configs,
+			     "More than %d link configs on %s\n",
+			     max_configs, igt_output_name(output));
+		igt_assert_f(sscanf(token, "%dx%d%c", &lane_count, &link_rate,
+				    &extra) == 2 && lane_count > 0 &&
+			     link_rate > 0,
+			     "Failed to parse link config '%s'\n", token);
+
+		configs[count].lane_count = lane_count;
+		configs[count].link_rate = link_rate;
+		count++;
+	}
+
+	return count;
 }
 
 /**

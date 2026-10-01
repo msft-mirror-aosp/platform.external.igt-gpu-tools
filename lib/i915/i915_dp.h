@@ -11,6 +11,19 @@
 #define I915_DP_UHBR10_LINK_RATE	1000000
 
 /**
+ * struct i915_dp_link_config:
+ * @lane_count: Number of lanes
+ * @link_rate: Link rate in 10 kbit/s units
+ *
+ * A single link configuration, as listed by the intel_dp_allowed_link_configs
+ * connector debugfs file.
+ */
+struct i915_dp_link_config {
+	int lane_count;
+	int link_rate;
+};
+
+/**
  * i915_dp_is_uhbr_rate:
  * @link_rate: DP link rate in 10 kbit/s units, as reported by the
  *	       i915_dp_*_link_rate debugfs files
@@ -40,6 +53,10 @@ void i915_dp_reset_link_params(int drm_fd, igt_output_t *output);
 void i915_dp_set_link_params(int drm_fd, igt_output_t *output,
 			     const char *link_rate, const char *lane_count);
 int i915_dp_get_max_supported_rate(int drm_fd, const igt_output_t *output);
+bool i915_dp_has_allowed_link_configs_debugfs(int drm_fd, igt_output_t *output);
+int i915_dp_get_allowed_link_configs(int drm_fd, igt_output_t *output,
+				     struct i915_dp_link_config *configs,
+				     int max_configs);
 int i915_dp_get_next_lower_rate(int drm_fd, igt_output_t *output, int rate);
 
 #endif
