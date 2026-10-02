@@ -129,6 +129,10 @@ static void test_hotplug_basic(data_t *data, bool suspend)
 	igt_display_t *display = &data->display;
 	igt_crtc_t *crtc;
 
+	/* Check reporting before setup or suspend; an initial zero is valid. */
+	if (suspend)
+		get_last_hw_sleep_time();
+
 	test_init(data);
 
 	/* Setup all outputs */
