@@ -74,6 +74,7 @@ test_progs = [
 	'meta_test',
 	'prime_vgem',
 	'sriov_basic',
+	'sriov_pci_config',
 	'syncobj_basic',
 	'syncobj_eventfd',
 	'syncobj_wait',
