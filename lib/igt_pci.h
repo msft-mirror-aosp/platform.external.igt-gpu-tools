@@ -15,7 +15,7 @@ struct pci_device;
 
 #define PCI_TYPE0_1_HEADER_SIZE 0x40
 #define PCI_CAPS_START 0x34
-#define PCI_CFG_SPACE_SIZE 0x100
+#define PCI_EXT_CAPS_START 0x100
 
 enum pci_cap_id {
 	PCI_EXPRESS_CAP_ID = 0x10
@@ -27,6 +27,11 @@ enum pci_cap_id {
 #define  PCI_SLOT_PWR_CTRL_PRESENT (1 << 1)
 
 int find_pci_cap_offset(struct pci_device *dev, enum pci_cap_id cap_id);
+int igt_pci_config_raw_read(const char *pci_slot, void *buffer, size_t length);
+uint16_t igt_pci_config_raw_read_u16(const uint8_t *config, unsigned int offset);
+uint32_t igt_pci_config_raw_read_u32(const uint8_t *config, unsigned int offset);
+int igt_pci_config_raw_find_cap_offset(const uint8_t *config, uint8_t cap_id);
+int igt_pci_config_raw_find_ext_cap_offset(const uint8_t *config, uint16_t cap_id);
 int igt_pci_device_unbind(const char *pci_slot);
 int igt_pci_driver_bind(const char *driver, const char *pci_slot);
 int igt_pci_driver_unbind(const char *driver, const char *pci_slot);

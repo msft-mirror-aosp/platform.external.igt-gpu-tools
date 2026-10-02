@@ -14,37 +14,74 @@
 #include "igt_aux.h"
 #include "igt_core.h"
 #include "igt_pci.h"
+#include "igt_pci_regs.h"
 #include "igt_sysfs.h"
+
+typedef int (*pci_cap_read_u16_fn)(void *ctx, unsigned int offset, uint16_t *val);
+
+/*
+ * Walk the standard capability list starting at @cap_ptr, the value of the
+ * capability pointer (e.g. read from PCI_CAPS_START). Returns the offset of
+ * the capability with @cap_id (any capability if 0), 0 if not found, or a
+ * negative errno: -EIO on read failure, -ENODEV if config space is
+ * inaccessible (reads back as 0xff), -EINVAL if a pointer points into the
+ * header, -ELOOP if the list doesn't terminate.
+ */
+static int pci_cap_walk(uint8_t cap_ptr, uint8_t cap_id,
+			pci_cap_read_u16_fn read_u16, void *ctx)
+{
+	int loop = (PCI_CFG_SPACE_SIZE - PCI_TYPE0_1_HEADER_SIZE) / sizeof(uint16_t);
+
+	while (loop--) {
+		uint16_t cap_header;
+
+		if (!cap_ptr)
+			return 0;
+
+		if (cap_ptr == 0xff)
+			return -ENODEV;
+
+		if (cap_ptr < PCI_TYPE0_1_HEADER_SIZE)
+			return -EINVAL;
+
+		/* The two low bits of capability pointers are reserved */
+		cap_ptr &= 0xfc;
+
+		if (read_u16(ctx, cap_ptr, &cap_header))
+			return -EIO;
+
+		if (!cap_id || cap_id == (cap_header & 0xff))
+			return cap_ptr;
+
+		cap_ptr = cap_header >> 8;
+	}
+
+	return cap_ptr ? -ELOOP : 0;
+}
+
+static int pciaccess_read_u16(void *ctx, unsigned int offset, uint16_t *val)
+{
+	return pci_device_cfg_read_u16(ctx, val, offset);
+}
 
 static int find_pci_cap_offset_at(struct pci_device *dev, enum pci_cap_id cap_id,
 				  int start_offset)
 {
-	uint8_t offset = 0xff;
-	uint16_t cap_header = 0xffff;
-	int loop = (PCI_CFG_SPACE_SIZE - PCI_TYPE0_1_HEADER_SIZE)
-			/ sizeof(cap_header);
+	uint8_t cap_ptr;
+	int ret;
 
-	if (pci_device_cfg_read_u8(dev, &offset, start_offset))
+	if (pci_device_cfg_read_u8(dev, &cap_ptr, start_offset))
 		return -1;
 
-	while (loop--) {
-		igt_assert_f(offset != 0xff, "pci config space inaccessible\n");
+	ret = pci_cap_walk(cap_ptr, cap_id, pciaccess_read_u16, dev);
+	igt_assert_f(ret != -ENODEV, "pci config space inaccessible\n");
+	igt_fail_on_f(ret == -ELOOP, "pci capability offset doesn't terminate\n");
 
-		if (offset < PCI_TYPE0_1_HEADER_SIZE)
-			break;
+	/* A pointer into the header has always terminated the list here */
+	if (ret == -EINVAL)
+		return 0;
 
-		if (pci_device_cfg_read_u16(dev, &cap_header, (offset & 0xFC)))
-			return -1;
-
-		if (!cap_id || cap_id == (cap_header & 0xFF))
-			return offset;
-
-		offset = cap_header >> 8;
-	}
-
-	igt_fail_on_f(loop <= 0 && offset, "pci capability offset doesn't terminate\n");
-
-	return 0;
+	return ret == -EIO ? -1 : ret;
 }
 
 /**
@@ -59,6 +96,122 @@ static int find_pci_cap_offset_at(struct pci_device *dev, enum pci_cap_id cap_id
 int find_pci_cap_offset(struct pci_device *dev, enum pci_cap_id cap_id)
 {
 	return find_pci_cap_offset_at(dev, cap_id, PCI_CAPS_START);
+}
+
+/**
+ * igt_pci_config_raw_read:
+ * @pci_slot: PCI device BDF (e.g. "0000:01:00.0")
+ * @buffer: destination buffer
+ * @length: number of configuration-space bytes to read
+ *
+ * Read raw PCI configuration space through the device sysfs config attribute.
+ *
+ * Returns 0 on success, otherwise a negative errno-like value.
+ */
+int igt_pci_config_raw_read(const char *pci_slot, void *buffer, size_t length)
+{
+	char path[PATH_MAX];
+	ssize_t ret;
+	int err;
+	int fd;
+
+	if (!pci_slot || !buffer || !length)
+		return -EINVAL;
+
+	snprintf(path, sizeof(path), "/sys/bus/pci/devices/%s/config", pci_slot);
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -errno;
+
+	ret = pread(fd, buffer, length, 0);
+	err = errno;
+	close(fd);
+	if (ret < 0)
+		return -err;
+
+	return (size_t)ret == length ? 0 : -EIO;
+}
+
+/**
+ * igt_pci_config_raw_read_u16:
+ * @config: raw configuration space buffer
+ * @offset: byte offset within @config
+ *
+ * Returns the little-endian 16-bit value at @offset.
+ */
+uint16_t igt_pci_config_raw_read_u16(const uint8_t *config, unsigned int offset)
+{
+	return config[offset] | (config[offset + 1] << 8);
+}
+
+/**
+ * igt_pci_config_raw_read_u32:
+ * @config: raw configuration space buffer
+ * @offset: byte offset within @config
+ *
+ * Returns the little-endian 32-bit value at @offset.
+ */
+uint32_t igt_pci_config_raw_read_u32(const uint8_t *config, unsigned int offset)
+{
+	return igt_pci_config_raw_read_u16(config, offset) |
+	       ((uint32_t)igt_pci_config_raw_read_u16(config, offset + 2) << 16);
+}
+
+static int raw_read_u16(void *ctx, unsigned int offset, uint16_t *val)
+{
+	*val = igt_pci_config_raw_read_u16(ctx, offset);
+
+	return 0;
+}
+
+/**
+ * igt_pci_config_raw_find_cap_offset:
+ * @config: raw configuration space, at least PCI_CFG_SPACE_SIZE bytes
+ * @cap_id: searched standard capability id
+ *
+ * Returns the capability offset, 0 if not found, -ENODEV if config space
+ * is inaccessible, -EINVAL if the capability list points into the header or
+ * -ELOOP if the capability list doesn't terminate.
+ */
+int igt_pci_config_raw_find_cap_offset(const uint8_t *config, uint8_t cap_id)
+{
+	return pci_cap_walk(config[PCI_CAPS_START], cap_id, raw_read_u16,
+			    (void *)config);
+}
+
+/**
+ * igt_pci_config_raw_find_ext_cap_offset:
+ * @config: raw configuration space, at least PCI_CFG_SPACE_EXP_SIZE bytes
+ * @cap_id: searched extended capability id
+ *
+ * Returns the extended capability offset, 0 if not found or the extended
+ * configuration space is not accessible, -EINVAL if the list points outside
+ * the extended configuration space or -ELOOP if it doesn't terminate.
+ */
+int igt_pci_config_raw_find_ext_cap_offset(const uint8_t *config, uint16_t cap_id)
+{
+	unsigned int offset = PCI_EXT_CAPS_START;
+	unsigned int loop = (PCI_CFG_SPACE_EXP_SIZE - offset) / 4;
+
+	while (loop) {
+		uint32_t header = igt_pci_config_raw_read_u32(config, offset);
+
+		loop--;
+
+		/* All ones: extended config space is not accessible */
+		if (!header || header == 0xffffffff)
+			return 0;
+		if ((header & 0xffff) == cap_id)
+			return offset;
+
+		offset = (header >> 20) & 0xffc;
+		if (!offset)
+			return 0;
+		if (offset < PCI_EXT_CAPS_START)
+			return -EINVAL;
+	}
+
+	return -ELOOP;
 }
 
 static int open_pci_driver_dir(const char *driver)
