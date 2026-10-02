@@ -116,6 +116,7 @@ igt@sriov_basic@bind-unbind-vf$
 ##################################################################
 # SR-IOV tests for HW checkout, not suited for recurring CI runs
 ##################################################################
+igt@sriov_pci_config.*
 igt@xe_sriov_ggtt.*
 ##################################################################
 # Chamelium V1 HDMI receiver supports a maximum resolution
