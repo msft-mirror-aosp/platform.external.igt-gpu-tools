@@ -2480,7 +2480,7 @@ static int open_comms_if_valid(int resdirfd, size_t testidx)
 
 static int write_endtime(int resdirfd, double a_time)
 {
-	int timefd = openat(resdirfd, "endtime.txt", O_CREAT | O_WRONLY | O_EXCL, 0666);
+	int timefd = openat(resdirfd, "endtime.txt", O_CREAT | O_WRONLY | O_TRUNC, 0666);
 
 	if (timefd >= 0) {
 		dprintf(timefd, "%f\n", a_time);
