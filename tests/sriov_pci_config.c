@@ -42,6 +42,21 @@
  * Description: Validate that the Current De-emphasis Level field in Link
  * Status 2 is RsvdZ and therefore reads as zero for PCIe Capability Version 2
  * and later.
+ *
+ * SUBTEST: vf-power-management-capability
+ * Description: Validate that Data Select in Power Management Control and
+ * Power Management Data are ROZ and therefore read as zero when the optional
+ * Power Management capability is present.
+ *
+ * SUBTEST: vf-advanced-error-reporting
+ * Description: Validate that the specified ROZ bits in AER Uncorrectable
+ * Error Status, Mask, and Severity, and Correctable Error Status read as zero
+ * when the optional AER capability is present.
+ *
+ * SUBTEST: vf-ats-capability
+ * Description: Validate that ATS Queue Depth and the Smallest Translation Unit
+ * (STU) are ROZ and therefore read as zero when the optional ATS capability
+ * is present.
  */
 
 IGT_TEST_DESCRIPTION("Validate PCI configuration fields required for SR-IOV, "
@@ -160,6 +175,85 @@ static void check_vf_pcie_capabilities_2(const uint8_t *config)
 		     lnksta2);
 }
 
+static int get_optional_cap(const uint8_t *config, uint8_t cap_id, const char *name)
+{
+	int cap = igt_pci_config_raw_find_cap_offset(config, cap_id);
+
+	igt_assert_f(cap >= 0, "Invalid VF PCI capability list (%d)\n", cap);
+	if (!cap)
+		igt_skip("%s\n", name);
+
+	return cap;
+}
+
+static int get_optional_ext_cap(const uint8_t *config, uint16_t cap_id, const char *name)
+{
+	int cap = igt_pci_config_raw_find_ext_cap_offset(config, cap_id);
+
+	igt_assert_f(cap >= 0, "Invalid VF extended capability list (%d)\n", cap);
+	if (!cap)
+		igt_skip("%s\n", name);
+
+	return cap;
+}
+
+static void check_vf_power_management_capability(const uint8_t *config)
+{
+	int pm_cap = get_optional_cap(config, PCI_CAP_ID_PM,
+				     "Power Management capability is not present");
+	uint16_t pm_ctrl = igt_pci_config_raw_read_u16(config, pm_cap + PCI_PM_CTRL);
+	uint8_t pm_data = config[pm_cap + PCI_PM_DATA_REGISTER];
+
+	igt_assert_f(!(pm_ctrl & PCI_PM_CTRL_DATA_SEL_MASK),
+		     "Power Management Control: Data Select must be zero (0x%04x)\n", pm_ctrl);
+	igt_assert_f(!pm_data, "Power Management Data: expected 0x00, got 0x%02x\n", pm_data);
+}
+
+static void check_vf_advanced_error_reporting(const uint8_t *config)
+{
+	const uint32_t uncor_roz = PCI_ERR_UNC_DLP | PCI_ERR_UNC_SURPDN |
+				   PCI_ERR_UNC_FCP | PCI_ERR_UNC_RX_OVER |
+				   PCI_ERR_UNC_MALF_TLP | PCI_ERR_UNC_ECRC;
+	const uint32_t cor_roz = PCI_ERR_COR_RCVR | PCI_ERR_COR_BAD_TLP |
+					 PCI_ERR_COR_REP_ROLL | PCI_ERR_COR_REP_TIMER;
+	int aer_cap = get_optional_ext_cap(config, PCI_EXT_CAP_ID_ERR,
+					   "Advanced Error Reporting capability is not present");
+	uint32_t uncor_status = igt_pci_config_raw_read_u32(config,
+							     aer_cap + PCI_ERR_UNCOR_STATUS);
+	uint32_t uncor_mask = igt_pci_config_raw_read_u32(config,
+							   aer_cap + PCI_ERR_UNCOR_MASK);
+	uint32_t uncor_severity = igt_pci_config_raw_read_u32(config,
+							       aer_cap + PCI_ERR_UNCOR_SEVER);
+	uint32_t cor_status = igt_pci_config_raw_read_u32(config,
+							   aer_cap + PCI_ERR_COR_STATUS);
+
+	igt_assert_f(!(uncor_status & uncor_roz),
+		     "AER Uncorrectable Error Status: VF ROZ bits are set (0x%08x)\n",
+		     uncor_status);
+	igt_assert_f(!(uncor_mask & uncor_roz),
+		     "AER Uncorrectable Error Mask: VF ROZ bits are set (0x%08x)\n",
+		     uncor_mask);
+	igt_assert_f(!(uncor_severity & uncor_roz),
+		     "AER Uncorrectable Error Severity: VF ROZ bits are set (0x%08x)\n",
+		     uncor_severity);
+	igt_assert_f(!(cor_status & cor_roz),
+		     "AER Correctable Error Status: VF ROZ bits are set (0x%08x)\n",
+		     cor_status);
+}
+
+static void check_vf_ats_capability(const uint8_t *config)
+{
+	int ats_cap = get_optional_ext_cap(config, PCI_EXT_CAP_ID_ATS,
+					   "ATS capability is not present");
+	uint16_t ats_capability = igt_pci_config_raw_read_u16(config, ats_cap + PCI_ATS_CAP);
+	uint16_t ats_control = igt_pci_config_raw_read_u16(config, ats_cap + PCI_ATS_CTRL);
+
+	igt_assert_f(!PCI_ATS_CAP_QDEP(ats_capability),
+		     "ATS Capability: Queue Depth must be zero (0x%04x)\n", ats_capability);
+	igt_assert_f(!PCI_ATS_CTRL_STU(ats_control),
+		     "ATS Control: STU must be zero (0x%04x)\n", ats_control);
+}
+
 int igt_main()
 {
 	uint8_t vf_config[PCI_CFG_SPACE_EXP_SIZE];
@@ -198,6 +292,21 @@ int igt_main()
 	igt_describe("Validate the VF PCI Express Capability Version 2 fields");
 	igt_subtest("vf-pcie-capabilities-2") {
 		check_vf_pcie_capabilities_2(vf_config);
+	}
+
+	igt_describe("Validate the optional VF Power Management capability");
+	igt_subtest("vf-power-management-capability") {
+		check_vf_power_management_capability(vf_config);
+	}
+
+	igt_describe("Validate the optional VF AER capability");
+	igt_subtest("vf-advanced-error-reporting") {
+		check_vf_advanced_error_reporting(vf_config);
+	}
+
+	igt_describe("Validate the optional VF ATS capability");
+	igt_subtest("vf-ats-capability") {
+		check_vf_ats_capability(vf_config);
 	}
 
 	igt_fixture() {
