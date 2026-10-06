@@ -434,14 +434,14 @@ void igt_require_memory(uint64_t count, uint64_t size, unsigned mode)
 
 		info = igt_sysfs_get(dir, "meminfo");
 		if (info) {
-			igt_warn("Insufficient free memory; /proc/meminfo:\n%s",
+			igt_warn("Insufficient free memory; /proc/meminfo:\n%s\n",
 				 info);
 			free(info);
 		}
 
 		info = igt_sysfs_get(dir, "slabinfo");
 		if (info) {
-			igt_warn("Insufficient free memory; /proc/slabinfo:\n%s",
+			igt_warn("Insufficient free memory; /proc/slabinfo:\n%s\n",
 				 info);
 			free(info);
 		}
