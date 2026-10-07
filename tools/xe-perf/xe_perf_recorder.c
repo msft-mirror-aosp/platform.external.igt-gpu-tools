@@ -370,6 +370,7 @@ struct recording_context {
 	uint32_t vm;
 	uint32_t exec_queue;
 	struct intel_bb *ibb;
+	uint32_t mmio_trg_val;
 };
 
 static uint32_t oa_unit_mmio_trigger_reg(struct recording_context *ctx)
@@ -642,13 +643,15 @@ check_mmio_trigger_report(struct recording_context *ctx, const void *report)
 	const uint32_t *report_32 = report;
 	uint64_t value;
 
-	if (report_reason(report_32))
+	if (!ctx->mmio_trg_val || report_reason(report_32))
 		return;
 
 	value = (fmt->header == HDR_64_BIT) ? ((const uint64_t *)report)[2] : report_32[2];
 
-	if (value == 0xc0ffee01 || value == 0xc0ffee02)
+	if (value == ctx->mmio_trg_val) {
 		fprintf(stdout, "Received trigger report with value 0x%" PRIx64 "\n", value);
+		ctx->mmio_trg_val = 0;
+	}
 }
 
 static bool write_stream_data(struct recording_context *ctx,
@@ -710,6 +713,21 @@ static bool write_perf_data(FILE *output, struct recording_context *ctx)
 
 	/* Should not reach here */
 	return false;
+}
+
+static bool write_mmio_trigger_data(struct recording_context *ctx)
+{
+	struct pollfd pollfd = { .fd = ctx->perf_fd, .events = POLLIN };
+
+	while (ctx->mmio_trg_val) {
+		poll(&pollfd, 1, -1);
+		assert(pollfd.revents & POLLIN);
+
+		if (!write_perf_data(ctx->output_stream, ctx))
+			return false;
+	}
+
+	return true;
 }
 
 static clock_t correlation_clock_id = CLOCK_MONOTONIC;
@@ -790,23 +808,27 @@ static void emit_mmio_triggered_report(struct intel_bb *ibb, uint32_t reg, uint3
 	intel_bb_out(ibb, value);
 }
 
-static void emit_oa_trigger(struct recording_context *ctx, uint32_t value)
+static bool emit_oa_trigger(struct recording_context *ctx, uint32_t value)
 {
 	emit_mmio_triggered_report(ctx->ibb, oa_unit_mmio_trigger_reg(ctx), value);
 
 	intel_bb_flush_render(ctx->ibb);
 	intel_bb_sync(ctx->ibb);
 	intel_bb_reset(ctx->ibb, false);
+
+	ctx->mmio_trg_val = value;
+
+	return write_mmio_trigger_data(ctx);
 }
 
-static void
+static bool
 read_command_file(struct recording_context *ctx)
 {
 	struct recorder_command_base header;
 	ssize_t ret = read(ctx->command_fifo_fd, &header, sizeof(header));
 
 	if (ret < 0)
-		return;
+		return true;
 
 	switch (header.command) {
 	case RECORDER_COMMAND_DUMP: {
@@ -814,8 +836,10 @@ read_command_file(struct recording_context *ctx)
 		uint8_t *dump = malloc(len);
 		FILE *file;
 
-		emit_oa_trigger(ctx, 0xc0ffee02);
-		write_perf_data(ctx->output_stream, ctx);
+		if (!emit_oa_trigger(ctx, 0xc0ffee02)) {
+			free(dump);
+			return false;
+		}
 
 		while (offset < len &&
 		       ((ret = read(ctx->command_fifo_fd,
@@ -859,6 +883,8 @@ read_command_file(struct recording_context *ctx)
 		fprintf(stderr, "Unknown command 0x%x\n", header.command);
 		break;
 	}
+
+	return true;
 }
 
 static void
@@ -1320,7 +1346,11 @@ main(int argc, char *argv[])
 	}
 
 	init_mmio_trigger_ctx(&ctx);
-	emit_oa_trigger(&ctx, 0xc0ffee01);
+	if (!emit_oa_trigger(&ctx, 0xc0ffee01)) {
+		fprintf(stderr, "Failed to write xe-oa data: %s\n",
+			strerror(errno));
+		goto fail;
+	}
 
 	corr_period_ns = corr_period * 1000000000ul;
 	poll_time_ns = corr_period_ns;
@@ -1351,7 +1381,11 @@ main(int argc, char *argv[])
 			}
 
 			if (pollfd[1].revents & POLLIN) {
-				read_command_file(&ctx);
+				if (!read_command_file(&ctx)) {
+					fprintf(stderr, "Failed to write xe-oa data: %s\n",
+						strerror(errno));
+					break;
+				}
 			}
 		}
 
@@ -1370,7 +1404,10 @@ main(int argc, char *argv[])
 	}
 
 	/* Emit second OA trigger for the case where circular buffer is not used */
-	emit_oa_trigger(&ctx, 0xc0ffee02);
+	if (!emit_oa_trigger(&ctx, 0xc0ffee02))
+		fprintf(stderr, "Failed to write xe-oa data: %s\n",
+			strerror(errno));
+
 	fprintf(stdout, "Exiting...\n");
 
 	if (!write_perf_data(ctx.output_stream, &ctx)) {
