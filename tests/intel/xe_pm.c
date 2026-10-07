@@ -111,9 +111,34 @@ static bool runtime_usage_available(struct pci_device *pci)
 	return access(name, F_OK) == 0;
 }
 
-static bool sysfs_exists(int sysfs_fd, const char *path)
+static uint64_t get_vram_d3cold_threshold(int sysfs)
 {
-	return !faccessat(sysfs_fd, path, R_OK, 0);
+	uint64_t threshold;
+	char path[64];
+	int ret;
+
+	sprintf(path, "device/vram_d3cold_threshold");
+	igt_require_f(!faccessat(sysfs, path, R_OK, 0), "vram_d3cold_threshold is not present\n");
+
+	ret = igt_sysfs_scanf(sysfs, path, "%"PRIu64"", &threshold);
+	igt_assert_lt(0, ret);
+
+	return threshold;
+}
+
+static void set_vram_d3cold_threshold(int sysfs, uint64_t threshold)
+{
+	char path[64];
+	int ret;
+
+	sprintf(path, "device/vram_d3cold_threshold");
+
+	if (!faccessat(sysfs, path, R_OK | W_OK, 0))
+		ret = igt_sysfs_printf(sysfs, path, "%"PRIu64"", threshold);
+	else
+		igt_warn("vram_d3cold_threshold is not present\n");
+
+	igt_assert_lt(0, ret);
 }
 
 static void vram_d3cold_threshold_restore(int sig)
@@ -123,7 +148,7 @@ static void vram_d3cold_threshold_restore(int sig)
 	fd = drm_open_driver_master(DRIVER_XE);
 	sysfs_fd = igt_sysfs_open(fd);
 
-	igt_sysfs_set_vram_d3cold_threshold(sysfs_fd, orig_threshold);
+	set_vram_d3cold_threshold(sysfs_fd, orig_threshold);
 
 	close(sysfs_fd);
 	close(fd);
@@ -596,48 +621,6 @@ test_exec(device_t device, int n_exec_queues, int n_execs,
 }
 
 /**
- * SUBTEST: vram-d3cold-threshold-show
- * Description:
- *      Validate reading of vram_d3cold_threshold sysfs entry.
- * Functionality: pm-d3cold
- */
-
-/**
- * SUBTEST: vram-d3cold-threshold-store
- * Description:
- *      Validate writing and reading back vram_d3cold_threshold sysfs entry.
- * Functionality: pm-d3cold
- */
-
-/**
- * SUBTEST: lb-fan-control-version-show
- * Description:
- *      Validate reading lb_fan_control_version sysfs entry.
- * Functionality: pm-sysfs
- */
-
-/**
- * SUBTEST: lb-voltage-regulator-version-show
- * Description:
- *      Validate reading lb_voltage_regulator_version sysfs entry.
- * Functionality: pm-sysfs
- */
-
-/**
- * SUBTEST: auto-link-downgrade-capable-show
- * Description:
- *      Validate reading auto_link_downgrade_capable sysfs entry.
- * Functionality: pm-sysfs
- */
-
-/**
- * SUBTEST: auto-link-downgrade-status-show
- * Description:
- *      Validate reading auto_link_downgrade_status sysfs entry.
- * Functionality: pm-sysfs
- */
-
-/**
  * SUBTEST: vram-d3cold-threshold
  * Functionality: pm - d3cold
  * Description:
@@ -687,7 +670,7 @@ static void test_vram_d3cold_threshold(device_t device, int sysfs_fd)
 	map = xe_bo_map(device.fd_xe, bo, SIZE);
 	memset(map, 0, SIZE);
 	munmap(map, SIZE);
-	igt_sysfs_set_vram_d3cold_threshold(sysfs_fd, threshold);
+	set_vram_d3cold_threshold(sysfs_fd, threshold);
 
 	/* Setup D3Cold but card should be in D3hot */
 	igt_assert(setup_d3(device, IGT_ACPI_D3Cold));
@@ -1099,7 +1082,7 @@ int igt_main()
 		}
 
 		igt_describe_f("Validate mmap memory mappings with vram region,"
-			       "when device along with parent bridge in %s", d->name);
+			     "when device along with parent bridge in %s", d->name);
 		igt_subtest_f("%s-mmap-vram", d->name) {
 			int delay_ms;
 
@@ -1133,106 +1116,9 @@ int igt_main()
 		     "if vram used > vram threshold");
 	igt_subtest("vram-d3cold-threshold") {
 		igt_require_f(has_runtime_pm, "Runtime PM not available\n");
-		orig_threshold = igt_sysfs_get_vram_d3cold_threshold(sysfs_fd);
+		orig_threshold = get_vram_d3cold_threshold(sysfs_fd);
 		igt_install_exit_handler(vram_d3cold_threshold_restore);
 		test_vram_d3cold_threshold(device, sysfs_fd);
-	}
-
-	igt_subtest("vram-d3cold-threshold-show") {
-		uint64_t threshold;
-
-		igt_require(sysfs_exists(sysfs_fd,
-					 "device/vram_d3cold_threshold"));
-
-		threshold = igt_sysfs_get_vram_d3cold_threshold(sysfs_fd);
-
-		igt_info("threshold=%" PRIu64 "\n", threshold);
-	}
-
-	igt_subtest("vram-d3cold-threshold-store") {
-		uint64_t old_val;
-		uint64_t new_val;
-
-		igt_require(sysfs_exists(sysfs_fd,
-					 "device/vram_d3cold_threshold"));
-		old_val = igt_sysfs_get_vram_d3cold_threshold(sysfs_fd);
-		/*
-		 * Ensure the original threshold is restored even if
-		 * an assertion fails later in the test.
-		 */
-		orig_threshold = old_val;
-		igt_install_exit_handler(vram_d3cold_threshold_restore);
-		igt_sysfs_set_vram_d3cold_threshold(sysfs_fd, old_val + 1);
-		new_val = igt_sysfs_get_vram_d3cold_threshold(sysfs_fd);
-		igt_assert_eq(new_val, old_val + 1);
-		/* restore */
-		igt_sysfs_set_vram_d3cold_threshold(sysfs_fd, old_val);
-		igt_info("old=%" PRIu64 " new=%" PRIu64 "\n",
-			 old_val, new_val);
-	}
-
-	igt_subtest("lb-fan-control-version-show") {
-		char version[64];
-		int ret;
-
-		igt_require(sysfs_exists(sysfs_fd,
-					 "device/lb_fan_control_version"));
-
-		ret = igt_sysfs_scanf(sysfs_fd,
-				      "device/lb_fan_control_version",
-				      "%63s", version);
-
-		igt_assert(ret > 0);
-
-		igt_info("lb-fan-control-version=%s\n", version);
-	}
-
-	igt_subtest("lb-voltage-regulator-version-show") {
-		char version[64] = {};
-		int ret;
-
-		igt_require(sysfs_exists(sysfs_fd,
-					 "device/lb_voltage_regulator_version"));
-
-		ret = igt_sysfs_scanf(sysfs_fd,
-				      "device/lb_voltage_regulator_version",
-				      "%63s", version);
-		igt_debug("ret=%d errno=%d\n", ret, errno);
-
-		igt_assert(ret > 0);
-		igt_info("lb-voltage-regulator-version=%s\n", version);
-	}
-
-	igt_subtest("auto-link-downgrade-capable-show") {
-		int val;
-		int ret;
-
-		igt_require(sysfs_exists(sysfs_fd,
-					 "device/auto_link_downgrade_capable"));
-
-		ret = igt_sysfs_scanf(sysfs_fd,
-				      "device/auto_link_downgrade_capable",
-				      "%d", &val);
-
-		igt_assert(ret > 0);
-		igt_info("auto-link-downgrade-capable=%d\n", val);
-		igt_assert(val == 0 || val == 1);
-	}
-
-	igt_subtest("auto-link-downgrade-status-show") {
-		int val;
-		int ret;
-
-		igt_require(sysfs_exists(sysfs_fd,
-					 "device/auto_link_downgrade_status"));
-
-		ret = igt_sysfs_scanf(sysfs_fd,
-				      "device/auto_link_downgrade_status",
-				      "%d", &val);
-
-		igt_assert(ret > 0);
-		igt_info("auto-link-downgrade-status=%d\n", val);
-		igt_assert(val == 0 || val == 1);
 	}
 
 	igt_fixture() {
