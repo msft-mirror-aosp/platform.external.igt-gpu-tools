@@ -61,11 +61,17 @@ static void test_set_property(int xe, int property_name,
 		.property = property_name,
 		.value = property_value,
 	};
+	uint32_t vm;
 	uint32_t exec_queue_id;
 
-	igt_assert_eq(__xe_exec_queue_create(xe, xe_vm_create(xe, 0, 0), 1, 1,
-					     &instance, to_user_pointer(&ext),
+	vm = xe_vm_create(xe, 0, 0);
+
+	igt_assert_eq(__xe_exec_queue_create(xe, vm, 1, 1, &instance,
+					     to_user_pointer(&ext),
 					     &exec_queue_id), err_val);
+	if (!err_val)
+		xe_exec_queue_destroy(xe, exec_queue_id);
+	xe_vm_destroy(xe, vm);
 }
 
 static void test_property_min_max(int xe, int engine, const char **property,
