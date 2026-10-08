@@ -528,39 +528,6 @@ void igt_platform_filter_dump(void)
 }
 
 /**
- * igt_platform_filter_dump_to_file:
- * @filename: Path to output file
- *
- * Dump platform filtering configuration to a file.
- *
- * Returns: 0 on success, -1 on error
- */
-int igt_platform_filter_dump_to_file(const char *filename)
-{
-	FILE *old_stdout;
-	FILE *f;
-
-	f = fopen(filename, "w");
-	if (!f) {
-		igt_warn("Failed to open %s for writing\n", filename);
-		return -1;
-	}
-
-	/* Redirect stdout to file */
-	old_stdout = stdout;
-	stdout = f;
-
-	igt_platform_filter_dump();
-
-	/* Restore stdout */
-	stdout = old_stdout;
-	fclose(f);
-
-	igt_info("Platform filter configuration dumped to: %s\n", filename);
-	return 0;
-}
-
-/**
  * igt_platform_filter_is_initialized:
  *
  * Check if platform filtering has been initialized.
