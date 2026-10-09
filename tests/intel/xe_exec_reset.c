@@ -928,12 +928,12 @@ static int try_vm_create(int fd)
 
 static void ignore_gt_reset_fault_dmesg(void)
 {
-	igt_emit_ignore_dmesg_regex("\\(-ECANCELED\\) .* GT: reset failed"
-				    "|\\(-EIO\\) WEDGED: Device declared wedged"
+	igt_emit_ignore_dmesg_regex("-ECANCELED.* GT: reset failed"
+				    "|-EIO. WEDGED: Device declared wedged"
 				    "|IOCTLs and executions are now blocked"
 				    "|For recovery procedure, refer to"
 				    "|Please file a _new_ bug report at"
-				    "|Failed to invalidate GGTT \\(-ENOTRECOVERABLE\\)"
+				    "|Failed to invalidate GGTT .-ENOTRECOVERABLE"
 				    "|GPU HANG"
 				    "|Failed to reset");
 }
