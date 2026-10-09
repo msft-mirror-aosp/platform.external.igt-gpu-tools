@@ -41,6 +41,10 @@ static void ignore_wedged_in_dmesg(void)
 				    "|GT[0-9A-Fa-f]*: Failed to submit"
 				    "|Modules linked in:"
 				    "|__pfx___drm_"
+				    /* SIGID-based logging (newer kernels) */
+				    "|-ECANCELED.* GT: reset failed"
+				    "|-EIO. WEDGED: Device declared wedged"
+				    "|IOCTLs and executions are now blocked"
 				    "|Tile[0-9]+: GT[0-9A-Fa-f]*:$"
 				    "|ASID: [0-9]+"
 				    "|Faulted Address: 0x[0-9A-Fa-f]+"
@@ -50,8 +54,7 @@ static void ignore_wedged_in_dmesg(void)
 				    "|EngineClass: [0-9]+ [a-z]+"
 				    "|EngineInstance: [0-9]+"
 				    "|Tile[0-9]+: GT[0-9A-Fa-f]*: Fault response: Unsuccessful -EINVAL"
-				    "|Tile[0-9]+: GT[0-9A-Fa-f]*: Engine memory CAT error \\[[0-9]+\\]:"
-				    "class=[a-z]+, logical_mask: 0x[0-9A-Fa-f]+, guc_id=[0-9]+");
+				    "|Tile[0-9]+: GT[0-9A-Fa-f]*: Engine memory CAT error");
 }
 
 static void force_wedged(int fd)
