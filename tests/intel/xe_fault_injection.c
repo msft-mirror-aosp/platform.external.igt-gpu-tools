@@ -70,9 +70,12 @@ static void ignore_dmesg_errors_from_dut(const char pci_slot[])
 	/*
 	 * Driver probe is expected to fail in all cases.
 	 * Additionally, error-level reports are expected,
-	 * so ignore these in igt_runner.
+	 * so ignore these in igt_runner, e.g.:
+	 *
+	 *   xe 0000:03:00.0: [drm] *ERROR* Tile0: GT0: GuC init failed with -ENOMEM
+	 *   xe 0000:03:00.0: probe with driver xe failed with error -12
 	 */
-	static const char *store = "probe with driver xe failed with error|\\*ERROR\\*";
+	static const char *store = "probe with driver xe failed with error|[*]ERROR[*]";
 	char regex[1024];
 
 	/* Only block dmesg reports that target the pci slot of the given fd */
