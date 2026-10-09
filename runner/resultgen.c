@@ -877,6 +877,33 @@ static void clean_regex(GRegex **re)
 	*re = NULL;
 }
 
+/*
+ * Decode the "\\xNN" escapes that /dev/kmsg uses for '\\' and non-printable
+ * characters. @dst may be the same as @src, as the decoded string is never
+ * longer than the original.
+ */
+static void decode_kmsg_escapes(char *dst, const char *src)
+{
+	size_t len = strlen(src);
+	const char *p;
+
+	for (p = src; *p; p++, dst++) {
+		if (p - src + 3 < len &&
+		    p[0] == '\\' && p[1] == 'x') {
+			int c = 0;
+			/* newline and tab are not isprint(), but they are isspace() */
+			if (sscanf(p, "\\x%2x", &c) == 1 &&
+			    (isprint(c) || isspace(c))) {
+				*dst = c;
+				p += 3;
+				continue;
+			}
+		}
+		*dst = *p;
+	}
+	*dst = '\0';
+}
+
 static void add_ignored_regex(GRegex **re, char *src)
 {
 	char *s;
@@ -884,6 +911,9 @@ static void add_ignored_regex(GRegex **re, char *src)
 	s = strchr(src, '\n');
 	if (s)
 		*s = 0;
+
+	/* The regex was emitted via /dev/kmsg, undo its escaping */
+	decode_kmsg_escapes(src, src);
 
 	if (*re)
 		g_regex_unref(*re);
@@ -929,7 +959,6 @@ static void generate_formatted_dmesg_line(char *message,
 	char prefix[512];
 	size_t messagelen;
 	size_t prefixlen;
-	char *p, *f;
 
 	snprintf(prefix, sizeof(prefix),
 		 "<%u> [%llu.%06llu] ",
@@ -947,22 +976,7 @@ static void generate_formatted_dmesg_line(char *message,
 	*formatted = malloc(strlen(prefix) + messagelen + 1);
 	strcpy(*formatted, prefix);
 
-	f = *formatted + prefixlen;
-	for (p = message; *p; p++, f++) {
-		if (p - message + 4 < messagelen &&
-		    p[0] == '\\' && p[1] == 'x') {
-			int c = 0;
-			/* newline and tab are not isprint(), but they are isspace() */
-			if (sscanf(p, "\\x%2x", &c) == 1 &&
-			    (isprint(c) || isspace(c))) {
-				*f = c;
-				p += 3;
-				continue;
-			}
-		}
-		*f = *p;
-	}
-	*f = '\0';
+	decode_kmsg_escapes(*formatted + prefixlen, message);
 }
 
 static void add_dmesg(struct json_t *obj,

@@ -9,5 +9,7 @@
 6,954,3216186101159,-;Kernel shouldn't output this but cutoff escape \x1
 6,954,3216186101159,-;More cutoff \x
 6,954,3216186101159,-;One more \
+14,954,3216186101159,-;[IGT] add ignored dmesg regex: \x5c(-ECANCELED\x5c) .* GT: reset failed
+3,954,3216186101159,-;xe 0000:03:00.0: [drm] *ERROR* SIGID=106 FATAL (-ECANCELED) Tile0: GT0: GT: reset failed
 14,955,3216186101160,-;[IGT] successtest: exiting, ret=0
 6,956,3216186101299,-;Console: switching to colour frame buffer device 240x75
