@@ -1898,13 +1898,10 @@ static void pipewire_reserve_wait(void)
 		setenv("HOME", homedir, 1);
 		setenv("XDG_RUNTIME_DIR",xdg_dir, 1);
 
-		/*
-		 * pw-reserve will run in background. It will only exit when
-		 * igt_kill_children() is called later on. So, it shouldn't
-		 * call igt_waitchildren(). Instead, just exit with the return
-		 * code from pw-reserve.
-		 */
-		exit(system("pw-reserve -n Audio0 -r"));
+		if (execlp("pw-reserve", "pw-reserve", "-n", "Audio0", "-r", NULL)) {
+			igt_warn("Failed to start pw-reserve: %s\n", strerror(errno));
+			exit(1);
+		}
 	}
 }
 
