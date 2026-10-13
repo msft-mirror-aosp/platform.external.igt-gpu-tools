@@ -106,6 +106,8 @@
  */
 #define TEST_DURATION_NS (5000000000ull)
 
+#define LOBF_IDLE_DURATION_NS (1000000000ull)
+
 enum {
 	TEST_BASIC = 1 << 0,
 	TEST_DPMS = 1 << 1,
@@ -1157,6 +1159,8 @@ static void test_lobf_dc3co(data_t *data, igt_crtc_t *crtc,
 						 IGT_INTEL_CHECK_DC3CO);
 
 	test_lobf(data, crtc, output, flags);
+
+	usleep(LOBF_IDLE_DURATION_NS / 1000);
 
 	dc3co_count_after = igt_read_dc_counter(data->debugfs_fd,
 						IGT_INTEL_CHECK_DC3CO);
