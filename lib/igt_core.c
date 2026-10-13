@@ -2652,13 +2652,6 @@ int igt_wait_helper(struct igt_helper_process *proc)
 	return status;
 }
 
-static bool helper_was_alive(struct igt_helper_process *proc,
-			     int status)
-{
-	return (WIFSIGNALED(status) &&
-		WTERMSIG(status) == (proc->use_SIGKILL ? SIGKILL : SIGTERM));
-}
-
 /**
  * igt_stop_helper:
  * @proc: #igt_helper_process structure
@@ -2670,17 +2663,21 @@ static bool helper_was_alive(struct igt_helper_process *proc,
 void igt_stop_helper(struct igt_helper_process *proc)
 {
 	int status;
+	int ret;
 
 	if (!proc->running) /* never even started */
 		return;
 
-	/* failure here means the pid is already dead and so waiting is safe */
-	kill(proc->pid, proc->use_SIGKILL ? SIGKILL : SIGTERM);
+	ret = waitpid(proc->pid, &status, WNOHANG);
 
-	status = igt_wait_helper(proc);
-	if (!helper_was_alive(proc, status))
+	if (ret == proc->pid)
 		igt_debug("Helper died too early with status=%d\n", status);
-	assert(helper_was_alive(proc, status));
+	else
+		kill(proc->pid, proc->use_SIGKILL ? SIGKILL : SIGTERM);
+
+	assert(ret == 0);
+
+	igt_wait_helper(proc);
 }
 
 static void children_exit_handler(int sig)
