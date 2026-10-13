@@ -110,7 +110,7 @@ static const char *stream_error_str(enum stream_error err)
 static char *parse_url_host(const char *url)
 {
 	static const char prefix[] = "http://";
-	char *colon;
+	const char *colon;
 
 	if (strstr(url, prefix) != url)
 		return NULL;
