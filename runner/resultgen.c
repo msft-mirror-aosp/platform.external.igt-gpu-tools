@@ -136,7 +136,7 @@ static char *find_line_starting_with(char *haystack, const char *needle, char *e
 
 static const char *next_line(const char *line, const char *bufend)
 {
-	char *ret;
+	const char *ret;
 
 	if (!line)
 		return NULL;
