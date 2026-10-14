@@ -100,7 +100,7 @@ static void test_race(int xe, struct drm_xe_engine_class_instance *eci)
 	driver_name = NULL;
 	igt_assert_eq(sync_file_get_status(sync_fence, &driver_name), 1);
 	igt_assert(driver_name);
-	igt_assert(!strcmp(driver_name, "drm_sched"));
+	igt_assert(!strcmp(driver_name, "detached-driver"));
 	free(driver_name);
 
 	sync[0].flags |= DRM_XE_SYNC_FLAG_SIGNAL;
