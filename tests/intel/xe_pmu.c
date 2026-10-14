@@ -117,6 +117,8 @@ static char xe_device[NAME_MAX];
 static bool autoprobe;
 static int total_exec_quantum;
 static bool has_engine_active_ticks;
+static unsigned int sriov_num_functions;
+static bool sriov_vfs_setup_started;
 
 #define test_each_engine(test, fd, hwe) \
 	igt_subtest_with_dynamic(test) \
@@ -999,6 +1001,7 @@ static unsigned int enable_and_provision_vfs(int fd)
 	num_vfs = total_vfs > 2 ? 2 : total_vfs;
 
 	/* Enable VF's */
+	sriov_vfs_setup_started = true;
 	igt_sriov_disable_driver_autoprobe(fd);
 	igt_sriov_enable_vfs(fd, num_vfs);
 	igt_require(igt_sriov_get_enabled_vfs(fd) == num_vfs);
@@ -1021,6 +1024,16 @@ static unsigned int enable_and_provision_vfs(int fd)
 	return num_vfs;
 }
 
+static void ensure_vfs_enabled(int fd)
+{
+	if (sriov_num_functions)
+		return;
+
+	igt_require_f(!sriov_vfs_setup_started,
+		      "VF setup failed in an earlier dynamic subtest; see its log\n");
+	sriov_num_functions = enable_and_provision_vfs(fd) + 1;
+}
+
 static void unprovision_and_disable_vfs(int fd)
 {
 	int ret;
@@ -1037,6 +1050,16 @@ static void unprovision_and_disable_vfs(int fd)
 	igt_abort_on_f(autoprobe != igt_sriov_is_driver_autoprobe_enabled(fd),
 		       "Failed to restore sriov_drivers_autoprobe value\n");
 	igt_sriov_clear_exit_handler();
+}
+
+static void cleanup_vfs_setup(int fd)
+{
+	if (!sriov_vfs_setup_started)
+		return;
+
+	unprovision_and_disable_vfs(fd);
+	sriov_vfs_setup_started = false;
+	sriov_num_functions = 0;
 }
 
 static void stash_gt_freq(int fd, uint32_t **stash_min, uint32_t **stash_max)
@@ -1190,28 +1213,29 @@ int igt_main()
 	}
 
 	igt_subtest_group() {
-		unsigned int num_fns;
-
-		igt_fixture()
-			num_fns = enable_and_provision_vfs(fd) + 1;
-
 		igt_describe("Validate engine activity on all functions");
-		test_each_engine("all-fn-engine-activity-load", fd, eci)
-			engine_activity_all_fn(fd, eci, num_fns);
+		test_each_engine("all-fn-engine-activity-load", fd, eci) {
+			ensure_vfs_enabled(fd);
+			engine_activity_all_fn(fd, eci, sriov_num_functions);
+		}
 
 		igt_describe("Validate per-function engine activity");
-		test_each_engine("fn-engine-activity-load", fd, eci)
-			for (int fn = 0; fn < num_fns; fn++)
-				engine_activity_fn(fd, eci, fn, XE_SRIOV_SCHED_PRIORITY_LOW);
+		test_each_engine("fn-engine-activity-load", fd, eci) {
+			ensure_vfs_enabled(fd);
+			for (int fn = 0; fn < sriov_num_functions; fn++)
+				engine_activity_fn(fd, eci, fn,
+						   XE_SRIOV_SCHED_PRIORITY_LOW);
+		}
 
 		igt_describe("Validate per-function engine activity when sched-if-idle is set");
 		test_each_engine("fn-engine-activity-sched-if-idle", fd, eci) {
-			for (int fn = 0; fn < num_fns; fn++)
+			ensure_vfs_enabled(fd);
+			for (int fn = 0; fn < sriov_num_functions; fn++)
 				engine_activity_fn(fd, eci, fn, XE_SRIOV_SCHED_PRIORITY_NORMAL);
 		}
 
 		igt_fixture()
-			unprovision_and_disable_vfs(fd);
+			cleanup_vfs_setup(fd);
 	}
 
 	igt_subtest_group() {
