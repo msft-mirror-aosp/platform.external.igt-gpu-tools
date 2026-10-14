@@ -54,7 +54,8 @@ static void ignore_wedged_in_dmesg(void)
 				    "|EngineClass: [0-9]+ [a-z]+"
 				    "|EngineInstance: [0-9]+"
 				    "|Tile[0-9]+: GT[0-9A-Fa-f]*: Fault response: Unsuccessful -EINVAL"
-				    "|Tile[0-9]+: GT[0-9A-Fa-f]*: Engine memory CAT error");
+				    "|Tile[0-9]+: GT[0-9A-Fa-f]*: Engine memory CAT error"
+				    "|SIGID=203");
 }
 
 static void force_wedged(int fd)
