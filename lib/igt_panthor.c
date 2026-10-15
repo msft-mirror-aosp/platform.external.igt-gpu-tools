@@ -178,8 +178,10 @@ void igt_panthor_group_submit_simple(int fd, uint32_t group_handle,
  * @err: expected error code, or 0 for success
  *
  * Query GPU information.
+ *
+ * Returns: the size of the type being queried.
  */
-void igt_panthor_query(int fd, int32_t type, void *data, size_t size, int err)
+uint32_t igt_panthor_query(int fd, int32_t type, void *data, size_t size, int err)
 {
 	struct drm_panthor_dev_query query = {
 		.type = type,
@@ -191,6 +193,8 @@ void igt_panthor_query(int fd, int32_t type, void *data, size_t size, int err)
 		do_ioctl_err(fd, DRM_IOCTL_PANTHOR_DEV_QUERY, &query, err);
 	else
 		do_ioctl(fd, DRM_IOCTL_PANTHOR_DEV_QUERY, &query);
+
+	return query.size;
 }
 
 /**

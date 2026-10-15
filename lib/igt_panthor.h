@@ -16,7 +16,7 @@ struct panthor_bo {
 	void *map;
 };
 
-void igt_panthor_query(int fd, int32_t type, void *data, size_t size, int err);
+uint32_t igt_panthor_query(int fd, int32_t type, void *data, size_t size, int err);
 void igt_panthor_vm_create_userva_range(int fd, uint32_t *vm_id, int err, uint64_t *uva_range);
 void igt_panthor_vm_destroy(int fd, uint32_t vm_id, int err);
 void igt_panthor_vm_bind_offset(int fd, uint32_t vm_id, uint32_t bo_handle, uint64_t va,
