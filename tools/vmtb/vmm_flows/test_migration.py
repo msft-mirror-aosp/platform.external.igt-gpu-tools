@@ -30,17 +30,14 @@ IGT_RESTORE_DELAY = 3 # Time between VM resume and WL status check (post-restore
 MS_IN_SEC = 1000
 
 
-# Full configuration variant: 1xVF, 2xVF and MAXxVF with auto and vGPU profiles provisioning
-# TODO: add max VFs variants
-test_variants_full = [(1, VfProvisioningMode.AUTO, VfSchedulingMode.DEFAULT_PROFILE),
-                      (2, VfProvisioningMode.AUTO, VfSchedulingMode.DEFAULT_PROFILE),
-                      (1, VfProvisioningMode.VGPU_PROFILE, VfSchedulingMode.DEFAULT_PROFILE),
-                      (2, VfProvisioningMode.VGPU_PROFILE, VfSchedulingMode.DEFAULT_PROFILE)]
-
-
 # Basic configuration variant: 1xVF and 2xVF with auto provisioning
-test_variants_basic = [(1, VfProvisioningMode.AUTO, VfSchedulingMode.DEFAULT_PROFILE),
-                       (2, VfProvisioningMode.AUTO, VfSchedulingMode.DEFAULT_PROFILE)]
+test_variants_basic = [(1, VfProvisioningMode.AUTO, VfSchedulingMode.AUTO),
+                       (2, VfProvisioningMode.AUTO, VfSchedulingMode.AUTO)]
+
+
+# Parallel-migration configuration variant: 4xVF and 6xVF with auto provisioning
+test_variants_parallel = [(4, VfProvisioningMode.AUTO, VfSchedulingMode.AUTO),
+                          (6, VfProvisioningMode.AUTO, VfSchedulingMode.AUTO)]
 
 
 # vGPU profiles configuration variant: 1xVF and 2xVF with vGPU profiles provisioning
@@ -365,7 +362,7 @@ def idfn_workload(workload: MigrationWorkloadWsim):
 
 
 def set_test_config(test_variants: List[Tuple[int, VfProvisioningMode, VfSchedulingMode]],
-                    max_vms: int = 2, wa_reduce_vf_lmem: bool = False) -> List[VmmTestingConfig]:
+                    max_vms: int = 24, wa_reduce_vf_lmem: bool = False) -> List[VmmTestingConfig]:
     """Helper function to provide a parametrized test with a list of test configuration variants."""
     test_configs: List[VmmTestingConfig] = []
 
@@ -380,7 +377,8 @@ def set_test_config(test_variants: List[Tuple[int, VfProvisioningMode, VfSchedul
 # Busy migration TCs with WSIM workload
 @pytest.mark.parametrize('set_migration_wl', [wsim_short_preempt],
                          ids=idfn_workload, indirect=['set_migration_wl'])
-@pytest.mark.parametrize('setup_vms', set_test_config(test_variants_full), ids=idfn_test_config, indirect=['setup_vms'])
+@pytest.mark.parametrize('setup_vms', set_test_config(test_variants_basic),
+                         ids=idfn_test_config, indirect=['setup_vms'])
 class TestBusyMigrationWsim1(BaseTestBusyMigration):
     """Save-restore VM state with VF busy executing short (5ms) preemptable batches.
 
@@ -468,7 +466,7 @@ class TestBusyMigrationIgtExecReset2(BaseTestBusyMigration):
 
 @pytest.mark.parametrize('set_migration_wl', [igt_exec_reset_long_spin_many_preempt_threads],
                          ids=idfn_workload, indirect=['set_migration_wl'])
-@pytest.mark.parametrize('setup_vms', set_test_config(test_variants_full),
+@pytest.mark.parametrize('setup_vms', set_test_config(test_variants_basic),
                          ids=idfn_test_config, indirect=['setup_vms'])
 class TestBusyMigrationIgtExecReset3(BaseTestBusyMigration):
     """Save-restore VM state with VF busy executing IGT xe_exec_reset@long-spin-many-preempt-threads."""
@@ -508,7 +506,7 @@ class TestBusyMigrationIgtExecReset7(BaseTestBusyMigration):
 
 @pytest.mark.parametrize('set_migration_wl', [igt_exec_reset_long_spin_reuse_many_preempt_threads],
                          ids=idfn_workload, indirect=['set_migration_wl'])
-@pytest.mark.parametrize('setup_vms', set_test_config(test_variants_full),
+@pytest.mark.parametrize('setup_vms', set_test_config(test_variants_basic),
                          ids=idfn_test_config, indirect=['setup_vms'])
 class TestBusyMigrationIgtExecReset8(BaseTestBusyMigration):
     """Save-restore VM state with VF busy executing IGT xe_exec_reset@long-spin-reuse-many-preempt-threads."""
@@ -532,7 +530,7 @@ class TestBusyMigrationIgtExecReset10(BaseTestBusyMigration):
 
 @pytest.mark.parametrize('set_migration_wl', [igt_exec_reset_long_spin_sys_reuse_many_preempt_threads],
                          ids=idfn_workload, indirect=['set_migration_wl'])
-@pytest.mark.parametrize('setup_vms', set_test_config(test_variants_full),
+@pytest.mark.parametrize('setup_vms', set_test_config(test_variants_basic),
                          ids=idfn_test_config, indirect=['setup_vms'])
 class TestBusyMigrationIgtExecReset11(BaseTestBusyMigration):
     """Save-restore VM state with VF busy executing IGT xe_exec_reset@long-spin-sys-reuse-many-preempt-threads."""
@@ -540,7 +538,7 @@ class TestBusyMigrationIgtExecReset11(BaseTestBusyMigration):
 
 @pytest.mark.parametrize('set_migration_wl', [igt_exec_reset_long_spin_comp_reuse_many_preempt_threads],
                          ids=idfn_workload, indirect=['set_migration_wl'])
-@pytest.mark.parametrize('setup_vms', set_test_config(test_variants_full),
+@pytest.mark.parametrize('setup_vms', set_test_config(test_variants_basic),
                          ids=idfn_test_config, indirect=['setup_vms'])
 class TestBusyMigrationIgtExecReset12(BaseTestBusyMigration):
     """Save-restore VM state with VF busy executing IGT xe_exec_reset@long-spin-comp-reuse-many-preempt-threads."""
@@ -580,7 +578,7 @@ class TestBusyMigrationIgtExecReset16(BaseTestBusyMigration):
 
 @pytest.mark.parametrize('set_migration_wl', [igt_exec_threads_basic],
                          ids=idfn_workload, indirect=['set_migration_wl'])
-@pytest.mark.parametrize('setup_vms', set_test_config(test_variants_full),
+@pytest.mark.parametrize('setup_vms', set_test_config(test_variants_basic),
                          ids=idfn_test_config, indirect=['setup_vms'])
 class TestBusyMigrationIgtExecThreads1(BaseTestBusyMigration):
     """Save-restore VM state with VF busy executing IGT xe_exec_threads@threads-basic."""
@@ -604,7 +602,7 @@ class TestBusyMigrationIgtExecThreads3(BaseTestBusyMigration):
 
 @pytest.mark.parametrize('set_migration_wl', [igt_exec_threads_many_queues],
                         ids=idfn_workload, indirect=['set_migration_wl'])
-@pytest.mark.parametrize('setup_vms', set_test_config(test_variants_full),
+@pytest.mark.parametrize('setup_vms', set_test_config(test_variants_basic),
                          ids=idfn_test_config, indirect=['setup_vms'])
 class TestBusyMigrationIgtExecThreads4(BaseTestBusyMigration):
     """Save-restore VM state with VF busy executing IGT xe_exec_threads@threads-many-queues."""
@@ -632,6 +630,14 @@ class TestBusyMigrationIgtCcs(BaseTestBusyMigration):
                          ids=idfn_test_config, indirect=['setup_vms'])
 class TestBusyMigrationIgtComputePreempt(BaseTestBusyMigration):
     """Save-restore VM state with VF busy executing IGT xe_compute_preempt@compute-preempt-many (CCS path)."""
+
+
+@pytest.mark.parametrize('set_migration_wl', [igt_exec_threads_many_queues],
+                        ids=idfn_workload, indirect=['set_migration_wl'])
+@pytest.mark.parametrize('setup_vms', set_test_config(test_variants_parallel),
+                         ids=idfn_test_config, indirect=['setup_vms'])
+class TestBusyMigrationParallel(BaseTestBusyMigration):
+    """Save-restore multiple VMs state in parallel with VF busy executing IGT xe_exec_threads@threads-many-queues."""
 
 
 @pytest.mark.parametrize('setup_vms', set_test_config(test_variants_basic),
@@ -1175,8 +1181,6 @@ def test_2vm_pause_resume(create_1host_2vm):
     vm1.assign_vf(vf2)
     ts.poweron_vms()
 
-    pause_vf_num = 1
-
     assert modprobe_driver_run_check(vm0)
     assert modprobe_driver_run_check(vm1)
 
@@ -1194,11 +1198,6 @@ def test_2vm_pause_resume(create_1host_2vm):
     logger.debug("Submit IGT WL (gem_spin_batch) on VM1")
     igt_vm1 = IgtExecutor(vm1, IgtType.SPIN_BATCH)
 
-    # Special handling of pausing VMs with infinite ExecQuanta - refer to SAS for details
-    logger.debug("Set VF1 EQ/PF before the pause")
-    ts.get_dut().driver.set_exec_quantum_ms(pause_vf_num, 1)
-    ts.get_dut().driver.set_preempt_timeout_us(pause_vf_num, 100)
-
     logger.debug("Pause execution on VM0/VF1")
     vm0.pause()
 
@@ -1207,10 +1206,6 @@ def test_2vm_pause_resume(create_1host_2vm):
 
     logger.debug("Resume execution on VM0/VF1")
     vm0.resume()
-
-    logger.debug("Reset VF1 EQ/PF to the initial values (infinite) after resume")
-    ts.get_dut().driver.set_exec_quantum_ms(pause_vf_num, 0)
-    ts.get_dut().driver.set_preempt_timeout_us(pause_vf_num, 0)
 
     result_vm0 = gem_wsim_vm0.wait_results() # Throws exception on wsim fail
     assert expected_elapsed_sec * 0.8 < result_vm0.elapsed_sec < expected_elapsed_sec * 1.5

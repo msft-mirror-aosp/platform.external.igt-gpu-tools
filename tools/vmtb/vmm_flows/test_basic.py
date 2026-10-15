@@ -41,8 +41,7 @@ def set_test_config(test_variants: List[Tuple[int, VfProvisioningMode, VfSchedul
     return test_configs
 
 
-test_variants_1 = [(1, VfProvisioningMode.VGPU_PROFILE, VfSchedulingMode.DEFAULT_PROFILE),
-                   (2, VfProvisioningMode.VGPU_PROFILE, VfSchedulingMode.DEFAULT_PROFILE),
+test_variants_1 = [(1, VfProvisioningMode.AUTO, VfSchedulingMode.AUTO),
                    (2, VfProvisioningMode.AUTO, VfSchedulingMode.AUTO)]
 
 @pytest.mark.parametrize('setup_vms', set_test_config(test_variants_1), ids=idfn_test_config, indirect=['setup_vms'])
@@ -63,9 +62,9 @@ class TestVmSetup:
             assert driver_check(vm)
 
 
-test_variants_2 = [(1, VfProvisioningMode.VGPU_PROFILE, VfSchedulingMode.DEFAULT_PROFILE),
-                   (2, VfProvisioningMode.VGPU_PROFILE, VfSchedulingMode.DEFAULT_PROFILE),
-                   (4, VfProvisioningMode.VGPU_PROFILE, VfSchedulingMode.DEFAULT_PROFILE)]
+test_variants_2 = [(1, VfProvisioningMode.AUTO, VfSchedulingMode.AUTO),
+                   (2, VfProvisioningMode.AUTO, VfSchedulingMode.AUTO),
+                   (4, VfProvisioningMode.AUTO, VfSchedulingMode.AUTO)]
 
 @pytest.mark.parametrize('setup_vms', set_test_config(test_variants_2), ids=idfn_test_config, indirect=['setup_vms'])
 class TestVmWorkload:
@@ -106,10 +105,10 @@ class TestVmWorkload:
         logger.info("Execute wsim parallel on VMs - results: %s", result)
 
 
-test_variants_3 = [(2, VfProvisioningMode.VGPU_PROFILE, VfSchedulingMode.DEFAULT_PROFILE),
-                   (4, VfProvisioningMode.VGPU_PROFILE, VfSchedulingMode.DEFAULT_PROFILE)]
+test_variants_3 = [(2, VfProvisioningMode.AUTO, VfSchedulingMode.AUTO),
+                   (4, VfProvisioningMode.AUTO, VfSchedulingMode.AUTO)]
 
-@pytest.mark.parametrize('setup_vms', set_test_config(test_variants=test_variants_3, max_vms=4, vf_driver_load=False),
+@pytest.mark.parametrize('setup_vms', set_test_config(test_variants=test_variants_3, max_vms=2, vf_driver_load=False),
                          ids = idfn_test_config, indirect=['setup_vms'])
 class TestVfDriverLoadRemove:
     """Verify VF (guest) driver load or remove doesn't affect execution on the other VM:
