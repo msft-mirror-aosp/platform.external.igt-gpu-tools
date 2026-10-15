@@ -186,6 +186,7 @@ if libdrm_amdgpu.found()
 	lib_sources += [
 		'amdgpu/amd_memory.c',
 		'amdgpu/amd_platform.c',
+		'amdgpu/amd_mes_reset.c',
 		'amdgpu/amd_command_submission.c',
 		'amdgpu/amd_compute.c',
 		'amdgpu/amd_cs_radv.c',
