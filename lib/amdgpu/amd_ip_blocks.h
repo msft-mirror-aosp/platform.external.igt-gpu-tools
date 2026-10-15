@@ -20,6 +20,7 @@
 
 #include "amd_registers.h"
 #include "amd_family.h"
+#include "amd_PM4.h"
 
 #ifndef MIN
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -537,6 +538,15 @@ struct amdgpu_cmd_base {
 	void (*emit_repeat)(struct amdgpu_cmd_base  *base, uint32_t value, uint32_t number_of_times);
 	void (*emit_at_offset)(struct amdgpu_cmd_base  *base, uint32_t value, uint32_t offset_dwords);
 	void (*emit_buf)(struct amdgpu_cmd_base  *base, const void *ptr, uint32_t offset_bytes, uint32_t size_bytes);
+	void (*ib_fill_nop)(struct amdgpu_cmd_base *base, uint32_t *ib, uint32_t ib_dwords);
+	void (*ib_fill_chain)(struct amdgpu_cmd_base *base, uint32_t *ib, uint32_t ib_dwords,
+				uint64_t next_va, uint32_t next_size_dw);
+	void (*ib_fill_writedata)(struct amdgpu_cmd_base *base, uint32_t *ib, uint32_t ib_dwords,
+				uint64_t dst_va, uint32_t dst_size);
+	void (*ib_fill_wait)(struct amdgpu_cmd_base *base, uint32_t *ib, uint32_t ib_dwords,
+			     uint64_t signal_va, uint64_t next_ib_va,
+			     uint32_t next_ib_size_dw);
+
 };
 
 struct amdgpu_cmd_base *get_cmd_base(void);

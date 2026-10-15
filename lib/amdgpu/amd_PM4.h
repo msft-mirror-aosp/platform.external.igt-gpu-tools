@@ -193,6 +193,9 @@
 		 */
 
 #define PACKET3_INDIRECT_BUFFER                         0x3F
+#define         INDIRECT_BUFFER_SIZE_MASK                0x000FFFFF
+#define         INDIRECT_BUFFER_VALID                    (1 << 23)
+#define         INDIRECT_BUFFER_CHAIN                    (1 << 20)
 #define PACKET3_PROTECTED_FENCE_SIGNAL                  0xd0
 
 #define	PACKET3_WRITE_DATA				0x37

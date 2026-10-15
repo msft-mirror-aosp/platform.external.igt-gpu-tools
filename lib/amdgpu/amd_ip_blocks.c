@@ -20,6 +20,95 @@
 #include "amd_gfx_v8_0.h"
 #include "ioctl_wrappers.h"
 
+static void amdgpu_ib_fill_nop_range(uint32_t *ib, uint32_t start_dw, uint32_t end_dw)
+{
+	uint32_t remaining = end_dw - start_dw;
+
+	while (remaining >= 2) {
+		uint32_t packet_dw = remaining > 0x4001 ? 0x4001 : remaining;
+		uint32_t payload_dw = packet_dw - 1;
+
+		ib[start_dw++] = PACKET3(PACKET3_NOP, packet_dw - 2);
+		while (payload_dw > 0) {
+			ib[start_dw++] = 0;
+			payload_dw--;
+		}
+		remaining = end_dw - start_dw;
+	}
+	if (remaining)
+		ib[start_dw] = CP_PACKET2;
+}
+
+static void amdgpu_ib_fill_nop(struct amdgpu_cmd_base *base, uint32_t *ib, uint32_t ib_dwords)
+{
+	(void)base;
+	amdgpu_ib_fill_nop_range(ib, 0, ib_dwords);
+}
+
+static void amdgpu_ib_fill_chain(struct amdgpu_cmd_base *base, uint32_t *ib, uint32_t ib_dwords,
+				 uint64_t next_va, uint32_t next_size_dw)
+{
+	uint32_t last;
+	(void)base;
+	igt_assert(ib_dwords >= 4);
+	last = ib_dwords - 4;
+	amdgpu_ib_fill_nop_range(ib, 0, last);
+	ib[last] = PACKET3(PACKET3_INDIRECT_BUFFER, 2);
+	ib[last + 1] = lower_32_bits(next_va);
+	ib[last + 2] = upper_32_bits(next_va);
+	ib[last + 3] = (next_size_dw & INDIRECT_BUFFER_SIZE_MASK) |
+		       INDIRECT_BUFFER_VALID | INDIRECT_BUFFER_CHAIN;
+}
+
+static void amdgpu_ib_fill_writedata(struct amdgpu_cmd_base *base, uint32_t *ib, uint32_t ib_dwords,
+				     uint64_t dst_va, uint32_t dst_size)
+{
+	uint32_t off = 0;
+	uint32_t dst_off = 0;
+	const uint32_t packet_dwords = 8;
+
+	(void)base;
+	while (off + packet_dwords <= ib_dwords) {
+		uint64_t addr = dst_va + (dst_off % dst_size);
+
+		ib[off] = PACKET3(PACKET3_WRITE_DATA, 6);
+		ib[off + 1] = WRITE_DATA_DST_SEL(5);
+		ib[off + 2] = lower_32_bits(addr & ~0x3ULL);
+		ib[off + 3] = upper_32_bits(addr);
+		ib[off + 4] = 0xDEADBEEF;
+		ib[off + 5] = 0xCAFEBABE;
+		ib[off + 6] = 0x12345678;
+		ib[off + 7] = 0xABCD0000 | (off & 0xFFFF);
+		off += packet_dwords;
+		dst_off += 16;
+	}
+	amdgpu_ib_fill_nop_range(ib, off, ib_dwords);
+}
+
+static void amdgpu_ib_fill_wait(struct amdgpu_cmd_base *base, uint32_t *ib, uint32_t ib_dwords,
+				uint64_t signal_va, uint64_t next_ib_va, uint32_t next_ib_size_dw)
+{
+	uint32_t chain_dw;
+
+	(void)base;
+	igt_assert(ib_dwords >= 11);
+	chain_dw = ib_dwords - 4;
+	ib[0] = PACKET3(PACKET3_WAIT_REG_MEM, 5);
+	ib[1] = WAIT_REG_MEM_FUNCTION(3) | WAIT_REG_MEM_MEM_SPACE(1) |
+		WAIT_REG_MEM_ENGINE(0);
+	ib[2] = lower_32_bits(signal_va);
+	ib[3] = upper_32_bits(signal_va);
+	ib[4] = 1;
+	ib[5] = 0xFFFFFFFF;
+	ib[6] = 0x00000004;
+	amdgpu_ib_fill_nop_range(ib, 7, chain_dw);
+	ib[chain_dw] = PACKET3(PACKET3_INDIRECT_BUFFER, 2);
+	ib[chain_dw + 1] = lower_32_bits(next_ib_va);
+	ib[chain_dw + 2] = upper_32_bits(next_ib_va);
+	ib[chain_dw + 3] = (next_ib_size_dw & INDIRECT_BUFFER_SIZE_MASK) |
+			   INDIRECT_BUFFER_VALID | INDIRECT_BUFFER_CHAIN;
+}
+
 /*
  * SDMA functions:
  * - write_linear
@@ -1307,6 +1396,10 @@ get_cmd_base(void)
 	base->emit_repeat = cmd_emit_repeat;
 	base->emit_at_offset = cmd_emit_at_offset;
 	base->emit_buf = cmd_emit_buf;
+	base->ib_fill_nop = amdgpu_ib_fill_nop;
+	base->ib_fill_chain = amdgpu_ib_fill_chain;
+	base->ib_fill_writedata = amdgpu_ib_fill_writedata;
+	base->ib_fill_wait = amdgpu_ib_fill_wait;
 
 	return base;
 }
