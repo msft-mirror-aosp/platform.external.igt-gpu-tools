@@ -785,6 +785,19 @@ class BaseTestDoubleMigration:
     - restoring from initial (1st) or latter (2nd) migration
     """
 
+    @pytest.fixture(scope='class', autouse=True, name='is_test_supported')
+    def fixture_is_test_supported(self, setup_vms):
+        """Skip test on no-debug setup lacking the required debugfs 'resfix_stoppers' hook."""
+        ts: VmmTestingSetup = setup_vms
+        vm: VirtualMachine = ts.get_vm[0]
+        vm_debugfs_path = vm.get_dut().driver.debugfs_path
+
+        try:
+            vm.read_file_content(f'{vm_debugfs_path}/gt0/vf/resfix_stoppers')
+        except exceptions.GuestError:
+            logger.warning("Required debug hook not found (KMD no-debug config?)")
+            pytest.skip("Test scenario not supported on no-debug config")
+
     def __set_debugfs_resfix_stoppers(self, vm: VirtualMachine, stage: ResfixWaitStage):
         """Set resfix_stoppers:
         predefined checkpoints that allow the migration process to pause at specific stages.
