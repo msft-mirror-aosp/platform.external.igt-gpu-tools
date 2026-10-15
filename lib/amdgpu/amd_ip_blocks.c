@@ -46,7 +46,7 @@ static void amdgpu_ib_fill_nop(struct amdgpu_cmd_base *base, uint32_t *ib, uint3
 }
 
 static void amdgpu_ib_fill_chain(struct amdgpu_cmd_base *base, uint32_t *ib, uint32_t ib_dwords,
-				 uint64_t next_va, uint32_t next_size_dw)
+				uint64_t next_va, uint32_t next_size_dw)
 {
 	uint32_t last;
 	(void)base;
@@ -83,6 +83,23 @@ static void amdgpu_ib_fill_writedata(struct amdgpu_cmd_base *base, uint32_t *ib,
 		dst_off += 16;
 	}
 	amdgpu_ib_fill_nop_range(ib, off, ib_dwords);
+}
+
+static void amdgpu_ib_fill_writedata_chain(struct amdgpu_cmd_base *base, uint32_t *ib,
+					   uint32_t ib_dwords, uint64_t dst_va,
+					   uint32_t dst_size, uint64_t next_va,
+					   uint32_t next_size_dw)
+{
+	uint32_t chain_dw;
+
+	igt_assert(ib_dwords >= 12);
+	chain_dw = ib_dwords - 4;
+	amdgpu_ib_fill_writedata(base, ib, chain_dw, dst_va, dst_size);
+	ib[chain_dw] = PACKET3(PACKET3_INDIRECT_BUFFER, 2);
+	ib[chain_dw + 1] = lower_32_bits(next_va);
+	ib[chain_dw + 2] = upper_32_bits(next_va);
+	ib[chain_dw + 3] = (next_size_dw & INDIRECT_BUFFER_SIZE_MASK) |
+			   INDIRECT_BUFFER_VALID | INDIRECT_BUFFER_CHAIN;
 }
 
 static void amdgpu_ib_fill_wait(struct amdgpu_cmd_base *base, uint32_t *ib, uint32_t ib_dwords,
@@ -1399,6 +1416,7 @@ get_cmd_base(void)
 	base->ib_fill_nop = amdgpu_ib_fill_nop;
 	base->ib_fill_chain = amdgpu_ib_fill_chain;
 	base->ib_fill_writedata = amdgpu_ib_fill_writedata;
+	base->ib_fill_writedata_chain = amdgpu_ib_fill_writedata_chain;
 	base->ib_fill_wait = amdgpu_ib_fill_wait;
 
 	return base;

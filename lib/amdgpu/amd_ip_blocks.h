@@ -543,6 +543,10 @@ struct amdgpu_cmd_base {
 				uint64_t next_va, uint32_t next_size_dw);
 	void (*ib_fill_writedata)(struct amdgpu_cmd_base *base, uint32_t *ib, uint32_t ib_dwords,
 				uint64_t dst_va, uint32_t dst_size);
+	void (*ib_fill_writedata_chain)(struct amdgpu_cmd_base *base,
+				uint32_t *ib, uint32_t ib_dwords,
+					uint64_t dst_va, uint32_t dst_size,
+					uint64_t next_va, uint32_t next_size_dw);
 	void (*ib_fill_wait)(struct amdgpu_cmd_base *base, uint32_t *ib, uint32_t ib_dwords,
 			     uint64_t signal_va, uint64_t next_ib_va,
 			     uint32_t next_ib_size_dw);
