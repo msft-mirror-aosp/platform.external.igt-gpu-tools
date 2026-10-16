@@ -50,11 +50,15 @@ IGT_TEST_DESCRIPTION("Test the DIRTYFB ioctl is working properly with "
 #define PAGE_ALIGN(x) ALIGN(x, PAGE_SIZE)
 #endif
 
+#define SIM_FB_WIDTH   1024
+#define SIM_FB_HEIGHT  768
+
 typedef struct {
 	int drm_fd, devid;
 	int debugfs_fd;
 	igt_display_t display;
 	drmModeModeInfo *mode;
+	int fb_width, fb_height;
 	uint64_t modifier;
 	igt_output_t *output;
 	igt_pipe_crc_t *pipe_crc;
@@ -106,10 +110,10 @@ static bool check_support(data_t *data)
 		}
 
 		if (!intel_fbc_plane_size_supported(&data->display,
-						    data->mode->hdisplay,
-						    data->mode->vdisplay)) {
+						    data->fb_width,
+						    data->fb_height)) {
 			igt_info("Plane size (%d, %d) not supported as per FBC size restrictions\n",
-				 data->mode->hdisplay, data->mode->vdisplay);
+				 data->fb_width, data->fb_height);
 			return false;
 		}
 		return true;
@@ -234,8 +238,8 @@ static void prepare(data_t *data)
 	data->pipe_crc = igt_crtc_crc_new(data->crtc,
 					  IGT_PIPE_CRC_SOURCE_AUTO);
 
-	igt_create_color_fb(data->drm_fd, data->mode->hdisplay,
-			    data->mode->vdisplay, DRM_FORMAT_XRGB8888,
+	igt_create_color_fb(data->drm_fd, data->fb_width,
+			    data->fb_height, DRM_FORMAT_XRGB8888,
 			    data->modifier, 0.0, 1.0, 0.0,
 			    &data->fbs[0]);
 
@@ -256,8 +260,8 @@ static void prepare(data_t *data)
 
 	igt_pipe_crc_collect_crc(data->pipe_crc, &data->ref_crc);
 
-	igt_create_color_fb(data->drm_fd,  data->mode->hdisplay,
-			    data->mode->vdisplay, DRM_FORMAT_XRGB8888,
+	igt_create_color_fb(data->drm_fd, data->fb_width,
+			    data->fb_height, DRM_FORMAT_XRGB8888,
 			    data->modifier, 0.0, 1.0, 0.0,
 			    &data->fbs[1]);
 	igt_draw_rect_fb(data->drm_fd, data->bops, 0, &data->fbs[1],
@@ -265,8 +269,8 @@ static void prepare(data_t *data)
 			 0, 0, data->fbs[1].width,
 			 data->fbs[1].height, 0xFF);
 
-	igt_create_color_fb(data->drm_fd, data->mode->hdisplay,
-			    data->mode->vdisplay, DRM_FORMAT_XRGB8888,
+	igt_create_color_fb(data->drm_fd, data->fb_width,
+			    data->fb_height, DRM_FORMAT_XRGB8888,
 			    data->modifier, 0.0, 1.0, 0.0,
 			    &data->fbs[2]);
 
@@ -382,6 +386,14 @@ int igt_main()
 							      crtc,
 							      data.output) {
 					data.mode = igt_output_get_mode(data.output);
+					data.fb_width = data.mode->hdisplay;
+					data.fb_height = data.mode->vdisplay;
+					if (igt_run_in_simulation()) {
+						data.fb_width = min_t(int, data.fb_width,
+								      SIM_FB_WIDTH);
+						data.fb_height = min_t(int, data.fb_height,
+								       SIM_FB_HEIGHT);
+					}
 
 					igt_skip_on_f((IS_BATTLEMAGE(data.devid) && data.feature == FEATURE_FBC),
 						       "FBC isn't supported on BMG\n");
