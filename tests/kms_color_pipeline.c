@@ -407,6 +407,8 @@ static void test_plane_fixed_matrix_colorops(data_t *data, igt_crtc_t *crtc,
 					     kms_colorop_t *colorops[])
 {
 	int n_planes = crtc->n_planes;
+	int first_plane = -1, last_plane = -1;
+	bool in_simulation = igt_run_in_simulation();
 	igt_output_t *output = data->output;
 	drmModeModeInfo *mode = data->mode;
 	igt_plane_t *plane;
@@ -433,10 +435,27 @@ static void test_plane_fixed_matrix_colorops(data_t *data, igt_crtc_t *crtc,
 	capture_sw_converted_ref_crc(data, output, &yuv_fb, &ref_crc);
 	igt_remove_fb(data->drm_fd, &yuv_fb);
 
+	/* Get first & last planes supporting color pipeline. */
 	for (int plane_id = 0; plane_id < n_planes; plane_id++) {
 		plane = igt_output_get_plane(output, plane_id);
 
 		if (!igt_plane_has_prop(plane, IGT_PLANE_COLOR_PIPELINE))
+			continue;
+
+		if (first_plane < 0)
+			first_plane = plane_id;
+
+		last_plane = plane_id;
+	}
+
+	for (int plane_id = 0; plane_id < n_planes; plane_id++) {
+		plane = igt_output_get_plane(output, plane_id);
+
+		if (!igt_plane_has_prop(plane, IGT_PLANE_COLOR_PIPELINE))
+			continue;
+
+		if (in_simulation &&
+		    plane_id != first_plane && plane_id != last_plane)
 			continue;
 
 		igt_dynamic_f("pipe-%s-plane-%u", igt_crtc_name(crtc), plane_id)
