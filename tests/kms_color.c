@@ -1247,12 +1247,11 @@ run_tests_for_pipe(data_t *data)
 	igt_describe("Verify that the background color is set correctly");
 	igt_subtest_with_dynamic("background-color") {
 		for_each_crtc_with_valid_output(&data->display, crtc, data->output) {
-			igt_dynamic_f("pipe-%s-background-color", igt_crtc_name(crtc)) {
+			igt_dynamic_f("pipe-%s-background-color", igt_crtc_name(crtc))
 				run_background_color_tests_for_crtc(data, crtc, data->output);
 
-				if (igt_run_in_simulation())
-					break;
-			}
+			if (igt_run_in_simulation())
+				break;
 		}
 	}
 }
