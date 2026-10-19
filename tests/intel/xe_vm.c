@@ -310,6 +310,204 @@ static void test_partial_unbinds(int fd)
 }
 
 /**
+ * SUBTEST: single-op-unmap-partly-bound
+ * Functionality: unbind
+ * Description:
+ *	Single VM_BIND UNMAP spanning a bound and an unbound VMA, so that the
+ *	unbound VMA reserves a page table update op which is never populated
+ * Test category: functionality test
+ *
+ * SUBTEST: single-op-remap-unbound
+ * Functionality: unbind
+ * Description:
+ *	Single VM_BIND UNMAP splitting an unbound VMA, so that unbinding the
+ *	original VMA reserves a page table update op which is never populated
+ * Test category: functionality test
+ *
+ * SUBTEST: single-op-map-mirror-over-bound
+ * Functionality: bind
+ * Description:
+ *	Single VM_BIND MAP with CPU_ADDR_MIRROR replacing a bound VMA in a
+ *	scratch page fault mode VM, so that the map reserves a page table
+ *	update op which is never populated
+ * Test category: functionality test
+ */
+
+enum single_op_case {
+	SINGLE_OP_UNMAP_PARTLY_BOUND,
+	SINGLE_OP_REMAP_UNBOUND,
+	SINGLE_OP_MAP_MIRROR_OVER_BOUND,
+};
+
+static const struct single_op_section {
+	const char *name;
+	enum single_op_case op_case;
+} single_op_sections[] = {
+	{ "unmap-partly-bound", SINGLE_OP_UNMAP_PARTLY_BOUND },
+	{ "remap-unbound", SINGLE_OP_REMAP_UNBOUND },
+	{ "map-mirror-over-bound", SINGLE_OP_MAP_MIRROR_OVER_BOUND },
+	{ }
+};
+
+#define SINGLE_OP_ITERATIONS	32
+
+/*
+ * A VM_BIND reserves one page table update op per GPUVA op it parses, and the
+ * array holding them is allocated without being zeroed. Ops that end up being
+ * skipped while preparing the update are reserved but never populated, so only
+ * the populated prefix of the array is valid. The sequences below reserve more
+ * ops than they populate out of a single (num_binds == 1) VM_BIND:
+ *
+ * - UNMAP_PARTLY_BOUND: an UNMAP covering a bound and an unbound VMA parses
+ *   two UNMAP ops, and unbinding the VMA that was never bound is skipped.
+ * - REMAP_UNBOUND: a partial UNMAP of an unbound VMA parses a REMAP, and
+ *   unbinding the original VMA is skipped while binding the remainder is not.
+ * - MAP_MIRROR_OVER_BOUND: a CPU_ADDR_MIRROR MAP over a bound VMA parses an
+ *   UNMAP plus a MAP, and binding a CPU address mirror VMA is skipped.
+ *
+ * An unbound VMA is one created by a non IMMEDIATE MAP in a fault mode VM,
+ * which is deferred to the first GPU page fault instead of being bound by the
+ * VM_BIND itself.
+ */
+static void
+single_op_prime_pt_update_ops(int fd, uint32_t vm, uint32_t bo, uint64_t addr,
+			      uint64_t page, struct drm_xe_sync *sync,
+			      uint64_t *vm_sync)
+{
+	/*
+	 * Fully populate and then free a two op array, so that the VM_BIND
+	 * under test is likely to recycle a slab object still holding stale
+	 * pointers rather than freshly zeroed memory.
+	 */
+	xe_vm_bind_async_flags(fd, vm, 0, bo, 0, addr, page, NULL, 0,
+			       DRM_XE_VM_BIND_FLAG_IMMEDIATE);
+	xe_vm_bind_async_flags(fd, vm, 0, bo, page, addr + page, page, NULL, 0,
+			       DRM_XE_VM_BIND_FLAG_IMMEDIATE);
+	xe_vm_unbind_async(fd, vm, 0, 0, addr, 2 * page, sync, 1);
+	xe_wait_ufence(fd, vm_sync, USER_FENCE_VALUE, 0, NSEC_PER_SEC);
+	*vm_sync = 0;
+}
+
+static uint32_t single_op_vm_create(int fd, enum single_op_case c)
+{
+	struct drm_xe_vm_create create = {
+		.flags = DRM_XE_VM_CREATE_FLAG_LR_MODE |
+			 DRM_XE_VM_CREATE_FLAG_FAULT_MODE,
+	};
+
+	if (c == SINGLE_OP_MAP_MIRROR_OVER_BOUND)
+		create.flags |= DRM_XE_VM_CREATE_FLAG_SCRATCH_PAGE;
+
+	/*
+	 * A scratch page fault mode VM is only accepted on platforms needing
+	 * scratch, and CPU address mirroring additionally needs GPUSVM.
+	 */
+	igt_require_f(!igt_ioctl(fd, DRM_IOCTL_XE_VM_CREATE, &create),
+		      "VM create with flags 0x%x not supported\n", create.flags);
+
+	return create.vm_id;
+}
+
+static void test_single_op_pt_update_ops(int fd, enum single_op_case c)
+{
+	uint64_t page = xe_get_default_alignment(fd);
+	uint64_t prime_addr = 0x100000000ull;
+	uint64_t addr = 0x200000000ull;
+	/* A fault mode VM is in long running mode, which only takes ufences. */
+	struct drm_xe_sync sync = {
+		.type = DRM_XE_SYNC_TYPE_USER_FENCE,
+		.flags = DRM_XE_SYNC_FLAG_SIGNAL,
+		.timeline_value = USER_FENCE_VALUE,
+	};
+	uint32_t vm = single_op_vm_create(fd, c);
+	uint64_t vm_sync = 0;
+	uint32_t bo;
+	int i;
+
+	/*
+	 * The remainder of a split must not be aligned to the maximum PTE size,
+	 * otherwise binding it is skipped as well and no op is populated at all.
+	 */
+	igt_assert(!IS_ALIGNED(addr + page, SZ_1G));
+
+	bo = xe_bo_create(fd, vm, 2 * page, vram_if_possible(fd, 0), 0);
+	sync.addr = to_user_pointer(&vm_sync);
+
+	if (c == SINGLE_OP_MAP_MIRROR_OVER_BOUND) {
+		int ret = __xe_vm_bind(fd, vm, 0, 0, 0, addr, page,
+				       DRM_XE_VM_BIND_OP_MAP,
+				       DRM_XE_VM_BIND_FLAG_CPU_ADDR_MIRROR,
+				       NULL, 0, 0, DEFAULT_PAT_INDEX, 0);
+
+		igt_require_f(!ret, "CPU address mirroring not supported: %d\n",
+			      ret);
+		xe_vm_unbind_async(fd, vm, 0, 0, addr, page, &sync, 1);
+		xe_wait_ufence(fd, &vm_sync, USER_FENCE_VALUE, 0, NSEC_PER_SEC);
+		vm_sync = 0;
+	}
+
+	for (i = 0; i < SINGLE_OP_ITERATIONS; ++i) {
+		uint64_t left_addr = 0, left_size = 0;
+
+		single_op_prime_pt_update_ops(fd, vm, bo, prime_addr, page,
+					      &sync, &vm_sync);
+
+		/* Printed before the bind, which may take the DUT down with it. */
+		igt_info("iteration %d: issuing single op bind sequence\n", i);
+
+		switch (c) {
+		case SINGLE_OP_UNMAP_PARTLY_BOUND:
+			xe_vm_bind_async_flags(fd, vm, 0, bo, 0, addr, page,
+					       NULL, 0,
+					       DRM_XE_VM_BIND_FLAG_IMMEDIATE);
+			xe_vm_bind_async(fd, vm, 0, bo, page, addr + page, page,
+					 NULL, 0);
+			xe_vm_unbind_async(fd, vm, 0, 0, addr, 2 * page,
+					   &sync, 1);
+			break;
+		case SINGLE_OP_REMAP_UNBOUND:
+			xe_vm_bind_async(fd, vm, 0, bo, 0, addr, 2 * page,
+					 NULL, 0);
+			xe_vm_unbind_async(fd, vm, 0, 0, addr, page, &sync, 1);
+			left_addr = addr + page;
+			left_size = page;
+			break;
+		case SINGLE_OP_MAP_MIRROR_OVER_BOUND:
+			xe_vm_bind_async_flags(fd, vm, 0, bo, 0, addr, page,
+					       NULL, 0,
+					       DRM_XE_VM_BIND_FLAG_IMMEDIATE);
+			__xe_vm_bind_assert(fd, vm, 0, 0, 0, addr, page,
+					    DRM_XE_VM_BIND_OP_MAP,
+					    DRM_XE_VM_BIND_FLAG_CPU_ADDR_MIRROR,
+					    &sync, 1, 0, 0);
+			left_addr = addr;
+			left_size = page;
+			break;
+		}
+
+		xe_wait_ufence(fd, &vm_sync, USER_FENCE_VALUE, 0,
+			       NSEC_PER_SEC);
+		vm_sync = 0;
+
+		if (left_size) {
+			xe_vm_unbind_async(fd, vm, 0, 0, left_addr, left_size,
+					   &sync, 1);
+			xe_wait_ufence(fd, &vm_sync, USER_FENCE_VALUE, 0,
+				       NSEC_PER_SEC);
+			vm_sync = 0;
+		}
+	}
+
+	/* The VM must still be usable, a kill would fail the bind below. */
+	xe_vm_bind_async_flags(fd, vm, 0, bo, 0, addr, page, &sync, 1,
+			       DRM_XE_VM_BIND_FLAG_IMMEDIATE);
+	xe_wait_ufence(fd, &vm_sync, USER_FENCE_VALUE, 0, NSEC_PER_SEC);
+
+	gem_close(fd, bo);
+	xe_vm_destroy(fd, vm);
+}
+
+/**
  * SUBTEST: unbind-all-%d-vmas
  * Functionality: unbind
  * Description: Test unbind all with %arg[1] VMAs
@@ -3215,6 +3413,12 @@ int igt_main()
 
 	igt_subtest("partial-unbinds")
 		test_partial_unbinds(fd);
+
+	for (const struct single_op_section *s = single_op_sections;
+	     s->name; s++) {
+		igt_subtest_f("single-op-%s", s->name)
+			test_single_op_pt_update_ops(fd, s->op_case);
+	}
 
 	igt_subtest("unbind-all-2-vmas")
 		unbind_all(fd, 2);
