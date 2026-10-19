@@ -4516,6 +4516,35 @@ static void closed_fd_and_unmapped_access(const struct drm_xe_oa_unit *oau)
 	try_invalid_access(vaddr);
 }
 
+static bool oam_has_tail_address_wrap(const struct drm_xe_oa_unit *oau)
+{
+	const struct drm_xe_gt *gt;
+
+	if ((oau->oa_unit_type != DRM_XE_OA_UNIT_TYPE_OAM &&
+	     oau->oa_unit_type != DRM_XE_OA_UNIT_TYPE_OAM_SAG) ||
+	    !(oau->capabilities & DRM_XE_OA_CAPS_OA_UNIT_GT_ID))
+		return false;
+
+	gt = drm_xe_get_gt(xe_device_get(drm_fd), oau->gt_id);
+
+	return gt && gt->ip_ver_major >= 30;
+}
+
+static bool oau_has_tail_address_wrap(const struct drm_xe_oa_unit *oau)
+{
+	return oau->oa_unit_type == DRM_XE_OA_UNIT_TYPE_OAG ||
+	       oam_has_tail_address_wrap(oau);
+}
+
+static int tail_address_wrap_format(const struct drm_xe_oa_unit *oau)
+{
+	/* Pick a non-power-of-2 OAM format to verify tail address wrap */
+	if (oam_has_tail_address_wrap(oau))
+		return XE_OAM_FORMAT_MPEC8u64_B8_C8;
+
+	return oa_unit_metric_set(oau)->perf_oa_format;
+}
+
 /**
  * SUBTEST: tail-address-wrap
  * Description: Test tail address wrap on odd format sizes. Ensure that the
@@ -4530,7 +4559,7 @@ test_tail_address_wrap(const struct drm_xe_oa_unit *oau, size_t oa_buffer_size)
 	struct intel_xe_perf_metric_set *test_set = oa_unit_metric_set(oau);
 	u64 exponent = max_oa_exponent_for_period_lte(20000);
 	u64 buffer_size = oa_buffer_size ?: buffer_fill_size;
-	u64 fmt = test_set->perf_oa_format;
+	u64 fmt = tail_address_wrap_format(oau);
 	u64 properties[] = {
 		DRM_XE_OA_PROPERTY_OA_UNIT_ID, oau->oa_unit_id,
 		DRM_XE_OA_PROPERTY_SAMPLE_OA, true,
@@ -4879,6 +4908,11 @@ exit:
 	for_each_oa_unit(oau) \
 		igt_dynamic_f("%s-%d", oa_unit_name[oau->oa_unit_type], oau->oa_unit_id)
 
+#define __for_each_oa_unit_with_tail_address_wrap(oau, str) \
+	for_each_oa_unit(oau) \
+		for_if(oau_has_tail_address_wrap(oau)) \
+			igt_dynamic_f("%s-%d-%s", oa_unit_name[oau->oa_unit_type], oau->oa_unit_id, str)
+
 static int opt_handler(int opt, int opt_index, void *data)
 {
 	uint32_t tmp;
@@ -5146,7 +5180,7 @@ int igt_main_args("b:td", long_options, help_str, opt_handler, NULL)
 		long k = random() % num_buf_sizes;
 
 		igt_require(oau0->capabilities & DRM_XE_OA_CAPS_OA_BUFFER_SIZE);
-		__for_oa_unit_by_type_w_arg(DRM_XE_OA_UNIT_TYPE_OAG, buf_sizes[k].name)
+		__for_each_oa_unit_with_tail_address_wrap(oau, buf_sizes[k].name)
 			test_tail_address_wrap(oau, buf_sizes[k].size);
 	}
 
