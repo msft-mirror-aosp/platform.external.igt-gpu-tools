@@ -298,53 +298,39 @@ gen11_fill_surface_state(struct intel_bb *ibb,
 	return offset;
 }
 
+static uint32_t fill_surface_state(struct intel_bb *ibb,
+				   struct intel_buf *buf,
+				   uint32_t format,
+				   int is_dst)
+{
+	unsigned int gfx_ver = intel_graphics_ver(intel_get_drm_devid(ibb->fd));
+
+	return (gfx_ver >= IP_VER(12, 50) ? xehp_fill_surface_state :
+		gfx_ver >= IP_VER(9, 0) ? gen9_fill_surface_state :
+		gfx_ver >= IP_VER(8, 0) ? gen8_fill_surface_state :
+		gen7_fill_surface_state)(ibb, buf, format, is_dst);
+}
+
 static uint32_t
 fill_binding_table(struct intel_bb *ibb, struct intel_buf *buf)
 {
 	uint32_t binding_table_offset;
 	uint32_t *binding_table;
-	uint32_t devid = intel_get_drm_devid(ibb->fd);
+	uint32_t format;
 
 	intel_bb_ptr_align(ibb, 64);
 	binding_table_offset = intel_bb_offset(ibb);
 	binding_table = intel_bb_ptr(ibb);
 	intel_bb_ptr_add(ibb, 64);
 
-	if (intel_graphics_ver(devid) >= IP_VER(20, 0)) {
-		/*
-		 * Up until now, SURFACEFORMAT_R8_UNROM was used regardless of the 'bpp' value.
-		 * For bpp 32 this results in a surface that is 4x narrower than expected. However
-		 * it worked, because the 'Media Block Read/Write' message assumes the surface width
-		 * is always in units of dwords.
-		 *
-		 * Since Xe2 the Media Block Write message got replaced with 'Typed 2D Block
-		 * Load/Store Message' which correctly interprets the surface format.
-		 */
-		if (buf->bpp == 32)
-			binding_table[0] = xehp_fill_surface_state(ibb, buf,
-								      SURFACEFORMAT_R8G8B8A8_UNORM,
-								      1);
-		else if (buf->bpp == 8)
-			binding_table[0] = xehp_fill_surface_state(ibb, buf,
-								      SURFACEFORMAT_R8_UNORM,
-								      1);
-		else
-			igt_assert_f(false,
-				     "Surface state for bpp = %u not implemented",
-				     buf->bpp);
-	} else if (intel_graphics_ver(devid) >= IP_VER(12, 50)) {
-		binding_table[0] = xehp_fill_surface_state(ibb, buf,
-							   SURFACEFORMAT_R8_UNORM, 1);
-	} else if (intel_graphics_ver(devid) >= IP_VER(9, 0)) {
-		binding_table[0] = gen9_fill_surface_state(ibb, buf,
-							   SURFACEFORMAT_R8_UNORM, 1);
-	} else if (intel_graphics_ver(devid) >= IP_VER(8, 0)) {
-		binding_table[0] = gen8_fill_surface_state(ibb, buf,
-							   SURFACEFORMAT_R8_UNORM, 1);
-	} else {
-		binding_table[0] = gen7_fill_surface_state(ibb, buf,
-							   SURFACEFORMAT_R8_UNORM, 1);
-	}
+	if (buf->bpp == 32)
+		format = SURFACEFORMAT_R8G8B8A8_UNORM;
+	else if (buf->bpp == 8)
+		format = SURFACEFORMAT_R8_UNORM;
+	else
+		igt_assert_f(false, "Surface state for bpp = %u not implemented", buf->bpp);
+
+	binding_table[0] = fill_surface_state(ibb, buf, format, 1);
 
 	return binding_table_offset;
 }
