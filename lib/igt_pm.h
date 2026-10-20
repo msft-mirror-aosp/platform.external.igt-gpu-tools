@@ -105,6 +105,11 @@ uint64_t igt_pm_get_runtime_active_time(struct pci_device *pci_dev);
 int igt_pm_get_runtime_usage(struct pci_device *pci_dev);
 void igt_pm_ignore_slpc_efficient_freq(int i915, int gtfd, bool val);
 bool igt_has_pci_pm_capability(struct pci_device *pci_dev);
+bool igt_pm_pci_pme_supported(struct pci_device *pci_dev,
+			      enum igt_acpi_d_state state);
+int igt_pm_pci_pme_enabled(struct pci_device *pci_dev);
+int igt_pm_pci_pme_status(struct pci_device *pci_dev);
+enum igt_acpi_d_state igt_pm_pci_get_d_state(struct pci_device *pci_dev);
 void igt_pm_dpms_toggle(igt_output_t *output);
 uint32_t igt_get_dc_counter(const char *dc_data);
 bool igt_support_dc6(int debugfs_fd);

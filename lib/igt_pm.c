@@ -1524,6 +1524,239 @@ bool igt_has_pci_pm_capability(struct pci_device *pci_dev)
 	return (offset > 0);
 }
 
+/*
+ * Read the kernel's view of the device's D state from the power_state sysfs
+ * attribute. Unlike a config space read this has no runtime PM side effects,
+ * so it is safe to use on a device in D3cold.
+ */
+static enum igt_acpi_d_state igt_pm_pci_get_power_state(struct pci_device *pci_dev)
+{
+	char name[PATH_MAX];
+	char d_state[16];
+	int fd, n_read;
+
+	snprintf(name, PATH_MAX, "/sys/bus/pci/devices/%04x:%02x:%02x.%01x/power_state",
+		 pci_dev->domain, pci_dev->bus, pci_dev->dev, pci_dev->func);
+
+	fd = open(name, O_RDONLY);
+	if (fd < 0)
+		return IGT_ACPI_UNKNOWN_STATE;
+
+	n_read = read(fd, d_state, sizeof(d_state) - 1);
+	close(fd);
+	if (n_read <= 0)
+		return IGT_ACPI_UNKNOWN_STATE;
+
+	d_state[n_read] = '\0';
+	d_state[strcspn(d_state, "\n")] = '\0';
+
+	if (!strcmp(d_state, "D0"))
+		return IGT_ACPI_D0;
+	if (!strcmp(d_state, "D1"))
+		return IGT_ACPI_D1;
+	if (!strcmp(d_state, "D2"))
+		return IGT_ACPI_D2;
+	if (!strcmp(d_state, "D3hot"))
+		return IGT_ACPI_D3Hot;
+	if (!strcmp(d_state, "D3cold"))
+		return IGT_ACPI_D3Cold;
+
+	return IGT_ACPI_UNKNOWN_STATE;
+}
+
+/*
+ * Read a 16 bit register of the PCI Power Management capability, at @reg_offset
+ * from the start of the capability.
+ *
+ * Config space is read through sysfs, where pci_config_pm_runtime_get() resumes
+ * a device in D3cold before the access. To avoid waking the device being
+ * inspected, refuse with -EBUSY if the kernel reports it in D3cold. A device in
+ * D3hot is not resumed, so the registers can be read while it stays suspended.
+ *
+ * Returns: 0 on success, -EBUSY if the device is in D3cold, -ENODEV if it has no
+ * PM capability or did not respond, or -EIO if the config space read failed.
+ */
+static int igt_pm_read_pci_pm_reg(struct pci_device *pci_dev, int reg_offset,
+				  uint16_t *val)
+{
+	int offset;
+
+	if (igt_pm_pci_get_power_state(pci_dev) == IGT_ACPI_D3Cold) {
+		igt_debug("PCI '%04x:%02x:%02x.%01x' is in D3cold, not reading config space\n",
+			  pci_dev->domain, pci_dev->bus, pci_dev->dev, pci_dev->func);
+		return -EBUSY;
+	}
+
+	offset = find_pci_cap_offset(pci_dev, PCI_PM_CAP_ID);
+	if (offset <= 0) {
+		igt_debug("PCI '%04x:%02x:%02x.%01x' PM capability %s\n",
+			  pci_dev->domain, pci_dev->bus, pci_dev->dev, pci_dev->func,
+			  offset ? "lookup failed" : "not present");
+		return offset ? -EIO : -ENODEV;
+	}
+
+	if (pci_device_cfg_read_u16(pci_dev, val, offset + reg_offset)) {
+		igt_debug("PCI '%04x:%02x:%02x.%01x' config read at 0x%x failed\n",
+			  pci_dev->domain, pci_dev->bus, pci_dev->dev, pci_dev->func,
+			  offset + reg_offset);
+		return -EIO;
+	}
+
+	/*
+	 * A device that has gone away reads back as all ones, which would
+	 * otherwise decode as a valid register value: PMCS 0xffff means
+	 * PowerState = D3hot with PME_En set. Reject it.
+	 */
+	if (*val == 0xffff) {
+		igt_debug("PCI '%04x:%02x:%02x.%01x' config read at 0x%x returned all ones\n",
+			  pci_dev->domain, pci_dev->bus, pci_dev->dev, pci_dev->func,
+			  offset + reg_offset);
+		return -ENODEV;
+	}
+
+	return 0;
+}
+
+/**
+ * igt_pm_pci_pme_supported:
+ * @pci_dev: PCI device struct
+ * @state: D state to query PME support for
+ *
+ * Reads the PME_Support field (bits [15:11]) of the PCI Power Management
+ * Capabilities (PMC) register and reports whether the device is able to
+ * generate a Power Management Event from @state.
+ *
+ * PME support is advertised per D state, so a device may be able to signal from
+ * D3hot but not from D3cold. Query the state the device is expected to suspend
+ * into.
+ *
+ * Returns: true if the device can generate a PME from @state, false if it cannot
+ * or the register could not be read.
+ */
+bool igt_pm_pci_pme_supported(struct pci_device *pci_dev,
+			      enum igt_acpi_d_state state)
+{
+	uint16_t pmc;
+	int bit;
+
+	switch (state) {
+	case IGT_ACPI_D0:
+		bit = 0;
+		break;
+	case IGT_ACPI_D1:
+		bit = 1;
+		break;
+	case IGT_ACPI_D2:
+		bit = 2;
+		break;
+	case IGT_ACPI_D3Hot:
+		bit = 3;
+		break;
+	case IGT_ACPI_D3Cold:
+		bit = 4;
+		break;
+	default:
+		igt_debug("Invalid D state %d for PME support query\n", state);
+		return false;
+	}
+
+	if (igt_pm_read_pci_pm_reg(pci_dev, PCI_PM_PMC_OFFSET, &pmc))
+		return false;
+
+	igt_debug("PCI '%04x:%02x:%02x.%01x' PMC = 0x%04x, PME_Support = 0x%02x\n",
+		  pci_dev->domain, pci_dev->bus, pci_dev->dev, pci_dev->func, pmc,
+		  (pmc & PCI_PM_PMC_PME_SUPPORT_MASK) >> PCI_PM_PMC_PME_SUPPORT_SHIFT);
+
+	return !!(pmc & (1 << (PCI_PM_PMC_PME_SUPPORT_SHIFT + bit)));
+}
+
+/**
+ * igt_pm_pci_pme_enabled:
+ * @pci_dev: PCI device struct
+ *
+ * Reads PME_En (bit 8) of the PCI Power Management Control/Status (PMCS)
+ * register, i.e. whether the device is armed to generate PMEs.
+ *
+ * The PCI/PM core sets this on suspend if the device can generate a PME from the
+ * state it is suspending into, but a driver may also arm PME itself from its
+ * own suspend hook, in which case the driver's own conditions apply.
+ *
+ * Returns: 1 if the device is armed to generate PMEs, 0 if it is not, or a
+ * negative error code if the register could not be read.
+ */
+int igt_pm_pci_pme_enabled(struct pci_device *pci_dev)
+{
+	uint16_t pmcs;
+	int ret;
+
+	ret = igt_pm_read_pci_pm_reg(pci_dev, PCI_PM_PMCS_OFFSET, &pmcs);
+	if (ret)
+		return ret;
+
+	return !!(pmcs & PCI_PM_PMCS_PME_EN);
+}
+
+/**
+ * igt_pm_pci_pme_status:
+ * @pci_dev: PCI device struct
+ *
+ * Reads PME_Status (bit 15) of the PCI Power Management Control/Status (PMCS)
+ * register, i.e. whether the device has a PME pending.
+ *
+ * The bit is write-1-to-clear and the device does not clear it itself. It stays
+ * set from the moment the device signals a PME until software acknowledges it,
+ * which the PCI/PM core does when it handles the PME. So finding it still set
+ * on a device that is still suspended means the device did signal but the
+ * platform never delivered the PME, whereas finding it clear means the device
+ * never signalled at all.
+ *
+ * Returns: 1 if the device has a PME pending, 0 if it does not, or a negative
+ * error code if the register could not be read.
+ */
+int igt_pm_pci_pme_status(struct pci_device *pci_dev)
+{
+	uint16_t pmcs;
+	int ret;
+
+	ret = igt_pm_read_pci_pm_reg(pci_dev, PCI_PM_PMCS_OFFSET, &pmcs);
+	if (ret)
+		return ret;
+
+	return !!(pmcs & PCI_PM_PMCS_PME_STATUS);
+}
+
+/**
+ * igt_pm_pci_get_d_state:
+ * @pci_dev: PCI device struct
+ *
+ * Reads the PowerState field (bits [1:0]) of the PCI Power Management
+ * Control/Status (PMCS) register, i.e. the D state as reported by the device.
+ *
+ * PMCS can only express D0-D3hot, and a device in D3cold cannot answer config
+ * space reads at all. So if the kernel's power_state attribute reports D3cold,
+ * that is returned instead, without touching config space and so without
+ * resuming the device.
+ *
+ * Returns: the D state of the device, or IGT_ACPI_UNKNOWN_STATE if the device
+ * has no PM capability or the read failed.
+ */
+enum igt_acpi_d_state igt_pm_pci_get_d_state(struct pci_device *pci_dev)
+{
+	static const enum igt_acpi_d_state d_states[] = {
+		IGT_ACPI_D0, IGT_ACPI_D1, IGT_ACPI_D2, IGT_ACPI_D3Hot,
+	};
+	uint16_t pmcs;
+	int ret;
+
+	ret = igt_pm_read_pci_pm_reg(pci_dev, PCI_PM_PMCS_OFFSET, &pmcs);
+	if (ret == -EBUSY)
+		return IGT_ACPI_D3Cold;
+	if (ret)
+		return IGT_ACPI_UNKNOWN_STATE;
+
+	return d_states[pmcs & PCI_PM_PMCS_PSTATE_MASK];
+}
+
 /**
  * igt_pm_dpms_toggle:
  * @output: igt output for which DPMS toggle has to be performed
