@@ -2997,7 +2997,7 @@ static bool op_disables_psr(const struct test_mode *t,
  */
 static void draw_subtest(const struct test_mode *t)
 {
-	int r;
+	int r, n_rects;
 	int assertions = 0;
 	struct draw_pattern_info *pattern;
 	struct modeset_params *params = pick_params(t);
@@ -3043,7 +3043,9 @@ static void draw_subtest(const struct test_mode *t)
 	prepare_subtest(t, pattern);
 	target = pick_target(t, params);
 
-	for (r = 0; r < pattern->n_rects; r++) {
+	n_rects = in_simulation ? 1 : pattern->n_rects;
+
+	for (r = 0; r < n_rects; r++) {
 		igt_debug("Drawing rect %d\n", r);
 		draw_rect(pattern, target, t->method, r);
 		update_wanted_crc(t, &pattern->crcs[t->format][r]);
@@ -4373,8 +4375,12 @@ int igt_main_args("", long_options, help_str, opt_handler, NULL)
 		if (opt.tiling == TILING_AUTOSELECT)
 			opt.tiling = drm.display_ver >= 30 ? TILING_4 : TILING_X;
 
-		setup_environment();
+		/* Full-size modes are too slow on simulation, use the smallest mode. */
 		in_simulation = igt_run_in_simulation();
+		if (in_simulation)
+			opt.small_modes = true;
+
+		setup_environment();
 	}
 
 	for (t.feature = 0; t.feature < FEATURE_COUNT; t.feature++) {
