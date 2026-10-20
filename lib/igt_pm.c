@@ -1033,15 +1033,26 @@ static void __igt_pm_pci_card_exit_handler(int sig)
 	igt_pm_restore_pci_card_runtime_pm();
 }
 
-static int igt_pm_get_power_attr_fd(struct pci_device *pci_dev, const char *attr)
+/*
+ * Open a power attribute of @pci_dev with @flags, returning -1 if it does not
+ * exist. Not all attributes are present on all devices, so callers that want to
+ * probe for one need an error rather than an assertion.
+ */
+static int __igt_pm_get_power_attr_fd(struct pci_device *pci_dev,
+				      const char *attr, int flags)
 {
 	char name[PATH_MAX];
-	int fd;
 
 	snprintf(name, PATH_MAX, "/sys/bus/pci/devices/%04x:%02x:%02x.%01x/power/%s",
 		 pci_dev->domain, pci_dev->bus, pci_dev->dev, pci_dev->func, attr);
 
-	fd = open(name, O_RDWR);
+	return open(name, flags);
+}
+
+static int igt_pm_get_power_attr_fd(struct pci_device *pci_dev, const char *attr)
+{
+	int fd = __igt_pm_get_power_attr_fd(pci_dev, attr, O_RDWR);
+
 	igt_assert_f(fd >= 0, "Can't open %s\n", attr);
 
 	return fd;
@@ -1049,13 +1060,8 @@ static int igt_pm_get_power_attr_fd(struct pci_device *pci_dev, const char *attr
 
 static int igt_pm_get_power_attr_fd_rdonly(struct pci_device *pci_dev, const char *attr)
 {
-	char name[PATH_MAX];
-	int fd;
+	int fd = __igt_pm_get_power_attr_fd(pci_dev, attr, O_RDONLY);
 
-	snprintf(name, PATH_MAX, "/sys/bus/pci/devices/%04x:%02x:%02x.%01x/power/%s",
-		 pci_dev->domain, pci_dev->bus, pci_dev->dev, pci_dev->func, attr);
-
-	fd = open(name, O_RDONLY);
 	igt_assert_f(fd >= 0, "Can't open %s\n", attr);
 
 	return fd;
