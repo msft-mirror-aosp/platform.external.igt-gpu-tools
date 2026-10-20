@@ -26,6 +26,18 @@ enum pci_cap_id {
 #define PCI_SLOT_CAP_OFFSET 0x14
 #define  PCI_SLOT_PWR_CTRL_PRESENT (1 << 1)
 
+/*
+ * PCI Power Management capability registers, at the given offsets from the
+ * start of the PM capability as returned by find_pci_cap_offset().
+ */
+#define PCI_PM_PMC_OFFSET 0x2			/* PM Capabilities */
+#define  PCI_PM_PMC_PME_SUPPORT_SHIFT 11	/* PME_Support, bits [15:11] */
+#define  PCI_PM_PMC_PME_SUPPORT_MASK (0x1f << PCI_PM_PMC_PME_SUPPORT_SHIFT)
+#define PCI_PM_PMCS_OFFSET 0x4			/* PM Control/Status */
+#define  PCI_PM_PMCS_PSTATE_MASK 0x3		/* PowerState, bits [1:0] */
+#define  PCI_PM_PMCS_PME_EN (1 << 8)		/* PME_En */
+#define  PCI_PM_PMCS_PME_STATUS (1 << 15)	/* PME_Status, write 1 to clear */
+
 int find_pci_cap_offset(struct pci_device *dev, enum pci_cap_id cap_id);
 int igt_pci_config_raw_read(const char *pci_slot, void *buffer, size_t length);
 uint16_t igt_pci_config_raw_read_u16(const uint8_t *config, unsigned int offset);
