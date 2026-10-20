@@ -1498,6 +1498,35 @@ int igt_pm_get_runtime_usage(struct pci_device *pci_dev)
 	return usage;
 }
 
+/*
+ * Read an unsigned power attribute of @pci_dev, returning -1 if the attribute
+ * does not exist or does not hold a number.
+ *
+ * The latter is not hypothetical: the wakeup counters exist for every wakeup
+ * capable device, but the PM core emits a bare newline for them while the
+ * device has no wakeup source, i.e. while power/wakeup is disabled. Since 0 is
+ * a valid count, that case has to be told apart from it.
+ */
+static int64_t igt_pm_read_power_attr_u64(struct pci_device *pci_dev,
+					  const char *attr)
+{
+	char buf[64];
+	int64_t val;
+	int fd;
+
+	fd = __igt_pm_get_power_attr_fd(pci_dev, attr, O_RDONLY);
+	if (fd < 0)
+		return -1;
+
+	if (!igt_pm_read_power_attr(fd, buf, sizeof(buf), false) ||
+	    sscanf(buf, "%" SCNd64, &val) != 1 || val < 0)
+		val = -1;
+
+	close(fd);
+
+	return val;
+}
+
 #define IGT_PM_WAKEUP_ENABLED_STR "enabled\n"
 #define IGT_PM_WAKEUP_DISABLED_STR "disabled\n"
 
@@ -1636,6 +1665,30 @@ void igt_pm_restore_wakeup(void)
 	}
 
 	__igt_pm_wakeup.pci_dev = NULL;
+}
+
+/**
+ * igt_pm_get_wakeup_active_count:
+ * @pci_dev: PCI device struct
+ *
+ * Reads power/wakeup_active_count, the number of times the device's wakeup
+ * source was activated. An increment across a runtime suspended window means
+ * the resume was signalled by the device, i.e. a PME arrived, rather than
+ * initiated by something host side such as HPD polling.
+ *
+ * Use this and not power/wakeup_count, which is only incremented under
+ * events_check_enabled and so never moves for a runtime resume.
+ *
+ * The count only exists while the device has a wakeup source, i.e. while
+ * power/wakeup is enabled, and restarts from 0 each time one is created. See
+ * igt_pm_set_wakeup_enabled().
+ *
+ * Return: the wakeup active count, or -1 if the device is not wakeup capable,
+ * has power/wakeup disabled, or the count could not be read.
+ */
+int64_t igt_pm_get_wakeup_active_count(struct pci_device *pci_dev)
+{
+	return igt_pm_read_power_attr_u64(pci_dev, "wakeup_active_count");
 }
 
 /**
