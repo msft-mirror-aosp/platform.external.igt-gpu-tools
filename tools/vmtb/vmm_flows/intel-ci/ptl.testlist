@@ -1,0 +1,20 @@
+#####################################################
+#
+# VMM Flows PTL test list:
+# defines tests to be executed on PTL only.
+#
+#####################################################
+##########################
+# Basic VF/VM operations
+##########################
+test_basic.py::TestVfDriverLoadRemove
+#######################################
+# VF/VM save-restore - cold migration
+#######################################
+test_migration.py::TestIdleMigration
+test_migration.py::TestBusyMigrationWsim1
+test_migration.py::TestBusyMigrationIgtExecReset1
+test_migration.py::TestBusyMigrationIgtExecThreads1
+test_migration.py::TestBusyMigrationIgtComputePreempt
+test_migration.py::TestDoubleMigration1Resfix3
+test_migration.py::TestDoubleMigration2Resfix4
