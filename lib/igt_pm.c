@@ -1498,6 +1498,146 @@ int igt_pm_get_runtime_usage(struct pci_device *pci_dev)
 	return usage;
 }
 
+#define IGT_PM_WAKEUP_ENABLED_STR "enabled\n"
+#define IGT_PM_WAKEUP_DISABLED_STR "disabled\n"
+
+static struct {
+	struct pci_device *pci_dev;
+	bool orig_enabled;
+} __igt_pm_wakeup;
+
+static void __igt_pm_wakeup_exit_handler(int sig)
+{
+	igt_pm_restore_wakeup();
+}
+
+/**
+ * igt_pm_has_wakeup_support:
+ * @pci_dev: PCI device struct
+ *
+ * The power/wakeup* sysfs attributes only exist for devices the PM core
+ * considers wakeup capable, so their presence is the check for whether wakeup
+ * source accounting is available at all for @pci_dev.
+ *
+ * Returns: true if the device exposes power/wakeup, false otherwise.
+ */
+bool igt_pm_has_wakeup_support(struct pci_device *pci_dev)
+{
+	int fd = __igt_pm_get_power_attr_fd(pci_dev, "wakeup", O_RDONLY);
+
+	if (fd < 0)
+		return false;
+
+	close(fd);
+
+	return true;
+}
+
+/*
+ * Read power/wakeup, i.e. whether the device is permitted to wake the system.
+ * Returns false if wakeup is disabled or the device is not wakeup capable.
+ *
+ * This gates two separate things. It is the device_may_wakeup() policy, which
+ * the system suspend path requires before arming PME, and which a driver may
+ * also consult from its own suspend hooks.
+ *
+ * It also gates the device's wakeup source object: writing "disabled" makes the
+ * PM core drop dev->power.wakeup, after which wakeup events are not accounted
+ * at all and the power/wakeup_* counters read back as a bare newline. Tests
+ * that sample those counters therefore need wakeup enabled, whether or not they
+ * care about system wakeup.
+ */
+static bool igt_pm_get_wakeup_enabled(struct pci_device *pci_dev)
+{
+	char buf[64];
+	int fd;
+	bool enabled;
+
+	fd = __igt_pm_get_power_attr_fd(pci_dev, "wakeup", O_RDONLY);
+	if (fd < 0)
+		return false;
+
+	enabled = igt_pm_read_power_attr(fd, buf, sizeof(buf), false) &&
+		  !strcmp(buf, "enabled");
+
+	close(fd);
+
+	return enabled;
+}
+
+/**
+ * igt_pm_set_wakeup_enabled:
+ * @pci_dev: PCI device struct
+ * @enable: whether to allow the device to wake the system
+ *
+ * Writes power/wakeup. The original value is saved on the first call and
+ * restored by an exit handler, or explicitly via igt_pm_restore_wakeup().
+ *
+ * Enabling wakeup on a device that has it disabled makes the PM core create a
+ * new wakeup source, so all power/wakeup_* counters restart from 0. Callers
+ * that sample those counters must take a fresh baseline after this call.
+ * Enabling it when already enabled keeps the existing wakeup source and its
+ * counters.
+ *
+ * Callers must gate on igt_pm_has_wakeup_support() first.
+ */
+void igt_pm_set_wakeup_enabled(struct pci_device *pci_dev, bool enable)
+{
+	const char *val = enable ? IGT_PM_WAKEUP_ENABLED_STR :
+				   IGT_PM_WAKEUP_DISABLED_STR;
+	int len = strlen(val);
+	int fd, size;
+
+	fd = __igt_pm_get_power_attr_fd(pci_dev, "wakeup", O_RDWR);
+	igt_assert_f(fd >= 0, "Device has no power/wakeup attribute\n");
+
+	if (!__igt_pm_wakeup.pci_dev) {
+		__igt_pm_wakeup.orig_enabled = igt_pm_get_wakeup_enabled(pci_dev);
+		__igt_pm_wakeup.pci_dev = pci_dev;
+		igt_install_exit_handler(__igt_pm_wakeup_exit_handler);
+	}
+
+	size = write(fd, val, len);
+	close(fd);
+
+	igt_assert_f(size == len, "Failed to %s power/wakeup\n",
+		     enable ? "enable" : "disable");
+
+	igt_debug("PCI '%04x:%02x:%02x.%01x' power/wakeup = %s\n",
+		  pci_dev->domain, pci_dev->bus, pci_dev->dev, pci_dev->func,
+		  enable ? "enabled" : "disabled");
+}
+
+/**
+ * igt_pm_restore_wakeup:
+ *
+ * Restores power/wakeup to the value it had before the first
+ * igt_pm_set_wakeup_enabled() call. Does nothing if it was never changed.
+ *
+ * As with igt_pm_set_wakeup_enabled(), restoring an enabled value onto a
+ * disabled device restarts the power/wakeup_* counters from 0.
+ */
+void igt_pm_restore_wakeup(void)
+{
+	struct pci_device *pci_dev = __igt_pm_wakeup.pci_dev;
+	const char *val;
+	int fd;
+
+	if (!pci_dev)
+		return;
+
+	val = __igt_pm_wakeup.orig_enabled ? IGT_PM_WAKEUP_ENABLED_STR :
+					     IGT_PM_WAKEUP_DISABLED_STR;
+
+	fd = __igt_pm_get_power_attr_fd(pci_dev, "wakeup", O_RDWR);
+	if (fd >= 0) {
+		igt_ignore_warn(write(fd, val, strlen(val)));
+		close(fd);
+	}
+
+	__igt_pm_wakeup.pci_dev = NULL;
+}
+
 /**
  * igt_pm_ignore_slpc_efficient_freq:
  * @i915: open i915 drm file descriptor

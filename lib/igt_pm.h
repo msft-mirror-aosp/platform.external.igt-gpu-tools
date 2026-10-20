@@ -103,6 +103,9 @@ bool i915_is_slpc_enabled(int drm_fd);
 uint64_t igt_pm_get_runtime_suspended_time(struct pci_device *pci_dev);
 uint64_t igt_pm_get_runtime_active_time(struct pci_device *pci_dev);
 int igt_pm_get_runtime_usage(struct pci_device *pci_dev);
+bool igt_pm_has_wakeup_support(struct pci_device *pci_dev);
+void igt_pm_set_wakeup_enabled(struct pci_device *pci_dev, bool enable);
+void igt_pm_restore_wakeup(void);
 void igt_pm_ignore_slpc_efficient_freq(int i915, int gtfd, bool val);
 bool igt_has_pci_pm_capability(struct pci_device *pci_dev);
 bool igt_pm_pci_pme_supported(struct pci_device *pci_dev,
