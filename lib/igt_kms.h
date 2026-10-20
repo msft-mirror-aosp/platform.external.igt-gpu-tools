@@ -1239,6 +1239,9 @@ bool igt_connector_event_detected(struct udev_monitor *mon, uint32_t conn_id,
 				  uint32_t prop_id, int timeout_msecs);
 void igt_flush_uevents(struct udev_monitor *mon);
 void igt_cleanup_uevents(struct udev_monitor *mon);
+bool igt_kms_poll_save(void);
+void igt_kms_poll_set(bool enable);
+void igt_kms_poll_restore(void);
 
 bool igt_format_mods_has_format_and_modifier(const struct igt_format_mods *format_mods,
 					     uint32_t format, uint64_t modifier);

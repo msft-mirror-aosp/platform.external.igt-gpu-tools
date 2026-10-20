@@ -6173,6 +6173,107 @@ void igt_cleanup_uevents(struct udev_monitor *mon)
 	udev_unref(udev);
 }
 
+#define IGT_KMS_HELPER_PARAMS "/sys/module/drm_kms_helper/parameters"
+
+static struct {
+	bool saved;
+	bool orig_poll;
+} __igt_kms_poll;
+
+static void __igt_kms_poll_exit_handler(int sig)
+{
+	igt_kms_poll_restore();
+}
+
+/**
+ * igt_kms_poll_save:
+ *
+ * Saves the current drm_kms_helper.poll value and installs an exit handler to
+ * restore it. Safe to call more than once, only the first value is kept.
+ *
+ * Returns: false if the module parameter is not available, in which case
+ * nothing was saved.
+ */
+bool igt_kms_poll_save(void)
+{
+	int dir;
+
+	if (__igt_kms_poll.saved)
+		return true;
+
+	dir = open(IGT_KMS_HELPER_PARAMS, O_RDONLY);
+	if (dir < 0)
+		return false;
+
+	if (!__igt_sysfs_get_boolean(dir, "poll", &__igt_kms_poll.orig_poll)) {
+		close(dir);
+		return false;
+	}
+	close(dir);
+
+	__igt_kms_poll.saved = true;
+	igt_install_exit_handler(__igt_kms_poll_exit_handler);
+
+	igt_debug("Saved drm_kms_helper.poll = %s\n",
+		  __igt_kms_poll.orig_poll ? "Y" : "N");
+
+	return true;
+}
+
+/**
+ * igt_kms_poll_set:
+ * @enable: whether to allow connector polling
+ *
+ * Writes the drm_kms_helper.poll module parameter. Callers are expected to have
+ * called igt_kms_poll_save() first so the original value is restored on exit.
+ *
+ * This only changes the parameter, it does not itself start or stop the poll
+ * worker. Disabling takes effect the next time the worker runs, at most one
+ * poll period later, and the worker then stops. Enabling does not restart a
+ * worker that has stopped: the kernel only does that from
+ * drm_kms_helper_poll_enable(), i.e. on driver load and, for most drivers,
+ * system resume. Callers that rely on polling actually running after enabling
+ * it must check for it.
+ */
+void igt_kms_poll_set(bool enable)
+{
+	int dir;
+
+	dir = open(IGT_KMS_HELPER_PARAMS, O_RDONLY);
+	igt_assert_f(dir >= 0, "Can't open %s\n", IGT_KMS_HELPER_PARAMS);
+
+	igt_sysfs_set_boolean(dir, "poll", enable);
+	close(dir);
+
+	igt_debug("drm_kms_helper.poll = %s\n", enable ? "Y" : "N");
+}
+
+/**
+ * igt_kms_poll_restore:
+ *
+ * Restores drm_kms_helper.poll to the value saved by igt_kms_poll_save(). Does
+ * nothing if it was never saved, so it is safe to use as an exit handler that
+ * may run before any save happened.
+ *
+ * As with igt_kms_poll_set(), restoring the parameter to enabled does not
+ * restart a poll worker that stopped while it was disabled.
+ */
+void igt_kms_poll_restore(void)
+{
+	int dir;
+
+	if (!__igt_kms_poll.saved)
+		return;
+
+	dir = open(IGT_KMS_HELPER_PARAMS, O_RDONLY);
+	if (dir >= 0) {
+		__igt_sysfs_set_boolean(dir, "poll", __igt_kms_poll.orig_poll);
+		close(dir);
+	}
+
+	__igt_kms_poll.saved = false;
+}
+
 /**
  * kmstest_get_vbl_flag:
  * @crtc_index: CRTC index to convert into DRM_IOCTL_WAIT_VBLANK parameter
