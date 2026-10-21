@@ -55,6 +55,7 @@ static void ignore_wedged_in_dmesg(void)
 				    "|EngineInstance: [0-9]+"
 				    "|Tile[0-9]+: GT[0-9A-Fa-f]*: Fault response: Unsuccessful -EINVAL"
 				    "|Tile[0-9]+: GT[0-9A-Fa-f]*: Engine memory CAT error"
+				    "|Tile[0-9]+: GT[0-9A-Fa-f]*: GuC: Uncorrectable"
 				    "|SIGID=203");
 }
 
