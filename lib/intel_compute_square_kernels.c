@@ -54,6 +54,17 @@ const struct intel_compute_kernels intel_compute_square_kernels[] = {
 		.loop_kernel_size = sizeof(xe2lpg_kernel_loop_bin),
 	},
 	{
+		.ip_ver = IP_VER(20, 02),
+		.size = sizeof(xe2lpg_kernel_square_bin),
+		.kernel = xe2lpg_kernel_square_bin,
+		.long_kernel = xe2lpg_kernel_count_bin,
+		.long_kernel_size = sizeof(xe2lpg_kernel_count_bin),
+		.sip_kernel = xe2lpg_kernel_sip_bin,
+		.sip_kernel_size = sizeof(xe2lpg_kernel_sip_bin),
+		.loop_kernel = xe2lpg_kernel_loop_bin,
+		.loop_kernel_size = sizeof(xe2lpg_kernel_loop_bin),
+	},
+	{
 		.ip_ver = IP_VER(20, 04),
 		.size = sizeof(xe2lpg_kernel_square_bin),
 		.kernel = xe2lpg_kernel_square_bin,

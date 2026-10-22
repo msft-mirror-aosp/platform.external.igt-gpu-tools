@@ -2308,6 +2308,11 @@ static const struct {
 		.compat = COMPAT_DRIVER_XE,
 	},
 	{
+		.ip_ver = IP_VER(20, 02),
+		.compute_exec = xe2lpg_compute_exec,
+		.compat = COMPAT_DRIVER_XE,
+	},
+	{
 		.ip_ver = IP_VER(20, 04),
 		.compute_exec = xe2lpg_compute_exec,
 		.compat = COMPAT_DRIVER_XE,
@@ -2810,6 +2815,12 @@ static const struct {
 } intel_compute_preempt_batches[] = {
 	{
 		.ip_ver = IP_VER(20, 01),
+		.compute_exec = xe2lpg_compute_preempt_exec,
+		.compat = COMPAT_DRIVER_XE,
+		.preempt_type = PREEMPT_TGP | PREEMPT_WMTP,
+	},
+	{
+		.ip_ver = IP_VER(20, 02),
 		.compute_exec = xe2lpg_compute_preempt_exec,
 		.compat = COMPAT_DRIVER_XE,
 		.preempt_type = PREEMPT_TGP | PREEMPT_WMTP,
