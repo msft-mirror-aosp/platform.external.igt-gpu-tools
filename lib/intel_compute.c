@@ -2323,6 +2323,11 @@ static const struct {
 		.compat = COMPAT_DRIVER_XE,
 	},
 	{
+		.ip_ver = IP_VER(30, 01),
+		.compute_exec = xe2lpg_compute_exec,
+		.compat = COMPAT_DRIVER_XE,
+	},
+	{
 		.ip_ver = IP_VER(30, 03),
 		.compute_exec = xe2lpg_compute_exec,
 		.compat = COMPAT_DRIVER_XE,
@@ -2833,6 +2838,12 @@ static const struct {
 	},
 	{
 		.ip_ver = IP_VER(30, 00),
+		.compute_exec = xe2lpg_compute_preempt_exec,
+		.compat = COMPAT_DRIVER_XE,
+		.preempt_type = PREEMPT_TGP | PREEMPT_WMTP,
+	},
+	{
+		.ip_ver = IP_VER(30, 01),
 		.compute_exec = xe2lpg_compute_preempt_exec,
 		.compat = COMPAT_DRIVER_XE,
 		.preempt_type = PREEMPT_TGP | PREEMPT_WMTP,
