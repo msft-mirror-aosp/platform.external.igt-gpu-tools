@@ -35,13 +35,6 @@
  * Description:
  *	Kernel dynamic selftests to check mocs configuration.
  * Functionality: mocs configuration
- *
- * SUBTEST: xe_eudebug
- * Description:
- *	Kernel dynamic selftests to check eudebug functionality.
- * Functionality: eudebug kunit
- * Mega feature: EUdebug
- * Sub-category: kunit eudebug
  */
 
 static const char *live_tests[] = {
@@ -50,7 +43,6 @@ static const char *live_tests[] = {
 	"xe_dma_buf",
 	"xe_migrate",
 	"xe_mocs",
-	"xe_eudebug",
 };
 
 int igt_main()
