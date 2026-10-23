@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "igt_core.h"
 #include "igt_debugfs.h"
 #include "igt_sysfs.h"
 
@@ -15,6 +16,109 @@
 #include "xe/xe_wa.h"
 
 #include "tests/xe_wa.h"
+
+struct xe_wa_cache {
+	int num_dumps;
+	char *dumps[];
+};
+
+static void free_wa_debugfs_dumps(struct xe_wa_cache *wa_cache)
+{
+	for (int i = 0; i < wa_cache->num_dumps && wa_cache->dumps[i]; i++) {
+		free(wa_cache->dumps[i]);
+		wa_cache->dumps[i] = NULL;
+	}
+}
+
+static int get_wa_debugfs_count(int fd)
+{
+	int gt;
+	int count = 1; /* Device workarounds */
+
+	xe_for_each_gt(fd, gt)
+		count++;
+
+	return count;
+}
+
+static int get_wa_debugfs_dumps(int fd, struct xe_wa_cache *wa_cache)
+{
+	int gt;
+	int debugfs_fd;
+	int count;
+	int ret = 0;
+
+	debugfs_fd = igt_debugfs_dir(fd);
+	if (debugfs_fd == -1)
+		goto err;
+
+	count = 0;
+
+	if (!(wa_cache->dumps[count++] = igt_sysfs_get(debugfs_fd, "workarounds")))
+		goto err;
+
+	xe_for_each_gt(fd, gt) {
+		char name[32];
+
+		snprintf(name, sizeof(name), "gt%d/workarounds", gt);
+
+		if (!(wa_cache->dumps[count++] = igt_sysfs_get(debugfs_fd, name)))
+			goto err;
+	}
+
+	if (igt_warn_on(count != wa_cache->num_dumps))
+		goto err;
+
+	goto out;
+
+err:
+	free_wa_debugfs_dumps(wa_cache);
+	ret = 1;
+
+out:
+	close(debugfs_fd);
+
+	return ret;
+}
+
+static void free_cache(struct xe_wa_cache *wa_cache)
+{
+	if (!wa_cache)
+		return;
+
+	free_wa_debugfs_dumps(wa_cache);
+	free(wa_cache);
+}
+
+static struct xe_wa_cache *build_cache(int fd)
+{
+	struct xe_wa_cache *wa_cache;
+	int num_dumps;
+
+	num_dumps = get_wa_debugfs_count(fd);
+	wa_cache = calloc(1, sizeof(*wa_cache) + num_dumps * sizeof(wa_cache->dumps[0]));
+
+	if (igt_warn_on(!wa_cache))
+		return NULL;
+
+	wa_cache->num_dumps = num_dumps;
+
+	/*
+	 * Some vendor-neutral tests (e.g. core_setmaster) drop root
+	 * privileges on purpose and it can cause
+	 * get_wa_debugfs_dumps() to fail. Since those are not
+	 * xe-specific and will not require information about
+	 * workarounds, let's avoid creating noise with igt_warn_on()
+	 * and limit ourselves to use igt_debug_on() here.
+	 */
+	if (igt_debug_on(get_wa_debugfs_dumps(fd, wa_cache))) {
+		free_cache(wa_cache);
+
+		return NULL;
+	}
+
+	return wa_cache;
+}
 
 static int debugfs_dump_has_wa(char *dump, const char *wa)
 {
@@ -76,27 +180,6 @@ int xe_wa_test_debugfs_dump_has_wa(char *dump, const char *wa)
 	return debugfs_dump_has_wa(dump, wa);
 }
 
-static int debugfs_file_has_wa(int drm_fd, int debugfs_fd,
-			       const char *debugfs_name, const char *wa)
-{
-	char *debugfs_dump;
-
-	if (!igt_debugfs_exists(drm_fd, debugfs_name, O_RDONLY))
-		return -1;
-
-	debugfs_dump = igt_sysfs_get(debugfs_fd, debugfs_name);
-	if (debugfs_dump) {
-		int ret = debugfs_dump_has_wa(debugfs_dump, wa);
-
-		free(debugfs_dump);
-
-		if (ret)
-			return ret;
-	}
-
-	return 0;
-}
-
 /**
  * xe_wa: Check if a workaround is enabled for the device.
  * @fd: A drm file descriptor.
@@ -106,25 +189,22 @@ static int debugfs_file_has_wa(int drm_fd, int debugfs_fd,
  */
 int xe_wa(int fd, const char *wa)
 {
-	int ret = 0;
-	int debugfs_fd;
-	unsigned int xe;
-	char name[256];
+	struct xe_wa_cache *wa_cache = build_cache(fd);
+	int ret;
 
-	debugfs_fd = igt_debugfs_dir(fd);
-	if (debugfs_fd == -1)
+	if (igt_warn_on(!wa_cache))
 		return -1;
 
-	xe_for_each_gt(fd, xe) {
-		sprintf(name, "gt%d/workarounds", xe);
-		ret = debugfs_file_has_wa(fd, debugfs_fd, name, wa);
-		if (ret)
+	ret = 0;
+
+	for (int i = 0; i < wa_cache->num_dumps; i++) {
+		if (debugfs_dump_has_wa(wa_cache->dumps[i], wa)) {
+			ret = 1;
 			break;
+		}
 	}
 
-	if (!ret)
-		ret = debugfs_file_has_wa(fd, debugfs_fd, "workarounds", wa);
+	free_cache(wa_cache);
 
-	close(debugfs_fd);
 	return ret;
 }
