@@ -217,7 +217,9 @@ static void test_idle_residency(int fd, int gt, enum test_type flag)
 	unsigned long elapsed_ms, residency_start, residency_end;
 	struct timespec ts_start, ts_end;
 
-	igt_assert_f(igt_wait(xe_gt_is_in_c6(fd, gt), 1000, 1), "GT %d not in C6\n", gt);
+	igt_assert_f(igt_wait(xe_gt_is_in_c6(fd, gt), 1000, 1) ||
+		     xe_gt_dump_debug_info(fd, gt),
+		     "GT %d not in C6\n", gt);
 
 	if (flag == TEST_S2IDLE) {
 		clock_gettime(CLOCK_BOOTTIME, &ts_start);
@@ -326,7 +328,8 @@ static void toggle_gt_c6(int fd, int n)
 		close(fw_handle);
 		/* check if all gts are in C6 after forcewake is released */
 		xe_for_each_gt(fd, gt)
-			igt_assert_f(igt_wait(xe_gt_is_in_c6(fd, gt), 1000, 1),
+			igt_assert_f(igt_wait(xe_gt_is_in_c6(fd, gt), 1000, 1) ||
+				     xe_gt_dump_debug_info(fd, gt),
 				     "Forcewake released, GT %d should be in C6\n", gt);
 
 		if (n == NUM_REPS)
@@ -392,7 +395,8 @@ static void cpg_gt_toggle(int fd)
 	int gt;
 
 	xe_for_each_gt(fd, gt)
-		igt_skip_on_f(!igt_wait(xe_gt_is_in_c6(fd, gt), 1000, 10),
+		igt_skip_on_f(!(igt_wait(xe_gt_is_in_c6(fd, gt), 1000, 10) ||
+				xe_gt_dump_debug_info(fd, gt)),
 			      "GT %d is not in C6\n", gt);
 
 	fw_handle = igt_debugfs_open(fd, "forcewake_all", O_RDONLY);
@@ -581,7 +585,8 @@ int igt_main()
 	igt_subtest_with_dynamic("gt-c6-on-idle") {
 		xe_for_each_gt(fd, gt)
 			igt_dynamic_f("gt%u", gt)
-				igt_assert_f(igt_wait(xe_gt_is_in_c6(fd, gt), 1000, 1),
+				igt_assert_f(igt_wait(xe_gt_is_in_c6(fd, gt), 1000, 1) ||
+					     xe_gt_dump_debug_info(fd, gt),
 					     "GT %d not in C6\n", gt);
 	}
 

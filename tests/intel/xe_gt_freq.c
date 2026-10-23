@@ -57,7 +57,8 @@ static void test_throttle_basic_api(int fd, int gt_id)
 	char *throttle_reasons;
 	int gt_fd;
 
-	igt_assert_f(igt_wait(xe_gt_is_in_c6(fd, gt_id), 1000, 10),
+	igt_assert_f(igt_wait(xe_gt_is_in_c6(fd, gt_id), 1000, 10) ||
+		     xe_gt_dump_debug_info(fd, gt_id),
 		     "GT %d should be in C6\n", gt_id);
 
 	gt_fd = xe_sysfs_gt_open(fd, gt_id);
@@ -145,7 +146,8 @@ static void test_freq_fixed(int fd, int gt_id, bool gt_idle)
 
 	if (gt_idle) {
 		/* Wait for GT to go in C6 as previous xe_gt_get_freq wakes up GT*/
-		igt_assert_f(igt_wait(xe_gt_is_in_c6(fd, gt_id), 1000, 10),
+		igt_assert_f(igt_wait(xe_gt_is_in_c6(fd, gt_id), 1000, 10) ||
+			     xe_gt_dump_debug_info(fd, gt_id),
 			     "GT %d should be in C6\n", gt_id);
 		igt_assert(xe_gt_get_freq(fd, gt_id, "act") == 0);
 	} else {
@@ -160,7 +162,8 @@ static void test_freq_fixed(int fd, int gt_id, bool gt_idle)
 	igt_assert_lte_u32((rpmid - FREQ_UNIT_MHZ), cur_freq);
 
 	if (gt_idle) {
-		igt_assert_f(igt_wait(xe_gt_is_in_c6(fd, gt_id), 1000, 10),
+		igt_assert_f(igt_wait(xe_gt_is_in_c6(fd, gt_id), 1000, 10) ||
+			     xe_gt_dump_debug_info(fd, gt_id),
 			     "GT %d should be in C6\n", gt_id);
 		igt_assert(xe_gt_get_freq(fd, gt_id, "act") == 0);
 	} else {
@@ -179,7 +182,8 @@ static void test_freq_fixed(int fd, int gt_id, bool gt_idle)
 	igt_assert_eq_u32(xe_gt_get_freq(fd, gt_id, "cur"), rp0);
 
 	if (gt_idle) {
-		igt_assert_f(igt_wait(xe_gt_is_in_c6(fd, gt_id), 1000, 10),
+		igt_assert_f(igt_wait(xe_gt_is_in_c6(fd, gt_id), 1000, 10) ||
+			     xe_gt_dump_debug_info(fd, gt_id),
 			     "GT %d should be in C6\n", gt_id);
 		igt_assert(xe_gt_get_freq(fd, gt_id, "act") == 0);
 	}
@@ -210,7 +214,8 @@ static void test_freq_range(int fd, int gt_id, bool gt_idle)
 	igt_assert(rpn <= cur && cur <= rpmid + FREQ_UNIT_MHZ);
 
 	if (gt_idle) {
-		igt_assert_f(igt_wait(xe_gt_is_in_c6(fd, gt_id), 1000, 10),
+		igt_assert_f(igt_wait(xe_gt_is_in_c6(fd, gt_id), 1000, 10) ||
+			     xe_gt_dump_debug_info(fd, gt_id),
 			     "GT %d should be in C6\n", gt_id);
 		igt_assert(xe_gt_get_freq(fd, gt_id, "act") == 0);
 	} else {
@@ -412,7 +417,8 @@ int igt_main()
 
 	igt_subtest("freq_fixed_idle") {
 		xe_for_each_gt(fd, gt) {
-			igt_require_f(igt_wait(xe_gt_is_in_c6(fd, gt), 1000, 10),
+			igt_require_f(igt_wait(xe_gt_is_in_c6(fd, gt), 1000, 10) ||
+				      xe_gt_dump_debug_info(fd, gt),
 				      "GT %d should be in C6\n", gt);
 			test_freq_fixed(fd, gt, true);
 		}
@@ -430,7 +436,8 @@ int igt_main()
 
 	igt_subtest("freq_range_idle") {
 		xe_for_each_gt(fd, gt) {
-			igt_require_f(igt_wait(xe_gt_is_in_c6(fd, gt), 1000, 10),
+			igt_require_f(igt_wait(xe_gt_is_in_c6(fd, gt), 1000, 10) ||
+				      xe_gt_dump_debug_info(fd, gt),
 				      "GT %d should be in C6\n", gt);
 			test_freq_range(fd, gt, true);
 		}

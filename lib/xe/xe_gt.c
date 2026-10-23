@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 
 #include "igt_core.h"
+#include "igt_debugfs.h"
 #include "igt_sysfs.h"
 #include "lib/intel_chipset.h"
 #include "xe_gt.h"
@@ -225,6 +226,44 @@ bool xe_gt_is_in_c6(int fd, int gt)
 
 	igt_debug("GT%d C-state is %s\n", gt, gt_c_state);
 	errno = 0;
+
+	return false;
+}
+
+/**
+ * xe_gt_dump_debug_info:
+ * @fd: open xe drm file descriptor
+ * @gt: gt number
+ *
+ * Dumps the hw_engines and powergate_info debugfs entries for @gt via
+ * igt_info, so they are printed unconditionally on both FAIL and SKIP paths.
+ * Always returns false, so it can be OR'd with the result of an igt_wait()
+ * condition to dump state only when the wait fails.
+ *
+ * Return: always false
+ */
+bool xe_gt_dump_debug_info(int fd, int gt)
+{
+	char *info;
+	int dir;
+
+	dir = igt_debugfs_gt_dir(fd, gt);
+	if (dir < 0)
+		return false;
+
+	info = igt_sysfs_get(dir, "hw_engines");
+	if (info) {
+		igt_info("GT%d hw_engines:\n%s\n", gt, info);
+		free(info);
+	}
+
+	info = igt_sysfs_get(dir, "powergate_info");
+	if (info) {
+		igt_info("powergate_info:\n%s\n", info);
+		free(info);
+	}
+
+	close(dir);
 
 	return false;
 }

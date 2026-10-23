@@ -878,7 +878,9 @@ static void test_gt_c6_idle(int xe, unsigned int gt)
 
 	pmu_fd = open_pmu(xe, pmu_config);
 
-	igt_require_f(igt_wait(xe_gt_is_in_c6(xe, gt), 1000, 10), "GT %d should be in C6\n", gt);
+	igt_require_f(igt_wait(xe_gt_is_in_c6(xe, gt), 1000, 10) ||
+		      xe_gt_dump_debug_info(xe, gt),
+		      "GT %d should be in C6\n", gt);
 
 	/* While idle check full RC6. */
 	start = read_idle_residency(xe, gt);
