@@ -186,14 +186,12 @@ int xe_wa_test_debugfs_dump_has_wa(char *dump, const char *wa)
  * @wa: Name of the workaround to be checked.
  *
  * Return a boolean indicating whether the workaround is enabled.
- * On error, returns false and a warning is printed.
  */
 bool xe_wa(int fd, const char *wa)
 {
 	struct xe_wa_cache *wa_cache = xe_device_get(fd)->wa_cache;
 
-	if (igt_warn_on(!wa_cache))
-		return false;
+	igt_assert(wa_cache);
 
 	for (int i = 0; i < wa_cache->num_dumps; i++)
 		if (debugfs_dump_has_wa(wa_cache->dumps[i], wa))
