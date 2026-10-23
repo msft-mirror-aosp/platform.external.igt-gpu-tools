@@ -32,6 +32,7 @@
 #include "xe/xe_ioctl.h"
 #include "xe/xe_query.h"
 #include "xe/xe_util.h"
+#include "xe/xe_wa.h"
 
 #define XE_COH_NONE          1
 #define XE_COH_AT_LEAST_1WAY 2
@@ -1871,30 +1872,41 @@ static void false_sharing(int fd)
 	uint16_t dev_id = intel_get_drm_devid(fd);
 	uint32_t graphics_ver = intel_get_device_info(dev_id)->graphics_ver;
 	bool is_dgfx = xe_has_vram(fd);
-
 	const struct fs_pat_entry *fs_entries;
-	int num_entries;
+	int num_fs_entries;
+	struct intel_pat_cache pat_sw_config;
+	int num_pat_entries;
+
+	if (xe_wa(fd, "14026539277"))
+		num_pat_entries = xe_fetch_pat_sw_config(fd, &pat_sw_config);
 
 	if (intel_graphics_ver(dev_id) == IP_VER(35, 11)) {
-		num_entries = ARRAY_SIZE(fs_xe3p_xpc);
+		num_fs_entries = ARRAY_SIZE(fs_xe3p_xpc);
 		fs_entries = fs_xe3p_xpc;
 	} else if (intel_graphics_ver(dev_id) == IP_VER(35, 10)) {
-		num_entries = ARRAY_SIZE(fs_xe3p_lpg);
+		num_fs_entries = ARRAY_SIZE(fs_xe3p_lpg);
 		fs_entries = fs_xe3p_lpg;
 	} else if (graphics_ver == 20) {
 		if (is_dgfx) {
-			num_entries = ARRAY_SIZE(fs_xe2_discrete);
+			num_fs_entries = ARRAY_SIZE(fs_xe2_discrete);
 			fs_entries = fs_xe2_discrete;
 		} else {
-			num_entries = ARRAY_SIZE(fs_xe2_integrated);
+			num_fs_entries = ARRAY_SIZE(fs_xe2_integrated);
 			fs_entries = fs_xe2_integrated;
 		}
 	} else {
-		num_entries = ARRAY_SIZE(fs_xe3);
+		num_fs_entries = ARRAY_SIZE(fs_xe3);
 		fs_entries = fs_xe3;
 	}
 
-	for (int i = 0; i < num_entries; i++) {
+	for (int i = 0; i < num_fs_entries; i++) {
+		if (xe_wa(fd, "14026539277")) {
+			igt_assert(fs_entries[i].pat_index < num_pat_entries);
+
+			if (pat_sw_config.entries[fs_entries[i].pat_index].rsvd)
+				continue;
+		}
+
 		igt_dynamic_f("%s", fs_entries[i].name) {
 			__false_sharing(fd, &fs_entries[i]);
 		}

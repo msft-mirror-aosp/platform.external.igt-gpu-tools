@@ -7,6 +7,7 @@
 #include "igt.h"
 #include "intel_pat.h"
 #include "xe/xe_query.h"
+#include "xe/xe_wa.h"
 
 enum xe_pat_config {
 	PAT_SW_CONFIG,
@@ -108,6 +109,9 @@ static int32_t xe_get_pat_config(struct xe_device *xe_dev, struct intel_pat_cach
 
 	free(line);
 	fclose(dbgfs_file);
+
+	if (xe_wa_from_cache(xe_dev, "14026539277"))
+		xe_pat_cache->wb = 19; /* XA 1-way-coherent. */
 
 	return parsed;
 }
