@@ -143,6 +143,13 @@ static bool pat_entry_is_uc(unsigned int gfx_ver, uint32_t pat)
 
 static bool pat_entry_is_wb(unsigned int gfx_ver, uint32_t pat)
 {
+	if (gfx_ver >= IP_VER(35, 0)) {
+		uint32_t l3 = REG_FIELD_GET(XE2_L3_POLICY, pat);
+
+		return l3 == L3_CACHE_POLICY_WB || l3 == L3_CACHE_POLICY_XD ||
+		       l3 == L3_CACHE_POLICY_XA;
+	}
+
 	if (gfx_ver >= IP_VER(20, 0)) {
 		uint32_t l3 = REG_FIELD_GET(XE2_L3_POLICY, pat);
 
