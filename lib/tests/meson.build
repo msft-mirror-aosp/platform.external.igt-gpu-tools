@@ -29,6 +29,7 @@ lib_tests = [
 	'igt_thread',
 	'igt_types',
 	'i915_perf_data_alignment',
+	'xe_wa',
 ]
 
 lib_fail_tests = [

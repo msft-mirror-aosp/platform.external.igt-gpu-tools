@@ -4,6 +4,7 @@
  */
 
 #include <fcntl.h>
+#include <regex.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -12,6 +13,68 @@
 
 #include "xe/xe_query.h"
 #include "xe/xe_wa.h"
+
+#include "tests/xe_wa.h"
+
+static int debugfs_dump_has_wa(char *dump, const char *wa)
+{
+	size_t wa_len;
+	regex_t regex;
+	regmatch_t match[2];
+	int ret;
+
+	if (regcomp(&regex, "[ \t,]*([^ \t,]+)", REG_EXTENDED | REG_NEWLINE)) {
+		igt_critical("Failed to compile regex, workaround %s will not be checked.\n",
+			     wa);
+
+		return -1;
+	}
+
+	wa_len = strlen(wa);
+	ret = 0;
+
+	while (*dump) {
+		/*
+		 * Each workaround name is indented by one tab
+		 * character; unindented lines are used as "section
+		 * names" identifying the type of workarounds that
+		 * follow (e.g. "GT Workarounds", "Engine Workarounds"
+		 * etc) and should be ignored.
+		 */
+		if (*dump != '\t')
+			goto next_line;
+
+		while (*dump && regexec(&regex, dump, 2, match, 0) == 0) {
+			char *other_wa = dump + match[1].rm_so;
+			size_t other_wa_len = match[1].rm_eo - match[1].rm_so;
+
+			dump += match[0].rm_eo;
+
+			if (wa_len == other_wa_len && !strncmp(wa, other_wa, wa_len)) {
+				ret = 1;
+
+				goto done;
+			}
+		}
+
+	next_line:
+		while (*dump && *dump != '\n')
+			dump++;
+
+		if (*dump)
+			dump++;
+	}
+
+done:
+	regfree(&regex);
+
+	return ret;
+}
+
+int xe_wa_test_debugfs_dump_has_wa(char *dump, const char *wa)
+{
+	return debugfs_dump_has_wa(dump, wa);
+}
 
 static int debugfs_file_has_wa(int drm_fd, int debugfs_fd,
 			       const char *debugfs_name, const char *wa)
@@ -23,12 +86,12 @@ static int debugfs_file_has_wa(int drm_fd, int debugfs_fd,
 
 	debugfs_dump = igt_sysfs_get(debugfs_fd, debugfs_name);
 	if (debugfs_dump) {
-		char *has_wa = strstr(debugfs_dump, wa);
+		int ret = debugfs_dump_has_wa(debugfs_dump, wa);
 
 		free(debugfs_dump);
 
-		if (has_wa)
-			return 1;
+		if (ret)
+			return ret;
 	}
 
 	return 0;
