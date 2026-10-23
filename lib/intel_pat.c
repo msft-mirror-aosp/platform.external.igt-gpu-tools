@@ -24,7 +24,7 @@ enum xe_pat_config {
  * Returns: The number of PAT entries successfully read on success, or a negative error
  *          code on failure
  */
-static int32_t xe_get_pat_config(int drm_fd, struct intel_pat_cache *xe_pat_cache,
+static int32_t xe_get_pat_config(struct xe_device *xe_dev, struct intel_pat_cache *xe_pat_cache,
 				 int gt, enum xe_pat_config pat_config)
 {
 	char *line = NULL;
@@ -40,7 +40,7 @@ static int32_t xe_get_pat_config(int drm_fd, struct intel_pat_cache *xe_pat_cach
 	else
 		snprintf(config, sizeof(config), "gt%d/pat", gt);
 
-	dbgfs_fd = igt_debugfs_open(drm_fd, config, O_RDONLY);
+	dbgfs_fd = igt_debugfs_open(xe_dev->fd, config, O_RDONLY);
 	if (dbgfs_fd < 0)
 		return dbgfs_fd;
 	dbgfs_file = fdopen(dbgfs_fd, "r");
@@ -125,7 +125,9 @@ static int32_t xe_get_pat_config(int drm_fd, struct intel_pat_cache *xe_pat_cach
  */
 int32_t xe_get_pat_sw_config(int drm_fd, struct intel_pat_cache *xe_pat_cache, int gt)
 {
-	return xe_get_pat_config(drm_fd, xe_pat_cache, gt, PAT_SW_CONFIG);
+	struct xe_device *xe_dev = xe_device_get(drm_fd);
+
+	return xe_get_pat_config(xe_dev, xe_pat_cache, gt, PAT_SW_CONFIG);
 }
 
 /**
@@ -141,7 +143,9 @@ int32_t xe_get_pat_sw_config(int drm_fd, struct intel_pat_cache *xe_pat_cache, i
  */
 int32_t xe_get_pat_hw_config(int drm_fd, struct intel_pat_cache *xe_pat_cache, int gt)
 {
-	return xe_get_pat_config(drm_fd, xe_pat_cache, gt, PAT_HW_CONFIG);
+	struct xe_device *xe_dev = xe_device_get(drm_fd);
+
+	return xe_get_pat_config(xe_dev, xe_pat_cache, gt, PAT_HW_CONFIG);
 }
 
 void intel_pat_build_xe_cache(struct xe_device *xe_dev)
@@ -151,7 +155,7 @@ void intel_pat_build_xe_cache(struct xe_device *xe_dev)
 	pat_cache = calloc(1, sizeof(*pat_cache));
 	igt_assert(pat_cache);
 
-	if (igt_debug_on(xe_get_pat_sw_config(xe_dev->fd, pat_cache, 0) <= 0)) {
+	if (igt_debug_on(xe_get_pat_config(xe_dev, pat_cache, 0, PAT_SW_CONFIG) <= 0)) {
 		free(pat_cache);
 		return;
 	}
