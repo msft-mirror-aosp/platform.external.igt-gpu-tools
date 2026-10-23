@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /*
- * Copyright © 2025 Intel Corporation
+ * Copyright © 2026 Intel Corporation
  */
 
 #include <fcntl.h>
@@ -9,8 +9,9 @@
 
 #include "igt_debugfs.h"
 #include "igt_sysfs.h"
-#include "intel_wa.h"
+
 #include "xe/xe_query.h"
+#include "xe/xe_wa.h"
 
 static int debugfs_file_has_wa(int drm_fd, int debugfs_fd,
 			       const char *debugfs_name, const char *wa)
@@ -34,32 +35,32 @@ static int debugfs_file_has_wa(int drm_fd, int debugfs_fd,
 }
 
 /**
- * igt_has_intel_wa:
- * @drm_fd:	A drm file descriptor
- * @check_wa:	Workaround to be checked
+ * xe_wa: Check if a workaround is enabled for the device.
+ * @fd: A drm file descriptor.
+ * @wa: Name of the workaround to be checked.
  *
- * Returns:	0 if no WA, 1 if WA present, -1 on error
+ * Returns 1 if enabled, 0 if disabled, -1 on error.
  */
-int igt_has_intel_wa(int drm_fd, const char *check_wa)
+int xe_wa(int fd, const char *wa)
 {
 	int ret = 0;
 	int debugfs_fd;
 	unsigned int xe;
 	char name[256];
 
-	debugfs_fd = igt_debugfs_dir(drm_fd);
+	debugfs_fd = igt_debugfs_dir(fd);
 	if (debugfs_fd == -1)
 		return -1;
 
-	xe_for_each_gt(drm_fd, xe) {
+	xe_for_each_gt(fd, xe) {
 		sprintf(name, "gt%d/workarounds", xe);
-		ret = debugfs_file_has_wa(drm_fd, debugfs_fd, name, check_wa);
+		ret = debugfs_file_has_wa(fd, debugfs_fd, name, wa);
 		if (ret)
 			break;
 	}
 
 	if (!ret)
-		ret = debugfs_file_has_wa(drm_fd, debugfs_fd, "workarounds", check_wa);
+		ret = debugfs_file_has_wa(fd, debugfs_fd, "workarounds", wa);
 
 	close(debugfs_fd);
 	return ret;
