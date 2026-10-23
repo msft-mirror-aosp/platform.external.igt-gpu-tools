@@ -21,6 +21,7 @@
 #define XE_DEFAULT_ALIGNMENT_64K       SZ_64K
 
 struct intel_pat_cache;
+struct xe_wa_cache;
 
 struct xe_device {
 	/** @fd: xe fd */
@@ -80,6 +81,9 @@ struct xe_device {
 	/** @pat_cache: cached PAT index configuration, NULL if not yet populated */
 	struct intel_pat_cache *pat_cache;
 
+	/** @wa_cache: cached data for xe_wa() and related functions. */
+	struct xe_wa_cache *wa_cache;
+
 	/**
 	 * @multi_lrc_mask: bitmask of engine classes supporting multi-LRC.
 	 * UINT16_MAX if not available (older kernel).
@@ -99,10 +103,12 @@ struct xe_device {
 #define xe_for_each_engine_class(__class) \
 	for (__class = 0; __class < DRM_XE_ENGINE_CLASS_COMPUTE + 1; \
 	     ++__class)
-#define xe_for_each_gt(__fd, __gt) \
-	for (uint64_t igt_unique(__mask) = xe_device_get(__fd)->gt_mask; \
+#define xe_for_each_gt_from_mask(__gt_mask, __gt) \
+	for (uint64_t igt_unique(__mask) = __gt_mask; \
 	     __gt = ffsll(igt_unique(__mask)) - 1, igt_unique(__mask) != 0; \
 	     igt_unique(__mask) &= ~(1ull << __gt))
+#define xe_for_each_gt(__fd, __gt) \
+	xe_for_each_gt_from_mask(xe_device_get(__fd)->gt_mask, __gt)
 #define xe_for_each_tile(__fd, __tile) \
 	for (uint64_t igt_unique(__mask) = xe_device_get(__fd)->tile_mask; \
 	     __tile = ffsll(igt_unique(__mask)) - 1, igt_unique(__mask) != 0; \

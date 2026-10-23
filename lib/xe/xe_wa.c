@@ -30,18 +30,18 @@ static void free_wa_debugfs_dumps(struct xe_wa_cache *wa_cache)
 	}
 }
 
-static int get_wa_debugfs_count(int fd)
+static int get_wa_debugfs_count(int fd, uint64_t gt_mask)
 {
 	int gt;
 	int count = 1; /* Device workarounds */
 
-	xe_for_each_gt(fd, gt)
+	xe_for_each_gt_from_mask(gt_mask, gt)
 		count++;
 
 	return count;
 }
 
-static int get_wa_debugfs_dumps(int fd, struct xe_wa_cache *wa_cache)
+static int get_wa_debugfs_dumps(int fd, uint64_t gt_mask, struct xe_wa_cache *wa_cache)
 {
 	int gt;
 	int debugfs_fd;
@@ -57,7 +57,7 @@ static int get_wa_debugfs_dumps(int fd, struct xe_wa_cache *wa_cache)
 	if (!(wa_cache->dumps[count++] = igt_sysfs_get(debugfs_fd, "workarounds")))
 		goto err;
 
-	xe_for_each_gt(fd, gt) {
+	xe_for_each_gt_from_mask(gt_mask, gt) {
 		char name[32];
 
 		snprintf(name, sizeof(name), "gt%d/workarounds", gt);
@@ -90,12 +90,12 @@ static void free_cache(struct xe_wa_cache *wa_cache)
 	free(wa_cache);
 }
 
-static struct xe_wa_cache *build_cache(int fd)
+static struct xe_wa_cache *build_cache(int fd, uint64_t gt_mask)
 {
 	struct xe_wa_cache *wa_cache;
 	int num_dumps;
 
-	num_dumps = get_wa_debugfs_count(fd);
+	num_dumps = get_wa_debugfs_count(fd, gt_mask);
 	wa_cache = calloc(1, sizeof(*wa_cache) + num_dumps * sizeof(wa_cache->dumps[0]));
 
 	if (igt_warn_on(!wa_cache))
@@ -111,7 +111,7 @@ static struct xe_wa_cache *build_cache(int fd)
 	 * workarounds, let's avoid creating noise with igt_warn_on()
 	 * and limit ourselves to use igt_debug_on() here.
 	 */
-	if (igt_debug_on(get_wa_debugfs_dumps(fd, wa_cache))) {
+	if (igt_debug_on(get_wa_debugfs_dumps(fd, gt_mask, wa_cache))) {
 		free_cache(wa_cache);
 
 		return NULL;
@@ -189,22 +189,33 @@ int xe_wa_test_debugfs_dump_has_wa(char *dump, const char *wa)
  */
 int xe_wa(int fd, const char *wa)
 {
-	struct xe_wa_cache *wa_cache = build_cache(fd);
-	int ret;
+	struct xe_wa_cache *wa_cache = xe_device_get(fd)->wa_cache;
 
 	if (igt_warn_on(!wa_cache))
 		return -1;
 
-	ret = 0;
+	for (int i = 0; i < wa_cache->num_dumps; i++)
+		if (debugfs_dump_has_wa(wa_cache->dumps[i], wa))
+			return 1;
 
-	for (int i = 0; i < wa_cache->num_dumps; i++) {
-		if (debugfs_dump_has_wa(wa_cache->dumps[i], wa)) {
-			ret = 1;
-			break;
-		}
-	}
+	return 0;
+}
 
-	free_cache(wa_cache);
+/**
+ * xe_wa_build_cache: Build cached data for xe_wa().
+ * @xe_dev: Xe device where the cache will be stashed.
+ */
+void xe_wa_build_cache(struct xe_device *xe_dev)
+{
+	xe_dev->wa_cache = build_cache(xe_dev->fd, xe_dev->gt_mask);
+}
 
-	return ret;
+/**
+ * xe_wa_free_cache: Free cached data that was built with xe_wa_build_cache().
+ * @xe_dev: Xe device where the cached data is stashed.
+ */
+void xe_wa_free_cache(struct xe_device *xe_dev)
+{
+	free_cache(xe_dev->wa_cache);
+	xe_dev->wa_cache = NULL;
 }

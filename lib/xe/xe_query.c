@@ -28,6 +28,7 @@
 
 #include "xe_query.h"
 #include "xe_ioctl.h"
+#include "xe_wa.h"
 
 /**
  * xe_query_device_may_fail:
@@ -377,6 +378,9 @@ static void xe_device_free(struct xe_device *xe_dev)
 	free(xe_dev->vram_size);
 	free(xe_dev->eu_stall);
 	free(xe_dev->pat_cache);
+
+	xe_wa_free_cache(xe_dev);
+
 	free(xe_dev);
 }
 
@@ -457,6 +461,8 @@ struct xe_device *xe_device_get(int fd)
 	}
 	xe_dev->default_alignment = __mem_default_alignment(xe_dev->mem_regions);
 	xe_dev->has_vram = __mem_has_vram(xe_dev->mem_regions);
+
+	xe_wa_build_cache(xe_dev);
 
 	/*
 	 * Populate the PAT cache while we still have sufficient privileges
