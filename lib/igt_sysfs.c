@@ -1054,11 +1054,10 @@ void igt_sysfs_set_vram_d3cold_threshold(int sysfs, uint64_t threshold)
 
 	sprintf(path, "device/vram_d3cold_threshold");
 
-	if (!faccessat(sysfs, path, R_OK | W_OK, 0))
-		ret = igt_sysfs_printf(sysfs, path, "%" PRIu64, threshold);
-	else
-		igt_warn("vram_d3cold_threshold is not present\n");
+	igt_require_f(!faccessat(sysfs, path, R_OK | W_OK, 0),
+		      "vram_d3cold_threshold is not present\n");
 
+	ret = igt_sysfs_printf(sysfs, path, "%" PRIu64, threshold);
 	igt_assert_lt(0, ret);
 }
 
