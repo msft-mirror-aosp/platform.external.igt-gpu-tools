@@ -14,5 +14,6 @@ bool xe_wa(int fd, const char *wa);
 
 void xe_wa_build_cache(struct xe_device *xe_dev);
 void xe_wa_free_cache(struct xe_device *xe_dev);
+bool xe_wa_from_cache(struct xe_device *xe_dev, const char *wa);
 
 #endif /* XE_WA_H */

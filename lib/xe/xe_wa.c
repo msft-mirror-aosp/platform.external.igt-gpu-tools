@@ -181,15 +181,23 @@ int xe_wa_test_debugfs_dump_has_wa(char *dump, const char *wa)
 }
 
 /**
- * xe_wa: Check if a workaround is enabled for the device.
- * @fd: A drm file descriptor.
+ * xe_wa_from_cache: Check if a workaround is enabled for the device.
+ * @xe_dev: Xe device where the cached data is stashed.
  * @wa: Name of the workaround to be checked.
  *
- * Return a boolean indicating whether the workaround is enabled.
+ * This function is like xe_wa(), but it receives the "incomplete"
+ * (see next paragraph) xe_device struct directly instead of a drm
+ * file descriptor.
+ *
+ * This function is only expected to be used in specific paths during
+ * the initialization of a xe_device struct (i.e. during execution of
+ * xe_device_get()), where the workaround cache is ready
+ * (i.e. xe_wa_build_cache()), but the xe_device struct is not yet
+ * fully built and cached (which is a requirement for xe_wa()).
  */
-bool xe_wa(int fd, const char *wa)
+bool xe_wa_from_cache(struct xe_device *xe_dev, const char *wa)
 {
-	struct xe_wa_cache *wa_cache = xe_device_get(fd)->wa_cache;
+	struct xe_wa_cache *wa_cache = xe_dev->wa_cache;
 
 	igt_assert(wa_cache);
 
@@ -198,6 +206,18 @@ bool xe_wa(int fd, const char *wa)
 			return true;
 
 	return false;
+}
+
+/**
+ * xe_wa: Check if a workaround is enabled for the device.
+ * @fd: A drm file descriptor.
+ * @wa: Name of the workaround to be checked.
+ *
+ * Return a boolean indicating whether the workaround is enabled.
+ */
+bool xe_wa(int fd, const char *wa)
+{
+	return xe_wa_from_cache(xe_device_get(fd), wa);
 }
 
 /**
