@@ -13,6 +13,8 @@
 #define XE_PAT_IDX_INVALID ((uint8_t)-2) /* no such PAT index on this platform */
 #define XE_PAT_MAX_ENTRIES 32
 
+struct xe_device;
+
 struct xe_pat_entry {
 	uint32_t pat;
 	bool rsvd;
@@ -41,5 +43,8 @@ bool intel_has_pat_wt(int fd);
 
 int32_t xe_get_pat_sw_config(int drm_fd, struct intel_pat_cache *xe_pat_cache, int gt);
 int32_t xe_get_pat_hw_config(int drm_fd, struct intel_pat_cache *xe_pat_cache, int gt);
+
+void intel_pat_build_xe_cache(struct xe_device *xe_dev);
+void intel_pat_free_xe_cache(struct xe_device *xe_dev);
 
 #endif /* INTEL_PAT_H */

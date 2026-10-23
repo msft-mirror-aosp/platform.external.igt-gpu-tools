@@ -144,6 +144,31 @@ int32_t xe_get_pat_hw_config(int drm_fd, struct intel_pat_cache *xe_pat_cache, i
 	return xe_get_pat_config(drm_fd, xe_pat_cache, gt, PAT_HW_CONFIG);
 }
 
+void intel_pat_build_xe_cache(struct xe_device *xe_dev)
+{
+	struct intel_pat_cache *pat_cache;
+
+	pat_cache = calloc(1, sizeof(*pat_cache));
+	igt_assert(pat_cache);
+
+	if (igt_debug_on(xe_get_pat_sw_config(xe_dev->fd, pat_cache, 0) <= 0)) {
+		free(pat_cache);
+		return;
+	}
+
+	xe_dev->pat_cache = pat_cache;
+}
+
+void intel_pat_free_xe_cache(struct xe_device *xe_dev)
+{
+	if (!xe_dev->pat_cache)
+		return;
+
+	free(xe_dev->pat_cache);
+
+	xe_dev->pat_cache = NULL;
+}
+
 /*
  * Hardcoded PAT indices for Xe platforms, used as a fallback when the
  * kernel doesn't expose gt0/pat_sw_config in debugfs.
@@ -217,7 +242,7 @@ static void intel_get_pat_idx(int fd, struct intel_pat_cache *pat)
 		struct xe_device *xe_dev = xe_device_get(fd);
 
 		if (xe_dev->pat_cache) {
-			*pat = *xe_dev->pat_cache;
+			*pat = *((struct intel_pat_cache *)xe_dev->pat_cache);
 		} else if (xe_pat_fallback(fd, pat)) {
 			igt_info("PAT sw_config debugfs not available, "
 				 "using hardcoded fallback\n");

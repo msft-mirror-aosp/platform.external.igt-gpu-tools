@@ -377,8 +377,8 @@ static void xe_device_free(struct xe_device *xe_dev)
 	free(xe_dev->mem_regions);
 	free(xe_dev->vram_size);
 	free(xe_dev->eu_stall);
-	free(xe_dev->pat_cache);
 
+	intel_pat_free_xe_cache(xe_dev);
 	xe_wa_free_cache(xe_dev);
 
 	free(xe_dev);
@@ -475,12 +475,7 @@ struct xe_device *xe_device_get(int fd)
 	 * should be extended to cache PAT entries by platform version/
 	 * revision instead.
 	 */
-	xe_dev->pat_cache = calloc(1, sizeof(*xe_dev->pat_cache));
-	igt_assert(xe_dev->pat_cache);
-	if (xe_get_pat_sw_config(xe_dev->fd, xe_dev->pat_cache, 0) <= 0) {
-		free(xe_dev->pat_cache);
-		xe_dev->pat_cache = NULL;
-	}
+	intel_pat_build_xe_cache(xe_dev);
 
 	/* We may get here from multiple threads, use first cached xe_dev */
 	pthread_mutex_lock(&cache.cache_mutex);
