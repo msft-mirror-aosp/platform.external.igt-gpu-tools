@@ -103,14 +103,21 @@ static enum cea_sad_pcm_sample_size parse_sad_bit(const char *value)
 	}
 }
 
-static void parse_sad_field(struct eld_sad *sad, const char *key, char *value)
+static bool parse_sad_field(struct eld_sad *sad, const char *key, char *value)
 {
 	char *tok;
 
-	/* Some fields are prefixed with the raw hex value, strip it */
+	/*
+	 * Some fields are prefixed with the raw hex value, strip it. The
+	 * kernel doesn't always emit a space after the bracketed value
+	 * (e.g. a SAD on a real, unrelated monitor's ELD). Treat that as
+	 * "nothing to parse" instead of asserting, since we have no
+	 * control over third-party EDID content.
+	 */
 	if (value[0] == '[') {
 		value = strchr(value, ' ');
-		igt_assert(value != NULL);
+		if (!value)
+			return false;
 		value++; /* skip the space */
 	}
 
@@ -130,6 +137,8 @@ static void parse_sad_field(struct eld_sad *sad, const char *key, char *value)
 
 		tok = strtok(NULL, " ");
 	}
+
+	return true;
 }
 
 /** eld_parse_entry: parse an ELD entry
@@ -166,6 +175,7 @@ static bool eld_parse_entry(const char *path, struct eld_entry *eld)
 	char *key, *value, *sad_key;
 	size_t len;
 	bool monitor_present = false;
+	bool sad_ok;
 	int sad_index;
 
 	memset(eld, 0, sizeof(*eld));
@@ -198,13 +208,20 @@ static bool eld_parse_entry(const char *path, struct eld_entry *eld)
 		else if (sscanf(key, "sad%d_%ms", &sad_index, &sad_key) == 2) {
 			igt_assert(sad_index < ELD_SADS_CAP);
 			igt_assert(sad_index < eld->sads_len);
-			parse_sad_field(&eld->sads[sad_index], sad_key, value);
+			sad_ok = parse_sad_field(&eld->sads[sad_index], sad_key, value);
 			free(sad_key);
+			if (!sad_ok) {
+				igt_debug("Failed to parse ELD field %s in %s: %s\n",
+					  key, path, value);
+				fclose(f);
+				return false;
+			}
 		}
 	}
 
 	if (ferror(f) != 0) {
 		igt_debug("Failed to read ELD file %s: %d\n", path, ferror(f));
+		fclose(f);
 		return false;
 	}
 
